@@ -1,0 +1,4 @@
+#!/bin/sh
+# Start the browser MCP server, and the School Chrome it owns, in the background. Works from any directory.
+DIR=$(cd "$(dirname "$0")" && pwd)
+exec env PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -m browser.service start "$@"

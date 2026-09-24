@@ -1,0 +1,148 @@
+"""MCP over HTTP: one JSON-RPC message per POST, answered as plain JSON.
+
+Only the slice Claude Code uses is here: initialize, ping, tools/list, tools/call and
+notifications. There is no event stream (GET answers 405) and no session id. README.md, "Agent
+Gotchas", says why a request carrying an Origin header is refused.
+"""
+
+import json
+import time
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import cast
+
+PATH = "/mcp"
+MAX_BODY = 5 << 20
+SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26")
+FALLBACK_VERSION = "2025-06-18"
+
+
+class ToolError(Exception):
+    """A refusal the agent should read: answered as an error result, not a protocol error."""
+
+
+def log(line):
+    print("%s %s" % (time.strftime("%H:%M:%S"), line), flush=True)
+
+
+def _error(message_id, code, text):
+    return {"jsonrpc": "2.0", "id": message_id, "error": {"code": code, "message": text}}
+
+
+def _content(result):
+    return [{"type": "text", "text": result}] if isinstance(result, str) else result
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, host, port, tools, name, version="1"):
+        """
+        Args:
+            host (str): address to bind; only 127.0.0.1 is meant.
+            port (int): port to bind; 0 picks a free one.
+            tools (list[dict]): each has name, description, inputSchema, and run(arguments) -> str | list | dict.
+            name (str): serverInfo name, which ../start reads to tell this server from another program.
+            version (str): serverInfo version.
+        """
+        self.tools = {tool["name"]: tool for tool in tools}
+        self.info = {"name": name, "version": version}
+        super().__init__((host, port), Handler)
+        self.hosts = {"%s:%d" % (host, self.server_address[1]), "localhost:%d" % self.server_address[1]}
+
+    def dispatch(self, message):
+        method, message_id = message["method"], message["id"]
+        params = message.get("params") or {}
+        if not isinstance(params, dict):
+            return _error(message_id, -32602, "params must be an object")
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": message_id, "result": {
+                "protocolVersion": (params.get("protocolVersion") if params.get("protocolVersion") in SUPPORTED_VERSIONS
+                                    else FALLBACK_VERSION),
+                "capabilities": {"tools": {}},
+                "serverInfo": self.info,
+            }}
+        if method == "ping":
+            return {"jsonrpc": "2.0", "id": message_id, "result": {}}
+        if method == "tools/list":
+            listed = [{key: tool[key] for key in ("name", "description", "inputSchema")} for tool in self.tools.values()]
+            return {"jsonrpc": "2.0", "id": message_id, "result": {"tools": listed}}
+        if method == "tools/call":
+            name = params.get("name")
+            tool = self.tools.get(name) if isinstance(name, str) else None
+            if tool is None:
+                return _error(message_id, -32602, "unknown tool %r" % name)
+            arguments = params.get("arguments") or {}
+            if not isinstance(arguments, dict):
+                return _error(message_id, -32602, "arguments must be an object")
+            return {"jsonrpc": "2.0", "id": message_id, "result": self.call(tool, arguments)}
+        return _error(message_id, -32601, "method %r is not supported" % method)
+
+    def call(self, tool, arguments):
+        began = time.monotonic()
+        try:
+            returned = tool["run"](arguments)
+            # A dict is a whole result, for a tool that reports failure with more than text.
+            result = returned if isinstance(returned, dict) else {"content": _content(returned)}
+        except ToolError as exc:
+            result = {"content": _content(str(exc)), "isError": True}
+        except Exception:
+            # A bug in a tool must not take the server down; the agent sees it and the log keeps the trace.
+            log(traceback.format_exc().rstrip())
+            result = {"content": _content("internal error in %s: %s" % (tool["name"], traceback.format_exc(limit=1).strip())),
+                      "isError": True}
+        log("%s %s %.1fs" % (tool["name"], "failed" if result.get("isError") else "ok", time.monotonic() - began))
+        return result
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format, *args):
+        pass  # one line per tool call is logged by Server.call instead
+
+    def _send(self, status, body=None):
+        data = json.dumps(body).encode() if body is not None else b""
+        self.send_response(status)
+        if body is not None:
+            self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _refuse(self, status, text):
+        self.close_connection = True  # the body, if any, was never read
+        self._send(status, _error(None, -32600, text))
+
+    def do_GET(self):
+        self._send(405)
+
+    do_DELETE = do_GET
+
+    def do_POST(self):
+        if self.path != PATH:
+            return self._refuse(404, "the MCP endpoint is %s" % PATH)
+        server = cast(Server, self.server)
+        if self.headers.get("Origin") is not None or self.headers.get("Host") not in server.hosts:
+            return self._refuse(403, "requests from web pages are refused")
+        if self.headers.get_content_type() != "application/json":
+            return self._refuse(415, "send application/json")
+        try:
+            size = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            size = -1
+        if not 0 < size <= MAX_BODY:
+            return self._refuse(413 if size > MAX_BODY else 400, "a body of 1 byte to %d bytes is required" % MAX_BODY)
+        try:
+            message = json.loads(self.rfile.read(size))
+        except ValueError:
+            return self._send(400, _error(None, -32700, "the body is not JSON"))
+        if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+            return self._send(400, _error(None, -32600, "one JSON-RPC 2.0 message per request"))
+        if "method" not in message:
+            return self._send(202)  # a client's answer to a request; this server sends none
+        if "id" not in message:
+            return self._send(202)  # a notification
+        self._send(200, server.dispatch(message))

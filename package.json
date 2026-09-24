@@ -1,0 +1,8 @@
+{
+  "name": "browserd",
+  "private": true,
+  "description": "chrome-devtools-mcp, pinned, for the browser MCP server's per-tab processes",
+  "dependencies": {
+    "chrome-devtools-mcp": "1.9.0"
+  }
+}
