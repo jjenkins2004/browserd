@@ -80,8 +80,9 @@ def tab_tools(tabs, workers):
               "properties": {"tab": {"type": "string", "description": "a tab id from tab_open or tab_list"}}}
     return [
         {"name": "tab_open", "run": _refusing(tab_open),
-         "description": "Open a URL in a new background tab of the School Chrome, wait for it to load, and return its "
-                        "tab id, title and URL. The Mac's focus does not move.",
+         "description": "Open a URL in a new background tab of the School Chrome, wait for it to load (up to about "
+                        "30s), and return its tab id, title and URL; a page still loading is returned as it is. The Mac's focus "
+                        "does not move.",
          "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"],
                          "additionalProperties": False}},
         {"name": "tab_list", "run": _refusing(tab_list),
@@ -98,40 +99,44 @@ def tab_tools(tabs, workers):
     ]
 
 
+# QUEUE_HELP stays under Claude Code's cut on a tool's description, so STEPS_HELP holds the rest; README.md,
+# "Agent Gotchas & Invariants".
 QUEUE_HELP = """Run steps on one tab, top to bottom, stopping at the first that fails.
 
-Give the tab id and either steps (a list) or file (a path to a JSON file holding that list; a relative one is read
-from the tab's record folder, below, though a step's own file paths are not). A step is {"tool": <name>, ...that
-tool's arguments}. Never pass pageId: the tab chooses the page. Element uids come from a take_snapshot step and stay
-valid on this tab, across queue calls, until the page navigates or the element goes away. File paths (upload_file's
-filePaths, any filePath) must sit inside ~/Desktop, /tmp or $TMPDIR. Each chrome-devtools-mcp call gets 120s; past
-that the tab's chrome-devtools-mcp is stopped and its uids are gone.
+Give the tab id and steps, a list of {"tool": <name>, ...its arguments}, or file, a JSON file holding that list (a
+relative path is read from the tab's record folder). Never pass pageId: the tab chooses the page. The steps
+argument's description lists every tool a step may name, with its arguments, and when to use which: a
+chrome-devtools-mcp tool reports success once it has acted, not once the page took it, so pick, expect, type and
+wait read the page back.
 
-The report has one section per step, headed "--- <n> <tool> ok|FAILED <seconds>s", holding what the tool
-answered. A failure makes the whole result an error: the report names the steps not run and ends with a fresh
-snapshot.
+Element uids (1_13) come from a snapshot and stay valid on this tab until the page navigates or the element goes
+away. Every snapshot in a report is a view: each line that carries words, in page order with its uid, and every
+control, with a native select on one line, like combobox "Country" = "United States" (249 options). The view's
+header names where the whole snapshot is saved; grep it for anything the view leaves out. take_snapshot also takes
+under, a uid, for that element and what sits under it (a native select's options), and full: true, for its lines
+as chrome-devtools-mcp wrote them.
 
-Each call is recorded in the tab's record folder, %s/<tab>/, numbered in order: 001-queue.json the steps,
-001-queue.txt the report. A take_screenshot with no filePath saves its image there, step 2 of call 001 as
-001-step2-screenshot.png (.jpeg or .webp when its format is one), and reports that path instead of sending the
-image; read the file to see it.
+The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A failure makes the result an error,
+names the steps not run, and ends with a view of the page now. A step's reply over %d characters is cut, the
+whole of it saved. Each call is recorded in the tab's record folder, %s/<tab>/: 001-queue.json the steps,
+001-queue.txt the report. A take_screenshot with no filePath is saved there too; the report gives its path. A
+step's file paths (filePath, filePaths) must be absolute and sit inside ~/Desktop, /tmp or $TMPDIR. Each
+chrome-devtools-mcp call gets 120s.
+"""
 
-Every snapshot in a report (take_snapshot's, wait_for's, a step's includeSnapshot, a failed queue's) is a view:
-each line that carries words, in page order with its uid (fields and their values, buttons, text, links,
-headings, image descriptions), and every control (an open dropdown's options among them); structure lines without
-words are dropped, and a native select is one line, like combobox "Country" = "United States" (249 options). A
-view's header names where the whole snapshot is saved, 001-step2-snapshot.txt (001-page-now-snapshot.txt for a
-failed queue's); grep that file for anything the view leaves out. take_snapshot also takes under, a uid, for only that element and what sits under it (on a native
-select, its options), and full: true, for the snapshot's lines as chrome-devtools-mcp wrote them.
+STEPS_HELP = """The steps, in order: each {"tool": <name>, ...its arguments}, checked against the tool before any
+step runs. ? marks an optional argument.
 
-A chrome-devtools-mcp tool reports success once it has acted, not once the page took it: fill on a react-select
-says "Successfully filled" and picks nothing. Use pick for any dropdown you type into; a native select still takes
-fill, with an option's exact text, which take_snapshot under the select's uid lists. fill types real keys only for
-a value under 100 characters; a longer one is set by script, which React ignores, so use type for it. Follow other
-fills and clicks whose result matters with expect, which reads the DOM. For a page still at work, like a resume
-parser filling fields after an upload, use wait, not a setTimeout in evaluate_script: gone with the parser's status
-text, or uid and value for a field it fills; still passes once the page's text has held for still ms, as it does
-while a parser waits on its server behind a spinner. Steps a queue accepts, the ones that read the page back first:
+When to use which. pick for any dropdown you type into (react-select, an autocomplete). fill for a native select,
+with an option's exact text, which take_snapshot under the select's uid lists. type for text of 100 characters or
+more. expect after a fill or click whose result matters. wait for a
+page still at work, like a resume parser after an upload: uid and value for a field it fills (passing at once if
+the field holds it already), or gone with its status text; never a setTimeout in evaluate_script.
+
+A step that opens an alert, confirm or prompt (a click, a key press) takes about 30s, since the dialog blocks the
+page, and counts as done; answer the dialog with a handle_dialog step. A native select's value in a view may be its
+first option, shown though no one chose it; fill it anyway.
+
 """
 
 
@@ -202,12 +207,13 @@ def queue_tool(tabs, workers, allowed, calls=CALLS):
 
     return {
         "name": "queue", "run": _refusing(queue),
-        "description": QUEUE_HELP % calls + steps.describe(allowed),
+        "description": QUEUE_HELP % (steps.REPLY_MOST, calls),
         "inputSchema": {
             "type": "object", "required": ["tab"], "additionalProperties": False,
             "properties": {
                 "tab": {"type": "string", "description": "a tab id from tab_open or tab_list"},
-                "steps": {"type": "array", "items": {"type": "object"}, "description": "the steps, in order"},
+                "steps": {"type": "array", "items": {"type": "object"},
+                          "description": STEPS_HELP + steps.describe(allowed)},
                 "file": {"type": "string",
                          "description": "path to a JSON file holding the steps, relative to the tab's record folder "
                                         "or absolute"},

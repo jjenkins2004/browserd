@@ -26,6 +26,10 @@ class CdpError(Exception):
     pass
 
 
+class Late(CdpError):
+    """A command Chrome did not answer in time."""
+
+
 def _run(*command):
     try:
         done = subprocess.run(command, capture_output=True, text=True, errors="replace", timeout=10)
@@ -133,7 +137,7 @@ class Browser:
             try:
                 answer = json.loads(self._ws.recv())
             except Timeout:
-                raise CdpError("%s did not answer in time" % method)
+                raise Late("%s did not answer in time" % method)
             if answer.get("id") != message_id:
                 self._events.append(answer)
                 continue

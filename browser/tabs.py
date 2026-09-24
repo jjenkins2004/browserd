@@ -97,7 +97,12 @@ class Tabs:
                 session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
                 # Listen before navigating: the load can finish before a later Page.enable would hear it.
                 browser.call("Page.enable", session=session)
-                failed = browser.call("Page.navigate", session=session, url=url).get("errorText")
+                try:
+                    failed = browser.call("Page.navigate", session=session, url=url).get("errorText")
+                except cdp.Late:
+                    failed = None  # the site has not answered yet; the tab is open and still loading
+                except cdp.CdpError as exc:
+                    failed = str(exc)  # a URL Chrome will not navigate to at all
                 if failed:
                     raise cdp.CdpError("could not open %s: %s" % (url, failed))
                 try:

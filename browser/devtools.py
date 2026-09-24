@@ -8,6 +8,7 @@ import os
 import queue
 import shutil
 import subprocess
+import tempfile
 import threading
 
 from . import cdp
@@ -15,17 +16,26 @@ from . import cdp
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DESKTOP = os.path.expanduser("~/Desktop")
 PACKAGE = os.path.join(ROOT, "node_modules", "chrome-devtools-mcp", "build", "src", "bin", "chrome-devtools-mcp.js")
+# The file tools (upload, screenshots to a path) may only touch these and $TMPDIR, which chrome-devtools-mcp always adds.
+# ROOT holds the record folders a queue saves screenshots in, wherever this project sits.
+FILE_ROOTS = [DESKTOP, ROOT, "/private/tmp"]
 FLAGS = [
     "--browser-url=%s" % cdp.ENDPOINT,
     "--no-usage-statistics", "--no-performance-crux",
     "--no-category-performance", "--no-category-network", "--no-category-emulation",
-    # The file tools (upload, screenshots to a path) may only touch these and $TMPDIR, which chrome-devtools-mcp always adds.
-    # ROOT holds the record folders a queue saves screenshots in, wherever this project sits.
-    "--workspace=%s" % DESKTOP, "--workspace=%s" % ROOT, "--workspace=/private/tmp",
+    *("--workspace=%s" % root for root in FILE_ROOTS),
 ]
 QUIET = {"CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS": "1", "CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS": "1"}
 CALL_WAIT = 120.0
 START_WAIT = 30.0
+
+
+def may_touch(path):
+    """Whether chrome-devtools-mcp's file tools may use path, which it resolves as this does: from this process's
+    working folder, links followed."""
+    real = os.path.realpath(os.path.abspath(path))
+    roots = [os.path.realpath(root) for root in FILE_ROOTS + [tempfile.gettempdir()]]
+    return any(os.path.commonpath([real, root]) == root for root in roots)
 
 
 class Devtools:

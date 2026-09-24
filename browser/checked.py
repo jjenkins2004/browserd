@@ -1,6 +1,6 @@
 """The queue's checked steps, pick, expect, type and wait: they read the page, not a tool's "Successfully".
 
-server.QUEUE_HELP says when to use which.
+server.STEPS_HELP says when to use which.
 """
 
 import json
@@ -13,6 +13,7 @@ from .worker import returned
 PICK_WAIT = 8.0
 POLL = 0.4
 SETTLE = 2.0
+APPEAR_WAIT = 3.0  # seconds a wait's gone gives its text to show, since a page can start its work after the step before
 WAIT_TIMEOUT = 30000  # ms a wait step gives its condition by default
 WAIT_MOST = 60000  # ms, the longest timeout a wait step may give
 SHOWN_OPTIONS = 12
@@ -62,25 +63,37 @@ CLEAR_JS = r"""(el) => {
 
 
 # type_'s focus and select-all; README.md, "Agent Gotchas & Invariants", says which element it focuses. It returns
-# what took focus, the box's type or "editable", or false. getRootNode() reaches a box inside a shadow root.
+# {focused: the box's type, or "editable"} or {refused: why}. getRootNode() reaches a box inside a shadow root.
 SELECT_JS = r"""(el) => {
   const box = el.matches('input, textarea') ? el : el.isContentEditable ? null : el.querySelector('input, textarea');
   if (box) {
-    const text = ['text', 'search', 'email', 'url', 'tel', 'password', 'number', 'textarea'].includes(box.type);
-    if (!text || box.matches('[role=combobox]')) return false;
+    if (box.matches('[role=combobox]')) return {refused: 'combobox'};
+    if (!['text', 'search', 'email', 'url', 'tel', 'password', 'number', 'textarea'].includes(box.type)) {
+      return {refused: box.type};
+    }
+    if (box.disabled) return {refused: 'disabled'};
+    if (box.readOnly) return {refused: 'readonly'};
     box.focus();
     box.select();
-    return box.getRootNode().activeElement === box && box.type;
+    return box.getRootNode().activeElement === box ? {focused: box.type} : {refused: 'focus'};
   }
-  if (!el.isContentEditable) return false;
+  if (!el.isContentEditable) return {refused: 'none'};
   el.focus();
   const range = el.ownerDocument.createRange();
   range.selectNodeContents(el);
   const selection = el.ownerDocument.getSelection();
   selection.removeAllRanges();
   selection.addRange(range);
-  return el.contains(el.getRootNode().activeElement) && 'editable';
+  return el.contains(el.getRootNode().activeElement) ? {focused: 'editable'} : {refused: 'focus'};
 }"""
+# Why type_ typed nothing, by what SELECT_JS refused; any other input type is not text-like.
+TYPE_REFUSED = {
+    "combobox": "is a dropdown you type into, which takes pick",
+    "disabled": "is a disabled text box",
+    "readonly": "is a read-only text box",
+    "focus": "did not take focus (it may be hidden)",
+    "none": "holds no text box and is not contenteditable",
+}
 
 
 class CheckFailed(Exception):
@@ -164,6 +177,10 @@ def _wait_problem(step):
         return "wait's timeout must be milliseconds above 0, up to %d" % WAIT_MOST
     if "still" in step and not (_milliseconds(step["still"]) and step["still"] < timeout):
         return "wait's still must be milliseconds above 0, and under its timeout (%g)" % timeout
+    for key in ("timeout", "still"):
+        if key in step and step[key] < 100:
+            return "wait's %s is ms, and %g ms is too short to be meant; for %g seconds give %g (most %d)" % (
+                key, step[key], step[key], step[key] * 1000, WAIT_MOST)
     return None
 
 
@@ -182,6 +199,10 @@ def pick(devtools, page_id, step):
     uid, text = step["uid"], step["text"]
     search = step.get("search", text)
     before = _read(devtools, page_id, uid)
+    if before.get("kind") == "select":
+        # Typing into a native select jumps its choice to whatever option the letters start.
+        raise CheckFailed("element %s is a native select, so nothing was typed; fill it with an option's exact text "
+                          "(take_snapshot under its uid lists them)" % uid)
     # Options already on the page belong to something else, like a <select multiple> holding the same words.
     elsewhere = {option_uid for option_uid, _ in _listed(devtools, page_id)}
     devtools.text("click", {"pageId": page_id, "uid": uid})
@@ -211,8 +232,10 @@ def _option(devtools, page_id, text, search, elsewhere, wait):
             return hit[0]
         if time.monotonic() > deadline:
             shown = ", ".join(json.dumps(option_text) for _, option_text in options[:SHOWN_OPTIONS]) or "no options"
-            raise CheckFailed("no option is exactly %s after %gs; typing %s showed %s"
-                              % (json.dumps(text), wait, json.dumps(search), shown))
+            raise CheckFailed("no option is exactly %s after %gs; typing %s showed %s%s"
+                              % (json.dumps(text), wait, json.dumps(search), shown,
+                                 "" if options else "; if a shorter search lists nothing either, the field is not "
+                                                    "a dropdown to pick in, so fill or type it"))
         time.sleep(POLL)
 
 
@@ -283,10 +306,12 @@ def type_(devtools, page_id, step):
         page_id (int): the tab's page id in it.
         step (dict): {"tool": "type", "uid": field uid, "text": what the field should hold}.
     """
-    focused = returned(_script(devtools, page_id, SELECT_JS, step["uid"]))
-    if not focused:
-        raise CheckFailed("element %s is not a text box, or its text box did not take focus (a dropdown you type into "
-                          "takes pick), so nothing was typed" % step["uid"])
+    selected = returned(_script(devtools, page_id, SELECT_JS, step["uid"]))
+    if not isinstance(selected, dict) or "focused" not in selected:
+        refused = str(selected.get("refused")) if isinstance(selected, dict) else "none"
+        why = TYPE_REFUSED.get(refused, "is a %s input, not a text box (click, fill or upload_file it)" % refused)
+        raise CheckFailed("element %s %s, so nothing was typed" % (step["uid"], why))
+    focused = selected["focused"]
     if focused not in ("textarea", "editable") and re.search(r"[\r\n]", step["text"]):
         # type_text presses Enter for a line break, which in a one-line box submits its form.
         raise CheckFailed("element %s is a one-line text box, where a line break would press Enter, so nothing was "
@@ -297,8 +322,22 @@ def type_(devtools, page_id, step):
         raise CheckFailed("%s; the field may hold part of the text" % exc)
     # A contenteditable element reads back as its text with each run of spaces and line breaks made one space.
     value = " ".join(step["text"].split()) if focused == "editable" else step["text"]
-    held = expect(devtools, page_id, {"uid": step["uid"], "value": value})
+    try:
+        held = expect(devtools, page_id, {"uid": step["uid"], "value": value})
+    except CheckFailed as exc:
+        raise CheckFailed("%s%s" % (exc, _typed_hint(devtools, page_id, step["uid"], value)))
     return "typed %d characters; %s" % (len(step["text"]), held)
+
+
+def _typed_hint(devtools, page_id, uid, text):
+    """Why a field holds something other than the text typed into it, when what it holds shows why."""
+    held = _read(devtools, page_id, uid).get("value") or ""
+    if held and text.startswith(held):
+        return "; the field keeps only its first %d characters" % len(held)
+    if held and re.sub(r"\W", "", held) == re.sub(r"\W", "", text):
+        return ("; the field reformatted it as %s; if that is right, the field is done, and expect with that value "
+                "confirms it" % json.dumps(held))
+    return ""
 
 
 def wait(devtools, page_id, step):
@@ -339,10 +378,10 @@ def _gone(devtools, page_id, text, timeout):
             seen = True
         elif seen:
             return "%s is off the page, after %.1fs" % (json.dumps(text), took)
-        else:
-            raise CheckFailed("%s was not on the page when the wait began, so its going proves nothing; text that runs "
-                              "across elements (a word in bold) sits on separate snapshot lines and never matches"
-                              % json.dumps(text))
+        elif took >= min(APPEAR_WAIT, timeout / 1000):
+            raise CheckFailed("%s did not show on the page in the wait's first %gs, so its going proves nothing; text "
+                              "that runs across elements (a word in bold) sits on separate snapshot lines and never "
+                              "matches" % (json.dumps(text), min(APPEAR_WAIT, timeout / 1000)))
     raise CheckFailed("%s is still on the page after %gms" % (json.dumps(text), timeout))
 
 
@@ -362,7 +401,7 @@ KEYS = {"pick": {"tool", "uid", "text", "search", "wait"}, "expect": {"tool", "u
 
 
 def describe():
-    """The checked steps, in the queue tool's description format."""
+    """The checked steps, in steps.describe's one-line-per-tool format."""
     return "\n".join([
         "  pick(uid: string, text: string, search?: string, wait?: number) - Choose the option whose text is "
         "exactly text in a dropdown you type into (react-select, an autocomplete) and confirm the field took it; "
@@ -374,10 +413,10 @@ def describe():
         "unless the field holds exactly text; use it instead of fill for a value of 100 characters or more, which fill "
         "sets by script",
         "  wait(gone?: string, uid?: string, value?: string, still?: number, timeout?: number) - Wait for one "
-        "condition: until the text in gone, seen on the page first, is off it, or the page has not changed for still "
-        "ms (both read from snapshots), or the field at uid holds value, read as expect reads; still and timeout are "
-        "ms, not seconds like pick's wait, and still must be under timeout (default %d, most %d)"
-        % (WAIT_TIMEOUT, WAIT_MOST),
+        "condition: until the text in gone, seen on the page within %gs, is off it, or the page has not changed for "
+        "still ms (both read from snapshots), or the field at uid holds value, read as expect reads; still and timeout "
+        "are ms, not seconds like pick's wait, and still must be under timeout (default %d, most %d)"
+        % (APPEAR_WAIT, WAIT_TIMEOUT, WAIT_MOST),
     ])
 
 
