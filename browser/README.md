@@ -25,7 +25,7 @@ chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
       worker.py    one tab's process, paired with its page; Workers registry
       steps.py     the queue: load, check, run, report; snapshot views
-      checked.py   the queue's checked steps: pick, expect
+      checked.py   the queue's checked steps: pick, expect, type
       record.py    one queue call's numbered files in a folder
     ../start, ../stop           launchers
     ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/
@@ -64,7 +64,7 @@ alone.
 
 **`steps.place_screenshots`** first gives each `take_screenshot` without a `filePath` one among the
 call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added (and
-without take_snapshot's own `under` and `full`), hands `pick` and `expect` to `checked.run`, passes
+without take_snapshot's own `under` and `full`), hands each checked step to `checked.run`, passes
 every reply's text through **`steps.view`**, and returns a whole MCP result: a text report, any
 images, and `isError` when a step failed.
 
@@ -147,7 +147,7 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   select's name or value holding a quote followed by a word can end early, as in
   `checked.OPTION_LOOSE`.
 - **A chrome-devtools-mcp tool reports success once it has acted, not once the page took it,** so
-  `checked.py` adds two checked steps that read the page back; `server.QUEUE_HELP` tells agents
+  `checked.py` adds checked steps that read the page back; `server.QUEUE_HELP` tells agents
   when to use each.
   - **`pick`** only clicks an option that typing listed, not one already on the page (a
     `<select multiple>` with the same words). It passes once the field holds `text`; a text box
@@ -157,7 +157,15 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   - **`expect`** matches exactly. A combobox with an empty text box reads as the text shown around
     it, and passes when one element there holds exactly the value, so "Hispanic or Latino" does not
     pass on "White (Not Hispanic or Latino)".
-  - **Both are checked for their keys and types before any step of the queue runs.**
+  - **`type`** exists because `type_text` takes no uid, typing into whatever has focus, and `fill`
+    sets a value of 100 characters or more by script, which React ignores. It focuses the text box at
+    or inside the uid (or the uid's own element, when it is contenteditable) and selects its text by
+    script, types with `type_text`, then reads back as `expect` does, a contenteditable element's text
+    with each run of whitespace made one space. It types nothing into a box that did not take focus,
+    an input that is not text-like (a checkbox, a submit, a date), a combobox input (that takes
+    `pick`), or a one-line box given a line break, which `type_text` would send as Enter and so submit
+    the form.
+  - **Each is checked for its keys and types before any step of the queue runs.**
 - **Element uids come from `take_snapshot` and live in that tab's process.** They stay valid
   across queue calls until the page navigates or the element goes away. When the process died and
   was restarted, the next report opens with a note that they are gone. A step failing with
@@ -176,8 +184,8 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     `service_offline` for the spawned server, with real `ps`.
   - **Live:** the live groups need the School Chrome up. Nothing listening on 9223 skips them;
     anything else wrong with the port is a failure. `queue_live` also needs `npm ci` done, and skips
-    without it, and records into a temporary folder; its `pick` and
-    `expect` checks run on a local page whose dropdowns take only trusted input.
+    without it, and records into a temporary folder; its `pick`, `expect`
+    and `type` checks run on a local page whose dropdowns and one textarea take only trusted input.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; a tab already open is never touched. The live `tab_show` check brings the
     School Chrome to the front.

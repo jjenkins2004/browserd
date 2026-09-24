@@ -357,14 +357,17 @@ def queue_offline():
             "required": ["pageId", "uid"]}}})
         check("a tool is described by its arguments without pageId, optional ones marked, and its first sentence",
               described.endswith("\n  fill(uid: string, includeSnapshot?: boolean) - Type text into an input"), described)
-        check("the queue's own pick and expect are described first", described.startswith("  pick(") and "\n  expect(" in described)
+        check("the queue's own pick, expect and type are described first",
+              described.startswith("  pick(") and "\n  expect(" in described and "\n  type(" in described.split("\n  fill(")[0])
         said = refusal(lambda: steps.check([{"tool": "pick", "uid": "1_1", "text": "x", "txt": "x"}], {}), steps.StepError)
         check("a pick with a key it does not take is refused before anything runs", "txt" in said, said)
         for label, step, words in (
                 ("a pick without text", {"tool": "pick", "uid": "1_1"}, "needs text"),
                 ("a pick whose wait is true", {"tool": "pick", "uid": "1_1", "text": "x", "wait": True}, "wait"),
                 ("a pick with an empty search", {"tool": "pick", "uid": "1_1", "text": "x", "search": ""}, "search"),
-                ("an expect whose value is not a string", {"tool": "expect", "uid": "1_1", "value": 3}, "needs value")):
+                ("an expect whose value is not a string", {"tool": "expect", "uid": "1_1", "value": 3}, "needs value"),
+                ("a type without text", {"tool": "type", "uid": "1_1"}, "needs text"),
+                ("a type with a key it does not take", {"tool": "type", "uid": "1_1", "text": "x", "value": "x"}, "value")):
             said = refusal(lambda: steps.check([{"tool": "take_snapshot"}, step], {"take_snapshot": {}}), steps.StepError)
             check("%s is refused before any step runs, by number" % label, "step 2" in said and words in said, said)
         check("pick and expect need no chrome-devtools-mcp tool of that name",
@@ -763,6 +766,9 @@ WIDGETS = r"""<title>checked scratch</title>
 <div class=field><label id=elab>Ethnicity</label>
   <div class=control><div>White (Not Hispanic or Latino)</div><input id=eth role=combobox aria-labelledby=elab></div></div>
 <label for=langs>Languages known</label><select id=langs multiple><option>Python</option><option>Go</option></select>
+<label for=letter>Cover letter</label><textarea id=letter>Old letter</textarea>
+<label for=zip>Zip</label><input id=zip maxlength=5>
+<div id=bio contenteditable role=textbox aria-multiline=true aria-label=Bio></div>
 <div class=field><label id=llab>Language</label>
   <div class=control><div id=lshown></div><input id=lang role=combobox aria-labelledby=llab></div><div id=llist role=listbox hidden></div></div>
 <script>
@@ -789,11 +795,14 @@ wire(dud, dlist, ['Python'], (t) => false);  // an option whose click takes noth
 wire(lang, llist, ['Python', 'Rust'], (t) => { lshown.textContent = t; lang.value = ''; });
 wire(cc, clist, ['United States +1', 'United Kingdom +44'], (t) => { cshown.textContent = t.split(' ').pop(); cc.value = ''; });
 wire(loc, loclist, ['Los Angeles, California, United States', 'Los Ángeles, Biobío, Chile'], (t) => { loc.value = t; });
+// Like React, keeps its own copy of the value and puts it back after any input event that is not trusted.
+let letterKept = letter.value;
+letter.addEventListener('input', (e) => { if (e.isTrusted) letterKept = letter.value; else letter.value = letterKept; });
 </script>"""
 
 
 def checked_live(httpd, tabs, opened):
-    """pick and expect over the queue tool, against widgets that take only trusted input."""
+    """pick, expect and type over the queue tool, against widgets that take only trusted input."""
     text, _ = call(httpd, "tab_open", url="data:text/html," + urllib.parse.quote(WIDGETS))
     tab = text.split()[0]
     opened.append(tab)
@@ -860,6 +869,26 @@ def checked_live(httpd, tabs, opened):
     text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": field("textbox", "Name"), "value": "Someone Else"}])
     check("expect fails on a value the field does not hold, naming what it holds",
           is_error and "expected \"Someone Else\", but the field holds \"Joshua Jenkins\"" in text, text)
+
+    letter = "Dear team,\n" + "I would like to build forms that fill themselves. " * 3
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Cover letter"), "text": letter}])
+    check("type replaces a long text with real keys, in a field that ignores scripted changes, and reads it back",
+          not is_error and "typed %d characters; the field holds" % len(letter) in text, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Name"), "text": "J. Jenkins"}])
+    check("type replaces all of what a field held", not is_error and "the field holds \"J. Jenkins\"" in text, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Zip"), "text": "902101234"}])
+    check("type fails when the field does not end up holding exactly the text",
+          is_error and "expected \"902101234\", but the field holds \"90210\"" in text, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("button", "Yes"), "text": "x"}])
+    check("type into something that is not a text box fails without typing", is_error and "nothing was typed" in text, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("checkbox", "I agree"), "text": " "}])
+    held, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": field("checkbox", "I agree"), "value": "true"}])
+    check("type into a checkbox fails without typing, so a space does not untick it",
+          is_error and "nothing was typed" in text and "--- 1 expect ok" in held, text + held)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Name"), "text": "a\nb"}])
+    check("type refuses a line break for a one-line box, where it would press Enter", is_error and "one-line" in text, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
+    check("type into a contenteditable element takes a line break and reads the text back", not is_error, text)
 
 
 def queue_live():

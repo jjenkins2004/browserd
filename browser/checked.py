@@ -1,4 +1,4 @@
-"""The queue's checked steps, pick and expect, which check their result instead of trusting a tool's "Successfully".
+"""The queue's checked steps, pick, expect and type, which check their result instead of trusting a tool's "Successfully".
 
 server.QUEUE_HELP says when to use which.
 """
@@ -57,6 +57,28 @@ CLEAR_JS = r"""(el) => {
 }"""
 
 
+# type_'s focus and select-all; README.md, "Agent Gotchas & Invariants", says which element it focuses. It returns
+# what took focus, the box's type or "editable", or false. getRootNode() reaches a box inside a shadow root.
+SELECT_JS = r"""(el) => {
+  const box = el.matches('input, textarea') ? el : el.isContentEditable ? null : el.querySelector('input, textarea');
+  if (box) {
+    const text = ['text', 'search', 'email', 'url', 'tel', 'password', 'number', 'textarea'].includes(box.type);
+    if (!text || box.matches('[role=combobox]')) return false;
+    box.focus();
+    box.select();
+    return box.getRootNode().activeElement === box && box.type;
+  }
+  if (!el.isContentEditable) return false;
+  el.focus();
+  const range = el.ownerDocument.createRange();
+  range.selectNodeContents(el);
+  const selection = el.ownerDocument.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return el.contains(el.getRootNode().activeElement) && 'editable';
+}"""
+
+
 class CheckFailed(Exception):
     """A checked step that could not do, or could not confirm, what it was asked."""
 
@@ -101,12 +123,12 @@ def _holds(read, value):
 
 
 def problem(step):
-    """Why a pick or expect step cannot run as written, or None. The queue asks this of every step before any runs."""
+    """Why a checked step cannot run as written, or None. The queue asks this of each one before any step runs."""
     tool = step["tool"]
     extra = set(step) - KEYS[tool]
     if extra:
         return "%s does not take %s" % (tool, ", ".join(sorted(extra)))
-    for key in ("uid", "text") if tool == "pick" else ("uid", "value"):
+    for key in ("uid", "value") if tool == "expect" else ("uid", "text"):
         if not isinstance(step.get(key), str) or not step[key]:
             return "%s needs %s, as a non-empty string" % (tool, key)
     if tool == "pick":
@@ -221,8 +243,35 @@ def expect(devtools, page_id, step):
         time.sleep(POLL)
 
 
-STEPS = {"pick": pick, "expect": expect}
-KEYS = {"pick": {"tool", "uid", "text", "search", "wait"}, "expect": {"tool", "uid", "value"}}
+def type_(devtools, page_id, step):
+    """Type text over a field's text with real keys, and confirm the field holds exactly text.
+
+    Args:
+        devtools (Devtools): the tab's process.
+        page_id (int): the tab's page id in it.
+        step (dict): {"tool": "type", "uid": field uid, "text": what the field should hold}.
+    """
+    focused = returned(_script(devtools, page_id, SELECT_JS, step["uid"]))
+    if not focused:
+        raise CheckFailed("element %s is not a text box, or its text box did not take focus (a dropdown you type into "
+                          "takes pick), so nothing was typed" % step["uid"])
+    if focused not in ("textarea", "editable") and re.search(r"[\r\n]", step["text"]):
+        # type_text presses Enter for a line break, which in a one-line box submits its form.
+        raise CheckFailed("element %s is a one-line text box, where a line break would press Enter, so nothing was "
+                          "typed" % step["uid"])
+    try:
+        devtools.text("type_text", {"pageId": page_id, "text": step["text"]})
+    except cdp.CdpError as exc:
+        raise CheckFailed("%s; the field may hold part of the text" % exc)
+    # A contenteditable element reads back as its text with each run of spaces and line breaks made one space.
+    value = " ".join(step["text"].split()) if focused == "editable" else step["text"]
+    held = expect(devtools, page_id, {"uid": step["uid"], "value": value})
+    return "typed %d characters; %s" % (len(step["text"]), held)
+
+
+STEPS = {"pick": pick, "expect": expect, "type": type_}
+KEYS = {"pick": {"tool", "uid", "text", "search", "wait"}, "expect": {"tool", "uid", "value"},
+        "type": {"tool", "uid", "text"}}
 
 
 def describe():
@@ -234,6 +283,9 @@ def describe():
         % PICK_WAIT,
         "  expect(uid: string, value: string) - Fail unless the field holds value: \"true\"/\"false\" for a "
         "checkbox, radio, or aria-pressed/aria-checked element; option text for a select; the choice a dropdown shows",
+        "  type(uid: string, text: string) - Select the text box's text and type text over it with real keys, then fail "
+        "unless the field holds exactly text; use it instead of fill for a value of 100 characters or more, which fill "
+        "sets by script",
     ])
 
 
@@ -243,7 +295,7 @@ def run(devtools, page_id, step):
     Args:
         devtools (Devtools): the tab's process.
         page_id (int): the tab's page id in it.
-        step (dict): a pick or expect step that problem has passed.
+        step (dict): a checked step that problem has passed.
     """
     try:
         return STEPS[step["tool"]](devtools, page_id, step), False

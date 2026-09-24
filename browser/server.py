@@ -126,10 +126,10 @@ select, its options), and full: true, for the snapshot's lines as chrome-devtool
 
 A chrome-devtools-mcp tool reports success once it has acted, not once the page took it: fill on a react-select
 says "Successfully filled" and picks nothing. Use pick for any dropdown you type into; a native select still takes
-fill, with an option's exact text, which take_snapshot under the select's uid lists. fill types real keys only for a value under 100
-characters; a longer one is set by script, which React ignores, so select the field's text with evaluate_script
-((el) => { el.focus(); el.select(); } with the uid in args) and type_text it instead. Follow other fills and
-clicks whose result matters with expect, which reads the DOM. Steps a queue accepts, pick and expect first:
+fill, with an option's exact text, which take_snapshot under the select's uid lists. fill types real keys only for
+a value under 100 characters; a longer one is set by script, which React ignores, so use type for it. Follow other
+fills and clicks whose result matters with expect, which reads the DOM. Steps a queue accepts, the ones that read
+the page back first:
 """
 
 
