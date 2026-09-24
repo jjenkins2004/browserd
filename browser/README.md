@@ -4,10 +4,10 @@
 
 The browser MCP server: it starts and owns Joshua's School Chrome and serves tools to Claude
 sessions over HTTP on `127.0.0.1:9230`, so application forms are read and filled inside his
-logged-in session. `tab_open`, `tab_list` and `tab_close` manage tabs by short tab ids; `queue` runs
-a list of steps on one tab through that tab's own chrome-devtools-mcp process. `queue` is handed a
-workspace folder and records every call in its `run/`. Python standard library, plus Node for chrome-devtools-mcp (pinned in
-`../package.json`; run `npm ci`).
+logged-in session. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage tabs by short tab ids;
+`queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
+records every call in that tab's record folder, `../.run/calls/<tab>/`. Python standard library, plus Node for
+chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
 
     ../start    start the server and the School Chrome, in the background
     ../stop     stop the server, which quits the School Chrome
@@ -18,7 +18,7 @@ workspace folder and records every call in its `run/`. Python standard library, 
       ws.py        RFC 6455 cut down to one local, trusted, text-only connection
       cdp.py       which Chrome, port proof, one websocket to it
       launch.py    starts the School Chrome, or adopts one already up
-      tabs.py      short tab ids; open, list, close
+      tabs.py      short tab ids; open, list, show, close
       mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch
       server.py    the server process: tools, Chrome lifecycle, pid file
       service.py   ../start and ../stop: background start, locked; stop by pid
@@ -26,9 +26,9 @@ workspace folder and records every call in its `run/`. Python standard library, 
       worker.py    one tab's process, paired with its page; Workers registry
       steps.py     the queue: load, check, run, report
       checked.py   the queue's checked steps: pick, expect
-      record.py    one queue call's numbered files in a workspace's run/
+      record.py    one queue call's numbered files in a folder
     ../start, ../stop           launchers
-    ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log
+    ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
     ../tests/check_server.py    protocol, tab ids, queue, recording, service; live tabs, queue
     ../tests/check_browser.py   framing, School Chrome proof, launch; live proof, tab load
@@ -50,9 +50,9 @@ process only.
 `run` returns a string, a list of MCP content items, or a whole result dict, which is passed through
 as is. Raising `mcp.ToolError` sends the agent a readable error result; any other exception becomes
 an error result naming it, with the traceback in the log. `server.tab_tools(tabs, workers)` builds
-the three tab tools, `server.queue_tool` the fourth; all turn `cdp.CdpError` into `ToolError`. The queue
-takes the workspace as a folder — `_workspace` refuses one outside `server.REPO`, the folder holding this
-project, or one that is not there — and once its arguments pass, makes a `record.Call`, writes what was asked,
+the four tab tools, `server.queue_tool` the queue; all turn `cdp.CdpError` into `ToolError`. The queue
+records into `server.CALLS/<tab>/`, so it refuses a tab argument not shaped like a tab id (`tabs.is_id`)
+before that reaches a path, and once its arguments pass, makes a `record.Call`, writes what was asked,
 and writes what came back through `_recorded`, a raised error included.
 
 **`worker.Worker`** is one tab's `devtools.Devtools` process and its page id there, behind a lock,
@@ -105,7 +105,8 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
 - **Tabs open in the background.** `Tabs.open` creates the tab with `background: true`, so the
   Mac's focus never moves; without it, `Target.createTarget` brings Chrome to the front. Opening
   goes `about:blank`, attach, `Page.enable`, then navigate: Chrome can finish a load before a later
-  `Page.enable` would hear it.
+  `Page.enable` would hear it. `tab_show` is the one tool meant to move focus: `Target.activateTarget`
+  also raises the School Chrome over the app in front; no separate macOS call is needed.
 - **Tabs opened by hand get an id at `tab_list`.** An id dies with the server, and a tab closed
   outside the server loses its id on the next use.
 - **The server refuses any request with an `Origin` header, a `Host` other than
@@ -125,8 +126,8 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   `steps.LEFT_OUT` (opening, listing, choosing and closing tabs; lighthouse; heap snapshots) are
   refused before anything runs, as is an unknown tool. The queue stops at the first failed step;
   the report names the steps not run and ends with a fresh snapshot. A relative `file` is read from
-  the workspace.
-- **A queue's `take_screenshot` without `filePath` is saved to `run/<n>-step<k>-screenshot.png`**
+  the tab's record folder.
+- **A queue's `take_screenshot` without `filePath` is saved in the tab's record folder as `<n>-step<k>-screenshot.png`**
   (`.jpeg` or `.webp` for those formats), and the report gives that path, not an image:
   chrome-devtools-mcp attaches an image only when no path is given, and even then saves one of 2MB
   or more to a temporary file instead.
@@ -147,22 +148,23 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   was restarted, the next report opens with a note that they are gone. A step failing with
   chrome-devtools-mcp's "No page found" (it renumbered its pages after reconnecting) stops the
   process, so the next queue re-pairs.
-- **chrome-devtools-mcp's file tools may only touch the folder holding this project, `/private/tmp`
-  (`--workspace`) and `$TMPDIR`, which it always adds.** Usage statistics and CrUX are off, and the
+- **chrome-devtools-mcp's file tools may only touch `~/Desktop`, this project's folder (which holds the
+  record folders), `/private/tmp` (all `--workspace`) and `$TMPDIR`, which it always adds.** Usage statistics and CrUX are off, and the
   performance, network and emulation tools are not loaded.
 - **No tool types a password safely.** A queue's chrome-devtools-mcp steps refuse nothing, and every
-  step's arguments are recorded in the workspace's `run/`.
+  step's arguments are recorded in the tab's record folder.
 - **Checks.**
   - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for `lsof`,
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
     `tabs_offline` stands in for Chrome; `queue_offline` for chrome-devtools-mcp and a snapshot;
-    `recording_offline` for Chrome, with a workspace in a temporary folder;
+    `recording_offline` for Chrome, recording into a temporary folder;
     `service_offline` for the spawned server, with real `ps`.
   - **Live:** the live groups need the School Chrome up. Nothing listening on 9223 skips them;
     anything else wrong with the port is a failure. `queue_live` also needs `npm ci` done, and skips
-    without it, and records into a workspace of its own in a temporary folder; its `pick` and
+    without it, and records into a temporary folder; its `pick` and
     `expect` checks run on a local page whose dropdowns take only trusted input.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
-    them, and close them; a tab already open is never touched.
+    them, and close them; a tab already open is never touched. The live `tab_show` check brings the
+    School Chrome to the front.
   - **Never automated:** `../start` and `../stop` are never run against the real School Chrome,
     because stopping quits it.

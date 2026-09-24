@@ -26,14 +26,6 @@ from browser.worker import Workers, returned
 from browser.ws import WebSocketError
 
 passed, failed, skipped = [], [], []
-CHECK_JOB = "1234"
-
-
-def workspace(root):
-    """A workspace folder like ../../setup-workspace makes, without the workspace package: the server is handed a path."""
-    path = os.path.join(root, CHECK_JOB + "-check-labs-engineer")
-    os.makedirs(os.path.join(path, record.RUN), exist_ok=True)
-    return path
 
 
 def check(name, condition, detail=""):
@@ -162,6 +154,7 @@ class FakeChrome:
     def __init__(self):
         self.targets = []
         self.created = []
+        self.activated = []
         self.navigate_error: str | None = None
         self.loads = True
         self.default: str | None = "school"
@@ -207,6 +200,9 @@ class FakeConnection:
             return {}
         if method == "Target.getTargetInfo":
             return {"targetInfo": dict(chrome.find(params["targetId"]))}
+        if method == "Target.activateTarget":
+            chrome.activated.append(params["targetId"])
+            return {}
         if method == "Target.closeTarget":
             chrome.targets.remove(chrome.find(params["targetId"]))
             return {"success": True}
@@ -270,6 +266,11 @@ def tabs_offline():
     check("a URL that cannot be opened says why", "ERR_NAME_NOT_RESOLVED" in said, said)
     check("and the tab made for it is closed again", len(chrome.targets) == count)
 
+    shown = tabs.show(tab)
+    check("show brings the tab's target to the front and answers with where it is",
+          chrome.activated == [tabs.target(tab)] and shown["url"] == "https://jobs.ashbyhq.com/new", repr(chrome.activated))
+    check("show refuses an unknown id", "no tab has the id" in refusal(lambda: tabs.show("zzzz")))
+
     tabs.close(tab)
     check("close closes the tab", all(t["url"] != "https://jobs.ashbyhq.com/new" for t in chrome.targets))
     check("and forgets its id", "no tab has the id" in refusal(lambda: tabs.close(tab)))
@@ -292,6 +293,9 @@ def tabs_offline():
         text, is_error = call(httpd, "tab_list")
         check("tab_list lists it by that id", not is_error and opened in text, text)
         check("tab_list says how many tabs it is not listing", "outside the School profile" in text, text)
+        text, is_error = call(httpd, "tab_show", tab=opened)
+        check("tab_show answers with the tab's id and URL", not is_error and text.split()[0] == opened
+              and "https://example.com/c" in text, text)
         text, is_error = call(httpd, "tab_close", tab="zzzz")
         check("a refusal from Chrome's side reaches the agent as an error result", is_error and "zzzz" in text, text)
         check("tab_close closes by id", call(httpd, "tab_close", tab=opened) == ("closed %s" % opened, False))
@@ -434,31 +438,30 @@ def queue_offline():
 
 
 def records_offline():
-    """record.Call: how a call is numbered and what it writes. Was checked with the workspace package until 2026-09-17."""
-    root = tempfile.mkdtemp(prefix="browser-workspaces-")
+    """record.Call: how a call is numbered and what it writes."""
+    root = tempfile.mkdtemp(prefix="browser-calls-")
     try:
-        ws = workspace(root)
-        run = os.path.join(ws, record.RUN)
-        first = record.Call(ws, "queue")
-        check("a call's number is held as soon as it is made", os.listdir(run) == ["001-queue.json"])
+        folder = os.path.join(root, "k3f9")
+        first = record.Call(folder, "queue")
+        check("a call's number is held as soon as it is made, in a folder made for it", os.listdir(folder) == ["001-queue.json"])
         first.asked({"tab": "k3f9", "steps": [{"tool": "take_snapshot", "note": "é"}]})
         first.answered("--- 1 take_snapshot ok 0.1s\nuid=1_0 RootWebArea\n\n")
-        check("asking and answering fill the call's two files", sorted(os.listdir(run)) == ["001-queue.json", "001-queue.txt"])
-        with open(os.path.join(run, "001-queue.json"), encoding="utf-8") as handle:
+        check("asking and answering fill the call's two files", sorted(os.listdir(folder)) == ["001-queue.json", "001-queue.txt"])
+        with open(os.path.join(folder, "001-queue.json"), encoding="utf-8") as handle:
             check("what it was asked is written as JSON", json.load(handle)["steps"][0]["note"] == "é")
         check("what came back is written as text, ending in one newline",
-              open(os.path.join(run, "001-queue.txt"), encoding="utf-8").read() == "--- 1 take_snapshot ok 0.1s\nuid=1_0 RootWebArea\n")
-        check("a file of the call's is named with its number", first.path("step2-screenshot.png") == os.path.join(run, "001-step2-screenshot.png"))
+              open(os.path.join(folder, "001-queue.txt"), encoding="utf-8").read() == "--- 1 take_snapshot ok 0.1s\nuid=1_0 RootWebArea\n")
+        check("a file of the call's is named with its number", first.path("step2-screenshot.png") == os.path.join(folder, "001-step2-screenshot.png"))
 
-        open(os.path.join(run, "notes-by-hand.txt"), "w").close()
-        open(os.path.join(run, "007-step1-screenshot.png"), "w").close()
+        open(os.path.join(folder, "notes-by-hand.txt"), "w").close()
+        open(os.path.join(folder, "007-step1-screenshot.png"), "w").close()
         check("the next call is numbered after the highest number there, whatever else is in the folder",
-              record.Call(ws, "queue").path("x") == os.path.join(run, "008-x"))
-        shutil.rmtree(run)
-        check("a run folder that was removed is made again", record.Call(ws, "queue").path("x") == os.path.join(run, "001-x"))
+              record.Call(folder, "queue").path("x") == os.path.join(folder, "008-x"))
+        shutil.rmtree(folder)
+        check("a folder that was removed is made again", record.Call(folder, "queue").path("x") == os.path.join(folder, "001-x"))
 
         made = []
-        threads = [threading.Thread(target=lambda: made.append(record.Call(ws, "queue").path(""))) for _ in range(20)]
+        threads = [threading.Thread(target=lambda: made.append(record.Call(folder, "queue").path(""))) for _ in range(20)]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -470,34 +473,32 @@ def records_offline():
 
 
 def recording_offline():
-    root = tempfile.mkdtemp(prefix="browser-workspaces-")
-    ws = workspace(root)
+    root = tempfile.mkdtemp(prefix="browser-calls-")
     tabs, workers = Tabs(FakeChrome().connect), Workers(root)
     tools = [server.queue_tool(tabs, workers, {"take_snapshot": {}, "take_screenshot": {}}, root)]
     httpd = serving(tools)
     try:
-        run = os.path.join(ws, record.RUN)
-        text, is_error = call(httpd, "queue", tab="zzzz", steps=[{"tool": "take_snapshot"}])
-        check("a queue without a workspace is refused by name", is_error and "workspace is required" in text, text)
-        text, is_error = call(httpd, "queue", tab="zzzz", workspace=os.path.join(root, "nobody"), steps=[{"tool": "take_snapshot"}])
-        check("a queue naming a folder that is not there is refused, saying how to make one",
-              is_error and "./setup-workspace" in text, text)
-        text, is_error = call(httpd, "queue", tab="zzzz", workspace=tempfile.gettempdir(), steps=[{"tool": "take_snapshot"}])
-        check("a workspace outside the folder workspaces live in is refused", is_error and "is not" in text, text)
-        text, is_error = call(httpd, "queue", tab="zzzz", workspace=ws, steps=[{"tool": "new_page"}])
-        check("a call refused before it runs records nothing", is_error and os.listdir(run) == [], repr(os.listdir(run)))
+        folder = os.path.join(root, "zzzz")
+        text, is_error = call(httpd, "queue", tab="zzzz/..", steps=[{"tool": "take_snapshot"}])
+        check("a tab that is not shaped like a tab id is refused before anything is written",
+              is_error and "no tab has the id" in text and os.listdir(root) == [], text)
+        text, is_error = call(httpd, "queue", tab="zzzz", workspace=root, steps=[{"tool": "take_snapshot"}])
+        check("a queue given a workspace is refused, naming it", is_error and "workspace" in text, text)
+        text, is_error = call(httpd, "queue", tab="zzzz", steps=[{"tool": "new_page"}])
+        check("a call refused before it runs records nothing", is_error and os.listdir(root) == [], repr(os.listdir(root)))
 
-        with open(os.path.join(run, "..", "steps.json"), "w") as handle:
+        os.makedirs(folder)
+        with open(os.path.join(folder, "steps.json"), "w") as handle:
             json.dump([{"tool": "take_snapshot"}, {"tool": "take_screenshot"}], handle)
-        text, is_error = call(httpd, "queue", tab="zzzz", workspace=ws, file="steps.json")
-        check("a queue that cannot reach its tab is still recorded, with the error as what came back",
-              is_error and sorted(os.listdir(run)) == ["001-queue.json", "001-queue.txt"]
-              and "no tab has the id" in open(os.path.join(run, "001-queue.txt")).read(), repr(os.listdir(run)))
-        with open(os.path.join(run, "001-queue.json")) as handle:
+        text, is_error = call(httpd, "queue", tab="zzzz", file="steps.json")
+        check("a queue that cannot reach its tab is still recorded in the tab's record folder, with the error as what came back",
+              is_error and sorted(os.listdir(folder)) == ["001-queue.json", "001-queue.txt", "steps.json"]
+              and "no tab has the id" in open(os.path.join(folder, "001-queue.txt")).read(), repr(os.listdir(folder)))
+        with open(os.path.join(folder, "001-queue.json")) as handle:
             asked = json.load(handle)
-        check("the record holds the tab and the steps read from the workspace's file, the screenshot given its path",
+        check("the record holds the tab and the steps read from the tab's record folder, the screenshot given its path",
               asked == {"tab": "zzzz", "steps": [{"tool": "take_snapshot"},
-                                                 {"tool": "take_screenshot", "filePath": os.path.join(run, "001-step2-screenshot.png")}]},
+                                                 {"tool": "take_screenshot", "filePath": os.path.join(folder, "001-step2-screenshot.png")}]},
               repr(asked))
     finally:
         httpd.shutdown()
@@ -628,6 +629,10 @@ def live():
         opened = text.split()[0] if text else ""
         check("tab_open works over HTTP against the School Chrome", not is_error and "over http" in text, text)
         check("tab_list over HTTP lists it", opened in call(httpd, "tab_list")[0])
+        text, is_error = call(httpd, "tab_show", tab=opened)
+        front = front_app()  # loginwindow is in front while the Mac is locked, and then nothing can come forward
+        check("tab_show over HTTP brings the School Chrome to the front", not is_error and "over http" in text
+              and front in (None, "loginwindow", "Google Chrome"), "%s; in front: %s" % (text, front))
         check("tab_close over HTTP closes it", call(httpd, "tab_close", tab=opened) == ("closed %s" % opened, False))
     finally:
         httpd.shutdown()
@@ -691,59 +696,59 @@ wire(loc, loclist, ['Los Angeles, California, United States', 'Los Ángeles, Bio
 </script>"""
 
 
-def checked_live(httpd, tabs, opened, ws):
+def checked_live(httpd, tabs, opened):
     """pick and expect over the queue tool, against widgets that take only trusted input."""
     text, _ = call(httpd, "tab_open", url="data:text/html," + urllib.parse.quote(WIDGETS))
     tab = text.split()[0]
     opened.append(tab)
-    snapshot, _ = call(httpd, "queue", workspace=ws, tab=tab, steps=[{"tool": "take_snapshot"}])
+    snapshot, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "take_snapshot"}])
     field = lambda role, label: uid(snapshot, role, label) or uid(snapshot, role, " " + label)
 
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Clearance"), "text": 'Currently hold a "Secret" clearance'},
         {"tool": "expect", "uid": field("combobox", "Clearance"), "value": 'Currently hold a "Secret" clearance'}])
     check("pick chooses an option by exact text in a widget that takes only real input, and expect reads it back",
           not is_error and "--- 1 pick ok" in text and "--- 2 expect ok" in text, text)
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Clearance"), "text": 'Level "3" or above', "search": "Level"}])
     check("pick chooses an option whose name holds quotes and words after them", not is_error, text)
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Location"), "text": "Los Angeles, California, United States",
          "search": "Los Angeles"}])
     check("pick types search and chooses the exact option among near matches", not is_error and "the field holds" in text, text)
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Country"), "text": "United States +1"}])
     check("pick accepts a field that shows a short form of the choice, and says what it shows",
           not is_error and "now shows \"+1\"" in text, text)
 
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Location"), "text": "Nowhere, At All", "wait": 2},
         {"tool": "expect", "uid": field("checkbox", "I agree"), "value": "false"}])
     check("a pick with no exact option fails the queue and says what typing showed", is_error and "no option is exactly" in text, text)
     check("and the steps after it do not run", "--- not run: 2 expect" in text, text)
-    text, _ = call(httpd, "queue", workspace=ws, tab=tab, steps=[{"tool": "expect", "uid": field("combobox", "Location"), "value": "Nowhere, At All"}])
+    text, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": field("combobox", "Location"), "value": "Nowhere, At All"}])
     check("a failed pick leaves no typed text behind to pass for an answer", "FAILED" in text and "Nowhere" not in text.split("holds")[-1].split("(")[0], text)
 
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Dud"), "text": "Python", "wait": 3}])
     check("a pick whose option click takes nothing fails, though the box holds the typed text", is_error and "only what was typed" in text, text)
-    text, _ = call(httpd, "queue", workspace=ws, tab=tab, steps=[{"tool": "evaluate_script", "function": "() => document.getElementById('dud').value"}])
+    text, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "evaluate_script", "function": "() => document.getElementById('dud').value"}])
     check("and the typed text is cleared", returned(text) == "", text)
 
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Language"), "text": "Python"},
         {"tool": "evaluate_script", "function": "() => [...document.getElementById('langs').selectedOptions].length"}])
     check("pick chooses in its own dropdown, not an option with the same words elsewhere on the page",
           not is_error and "the field holds \"Python\"" in text and returned(text.split("--- 2")[-1]) == 0, text)
 
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "expect", "uid": field("combobox", "Ethnicity"), "value": "Hispanic or Latino"}])
     check("expect does not pass on a value that is only part of what a dropdown shows", is_error, text)
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "expect", "uid": field("combobox", "Ethnicity"), "value": "White (Not Hispanic or Latino)"}])
     check("expect passes on the whole of what a dropdown shows", not is_error, text)
 
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "expect", "uid": field("checkbox", "I agree"), "value": "false"},
         {"tool": "click", "uid": field("checkbox", "I agree")},
         {"tool": "expect", "uid": field("checkbox", "I agree"), "value": "true"},
@@ -753,7 +758,7 @@ def checked_live(httpd, tabs, opened, ws):
         {"tool": "fill", "uid": field("textbox", "Name"), "value": "Joshua Jenkins"},
         {"tool": "expect", "uid": field("textbox", "Name"), "value": "Joshua Jenkins"}])
     check("expect reads a checkbox, a pressed button, a select and a text box", not is_error, text)
-    text, is_error = call(httpd, "queue", workspace=ws, tab=tab, steps=[{"tool": "expect", "uid": field("textbox", "Name"), "value": "Someone Else"}])
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": field("textbox", "Name"), "value": "Someone Else"}])
     check("expect fails on a value the field does not hold, naming what it holds",
           is_error and "expected \"Someone Else\", but the field holds \"Joshua Jenkins\"" in text, text)
 
@@ -774,9 +779,7 @@ def queue_live():
     check("chrome-devtools-mcp lists the form tools a queue needs",
           {"take_snapshot", "fill", "fill_form", "click", "type_text", "press_key", "upload_file", "evaluate_script"} <= set(allowed))
     tabs, workers = Tabs(), Workers(workdir)
-    root = os.path.join(workdir, "workspaces")
-    ws = workspace(root)
-    run = os.path.join(ws, record.RUN)
+    root = os.path.join(workdir, "calls")
     httpd = serving(server.tab_tools(tabs, workers) + [server.queue_tool(tabs, workers, allowed, root)], server.NAME)
     opened = []
     try:
@@ -787,15 +790,15 @@ def queue_live():
 
         same = FORM % "queue scratch"
         a, b = open_tab(same), open_tab(same)  # the same URL, so pairing has to tell them apart
-        snap_a, error_a = call(httpd, "queue", workspace=ws, tab=a, steps=[{"tool": "take_snapshot"}])
-        snap_b, _ = call(httpd, "queue", workspace=ws, tab=b, steps=[{"tool": "take_snapshot"}])
+        snap_a, error_a = call(httpd, "queue", tab=a, steps=[{"tool": "take_snapshot"}])
+        snap_b, _ = call(httpd, "queue", tab=b, steps=[{"tool": "take_snapshot"}])
         check("a queue's first step reaches its tab through a new chrome-devtools-mcp", not error_a and "textbox \"Name\"" in snap_a, snap_a)
 
         spans = {}
 
         def fill(tab, snapshot, who):
             began = time.monotonic()
-            spans[who] = (began, call(httpd, "queue", workspace=ws, tab=tab, steps=[
+            spans[who] = (began, call(httpd, "queue", tab=tab, steps=[
                 {"tool": "fill", "uid": uid(snapshot, "textbox", "Name"), "value": "Agent " + who},
                 {"tool": "click", "uid": uid(snapshot, "textbox", "Email")},
                 {"tool": "type_text", "text": who.lower() + "@example.com"},
@@ -826,7 +829,7 @@ def queue_live():
             check("tab %s holds only its own queue's values, typed keys included" % who,
                   held == ["Agent " + who, who.lower() + "@example.com", "CLICKED"], repr(held))
 
-        text, is_error = call(httpd, "queue", workspace=ws, tab=a, steps=[
+        text, is_error = call(httpd, "queue", tab=a, steps=[
             {"tool": "click", "uid": "9_99"}, {"tool": "fill", "uid": uid(snap_a, "textbox", "Name"), "value": "never"}])
         check("a failing step makes the queue an error result", is_error and "--- 1 click FAILED" in text, text)
         check("the steps after it do not run", "--- not run: 2 fill" in text)
@@ -835,22 +838,22 @@ def queue_live():
         path = os.path.join(workdir, "steps.json")
         with open(path, "w") as handle:
             json.dump([{"tool": "fill", "uid": uid(snap_a, "textbox", "Name"), "value": "from a file"}], handle)
-        text, is_error = call(httpd, "queue", workspace=ws, tab=a, file=path)
+        text, is_error = call(httpd, "queue", tab=a, file=path)
         check("a queue runs from a file", not is_error and "--- 1 fill ok" in text, text)
 
         status, answer = rpc(httpd, "tools/call", {"name": "queue", "arguments": {
-            "tab": a, "workspace": ws, "steps": [{"tool": "take_screenshot", "fullPage": True}]}})
+            "tab": a, "steps": [{"tool": "take_screenshot", "fullPage": True}]}})
         content = (answer or {}).get("result", {}).get("content", [])
         text = text_of(content)
         saved = re.search(r"Saved screenshot to (.+)\.$", text, re.M)
         where = saved.group(1) if saved else ""
-        check("a take_screenshot is saved in the workspace's run folder",
-              os.path.realpath(os.path.dirname(where)) == os.path.realpath(run) and os.path.getsize(where) > 0, text)
+        check("a take_screenshot is saved in the tab's record folder",
+              os.path.realpath(os.path.dirname(where)) == os.path.realpath(os.path.join(root, a)) and os.path.getsize(where) > 0, text)
         check("and not sent back as an image", all(item.get("type") == "text" for item in content), repr([i.get("type") for i in content]))
 
-        text, is_error = call(httpd, "queue", workspace=ws, tab=a, steps=[{"tool": "new_page", "url": "about:blank"}])
+        text, is_error = call(httpd, "queue", tab=a, steps=[{"tool": "new_page", "url": "about:blank"}])
         check("a tab-managing tool is refused in a queue", is_error and "new_page" in text, text)
-        text, is_error = call(httpd, "queue", workspace=ws, tab=a, steps=[{"tool": "click"}], extra=1)
+        text, is_error = call(httpd, "queue", tab=a, steps=[{"tool": "click"}], extra=1)
         check("an argument queue does not take is refused", is_error and "extra" in text, text)
 
         worker = workers.get(a, tabs.target(a))
@@ -858,18 +861,18 @@ def queue_live():
         if process:
             process.kill()
             process.wait()
-        text, is_error = call(httpd, "queue", workspace=ws, tab=a, steps=[{"tool": "take_snapshot"}])
+        text, is_error = call(httpd, "queue", tab=a, steps=[{"tool": "take_snapshot"}])
         check("a tab whose chrome-devtools-mcp died gets a new one on its next queue", not is_error and "RootWebArea" in text, text)
         check("and the report says its old uids are gone", text.startswith("note:"), text[:120])
 
-        checked_live(httpd, tabs, opened, ws)
+        checked_live(httpd, tabs, opened)
 
         framed = open_tab(FRAMED)
         time.sleep(1)  # the frame loads after the tab does
-        text, _ = call(httpd, "queue", workspace=ws, tab=framed, steps=[{"tool": "take_snapshot"}])
+        text, _ = call(httpd, "queue", tab=framed, steps=[{"tool": "take_snapshot"}])
         inside = uid(text, "textbox", "Inside")
         check("a field inside a cross-origin frame shows in the snapshot", bool(inside), text)
-        text, is_error = call(httpd, "queue", workspace=ws, tab=framed, steps=[
+        text, is_error = call(httpd, "queue", tab=framed, steps=[
             {"tool": "fill", "uid": inside, "value": "reached"},
             {"tool": "evaluate_script", "function": "() => document.querySelector('iframe') !== null"}])
         check("and fills", not is_error and "--- 1 fill ok" in text, text)
@@ -878,7 +881,7 @@ def queue_live():
         try:
             hand = open_tab(same)
             process = workers.get(hand, tabs.target(hand))
-            call(httpd, "queue", workspace=ws, tab=hand, steps=[{"tool": "take_snapshot"}])
+            call(httpd, "queue", tab=hand, steps=[{"tool": "take_snapshot"}])
             by_hand = process._devtools
             closer.call("Target.closeTarget", targetId=tabs.target(hand))
             opened.remove(hand)
@@ -891,13 +894,17 @@ def queue_live():
         call(httpd, "tab_close", tab=b)
         opened.remove(b)
         check("closing a tab stops its chrome-devtools-mcp", process is not None and not process.alive())
-        text, is_error = call(httpd, "queue", workspace=ws, tab=b, steps=[{"tool": "take_snapshot"}])
+        text, is_error = call(httpd, "queue", tab=b, steps=[{"tool": "take_snapshot"}])
         check("a queue on a closed tab is refused", is_error and "no tab has the id" in text, text)
-        names = os.listdir(run)
-        calls = [name[:-len(".json")] for name in names if name.endswith(".json")]
-        check("every call in the workspace has its own number and both its files, the two queues run at once included",
-              len({name.split("-")[0] for name in calls}) == len(calls) > 20 and all(name + ".txt" in names for name in calls),
-              repr(sorted(names)))
+        numbered, total = True, 0
+        for tab in os.listdir(root):
+            names = os.listdir(os.path.join(root, tab))
+            calls = [name[:-len(".json")] for name in names if name.endswith(".json")]
+            numbered = numbered and len({name.split("-")[0] for name in calls}) == len(calls)
+            numbered = numbered and all(name + ".txt" in names for name in calls)
+            total += len(calls)
+        check("every call is recorded in its tab's record folder, with its own number and both its files",
+              numbered and total > 20 and set(os.listdir(root)) >= {a, b}, repr(os.listdir(root)))
     finally:
         for tab in opened:
             call(httpd, "tab_close", tab=tab)

@@ -1,7 +1,6 @@
-"""One browser tool call's record in a job's workspace, under run/.
+"""One browser tool call's record: its numbered files in the folder the caller names.
 
-README.md, "Core Abstractions & Shared Pieces", has how a call is numbered. The folder is handed over by the
-caller — `../../setup-workspace <job id>` is what makes one and prints its path.
+README.md, "Core Abstractions & Shared Pieces", says which folder the queue records into.
 """
 
 import json
@@ -9,30 +8,28 @@ import os
 import re
 import threading
 
-RUN = "run"
 NUMBERED = re.compile(r"(\d+)-", re.ASCII)
 _numbering = threading.Lock()
 
 
 class Call:
-    def __init__(self, workspace, tool):
-        """Number a new call after every call already in the workspace's run/, and hold that number.
+    def __init__(self, folder, tool):
+        """Number a new call after every call already in folder, and hold that number.
 
         Args:
-            workspace (str): the workspace's path, as ../../setup-workspace prints it.
+            folder (str): where the call's files go; made when missing.
             tool (str): the tool called, which names the call's files: <n>-<tool>.json and <n>-<tool>.txt.
         """
-        run = os.path.join(workspace, RUN)
-        os.makedirs(run, exist_ok=True)
+        os.makedirs(folder, exist_ok=True)
         self._tool = tool
         with _numbering:
-            taken = [int(found.group(1)) for found in map(NUMBERED.match, os.listdir(run)) if found]
-            self._prefix = os.path.join(run, "%03d-" % (max(taken, default=0) + 1))
+            taken = [int(found.group(1)) for found in map(NUMBERED.match, os.listdir(folder)) if found]
+            self._prefix = os.path.join(folder, "%03d-" % (max(taken, default=0) + 1))
             # Made while the lock is held, so the next call counts this number as taken.
             open(self.path(tool + ".json"), "x").close()
 
     def path(self, name):
-        """Where a file of this call's goes: run/<n>-<name>."""
+        """Where a file of this call's goes: <folder>/<n>-<name>."""
         return self._prefix + name
 
     def asked(self, arguments):

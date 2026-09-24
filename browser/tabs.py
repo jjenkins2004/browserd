@@ -1,4 +1,4 @@
-"""Short tab ids, and opening, listing and closing the School Chrome's tabs.
+"""Short tab ids, and opening, listing, showing and closing the School Chrome's tabs.
 
 README.md, "Core Abstractions & Shared Pieces", has the contract.
 """
@@ -10,6 +10,11 @@ from . import cdp
 
 LETTERS = "abcdefghjkmnpqrstuvwxyz23456789"
 LOAD_WAIT = 10.0
+
+
+def is_id(tab):
+    """Whether tab is shaped like the ids Tabs hands out: four characters from LETTERS."""
+    return len(tab) == 4 and set(tab) <= set(LETTERS)
 
 
 class Tabs:
@@ -110,6 +115,21 @@ class Tabs:
             browser.close()
         with self._lock:
             return self._name(target), info
+
+    def show(self, tab):
+        """Bring a tab to the front and return its target info.
+
+        Args:
+            tab (str): a tab id from list or open.
+        """
+        target = self.target(tab)
+        browser = self._connect()
+        try:
+            # Also raises the School Chrome over the app in front; README.md, "Agent Gotchas".
+            browser.call("Target.activateTarget", targetId=target)
+            return browser.call("Target.getTargetInfo", targetId=target)["targetInfo"]
+        finally:
+            browser.close()
 
     def close(self, tab):
         target = self.target(tab)

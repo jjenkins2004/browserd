@@ -13,14 +13,15 @@ import threading
 from . import cdp
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO = os.path.dirname(ROOT)
+DESKTOP = os.path.expanduser("~/Desktop")
 PACKAGE = os.path.join(ROOT, "node_modules", "chrome-devtools-mcp", "build", "src", "bin", "chrome-devtools-mcp.js")
 FLAGS = [
     "--browser-url=%s" % cdp.ENDPOINT,
     "--no-usage-statistics", "--no-performance-crux",
     "--no-category-performance", "--no-category-network", "--no-category-emulation",
     # The file tools (upload, screenshots to a path) may only touch these and $TMPDIR, which chrome-devtools-mcp always adds.
-    "--workspace=%s" % REPO, "--workspace=/private/tmp",
+    # ROOT holds the record folders a queue saves screenshots in, wherever this project sits.
+    "--workspace=%s" % DESKTOP, "--workspace=%s" % ROOT, "--workspace=/private/tmp",
 ]
 QUIET = {"CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS": "1", "CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS": "1"}
 CALL_WAIT = 120.0

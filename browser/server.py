@@ -10,7 +10,7 @@ import time
 
 from . import cdp, launch, mcp, record, steps
 from .devtools import Devtools
-from .tabs import Tabs
+from .tabs import Tabs, is_id
 from .worker import Workers
 from .ws import WebSocketError
 
@@ -19,8 +19,8 @@ PORT = 9230
 URL = "http://%s:%d%s" % (HOST, PORT, mcp.PATH)
 NAME = "browserd"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO = os.path.dirname(ROOT)
 RUN = os.path.join(ROOT, ".run")
+CALLS = os.path.join(RUN, "calls")
 PID_FILE = os.path.join(RUN, "server.pid")
 LOG_FILE = os.path.join(RUN, "server.log")
 CHROME_POLL = 2.0
@@ -49,7 +49,7 @@ def _line(tab, info):
 
 
 def tab_tools(tabs, workers):
-    """The tab_open, tab_list and tab_close tools over one Tabs.
+    """The tab_open, tab_list, tab_show and tab_close tools over one Tabs.
 
     Args:
         tabs (Tabs): holds the tab ids the tools hand out and accept.
@@ -65,6 +65,10 @@ def tab_tools(tabs, workers):
         if outside:
             lines.append("(%d tab(s) outside the School profile are not listed and cannot be driven)" % outside)
         return "\n".join(lines)
+
+    def tab_show(arguments):
+        tab = _text(arguments, "tab")
+        return _line(tab, tabs.show(tab))
 
     def tab_close(arguments):
         tab = _text(arguments, "tab")
@@ -83,6 +87,11 @@ def tab_tools(tabs, workers):
         {"name": "tab_list", "run": _refusing(tab_list),
          "description": "Every open School-profile tab as: tab id, title, URL. A tab opened by hand gets its id here.",
          "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
+        {"name": "tab_show", "run": _refusing(tab_show),
+         "description": "Bring a tab to the front of the School Chrome and the School Chrome to the front of the Mac; "
+                        "return its tab id, title and URL. Call it before handing a tab to Joshua, and name the tab by "
+                        "that title and URL: tab ids show nowhere in Chrome.",
+         "inputSchema": by_tab},
         {"name": "tab_close", "run": _refusing(tab_close),
          "description": "Close a tab by its tab id.",
          "inputSchema": by_tab},
@@ -91,20 +100,19 @@ def tab_tools(tabs, workers):
 
 QUEUE_HELP = """Run steps on one tab, top to bottom, stopping at the first that fails.
 
-Give the tab id, workspace (the job id, like 4380944856, whose workspace ./setup-workspace <job id> makes), and
-either steps (a list) or file (a path to a JSON file holding that list; a relative one is read from the workspace,
-though a step's own file paths are not). A step is {"tool": <name>, ...that tool's arguments}. Never pass
-pageId: the tab chooses the page. Element uids come from a take_snapshot step and stay valid on this tab, across
-queue calls, until the page navigates or the element goes away. File paths (upload_file's filePaths, any
-filePath) must sit inside the Resume repository, /tmp or $TMPDIR. Each chrome-devtools-mcp call gets 120s; past
+Give the tab id and either steps (a list) or file (a path to a JSON file holding that list; a relative one is read
+from the tab's record folder, below, though a step's own file paths are not). A step is {"tool": <name>, ...that
+tool's arguments}. Never pass pageId: the tab chooses the page. Element uids come from a take_snapshot step and stay
+valid on this tab, across queue calls, until the page navigates or the element goes away. File paths (upload_file's
+filePaths, any filePath) must sit inside ~/Desktop, /tmp or $TMPDIR. Each chrome-devtools-mcp call gets 120s; past
 that the tab's chrome-devtools-mcp is stopped and its uids are gone.
 
 The report has one section per step, headed "--- <n> <tool> ok|FAILED <seconds>s", holding what the tool
 answered. A failure makes the whole result an error: the report names the steps not run and ends with a fresh
 snapshot.
 
-Each call is recorded in the workspace's run/ folder, numbered in order: 001-queue.json the steps, 001-queue.txt
-the report. A take_screenshot with no filePath saves its image there, step 2 of call 001 as
+Each call is recorded in the tab's record folder, %s/<tab>/, numbered in order: 001-queue.json the steps,
+001-queue.txt the report. A take_screenshot with no filePath saves its image there, step 2 of call 001 as
 001-step2-screenshot.png (.jpeg or .webp when its format is one), and reports that path instead of sending the
 image; read the file to see it.
 
@@ -132,26 +140,6 @@ def _worker(tabs, workers, tab):
     return workers.get(tab, target)
 
 
-WORKSPACE_ARGUMENT = {"type": "string",
-                      "description": "the job's workspace folder, as ./setup-workspace <job id> prints it; "
-                                     "this call is recorded in its run/"}
-
-
-def _workspace(arguments, root):
-    """The workspace folder a call names, once it is one this may write in.
-
-    The server records into the folder it is handed and never works out which job it belongs to; `../setup-workspace`
-    owns that. A path outside `root` is refused, so a call cannot write anywhere on the disk.
-    """
-    path = os.path.abspath(_text(arguments, "workspace"))
-    if os.path.commonpath([root, path]) != os.path.abspath(root) or path == os.path.abspath(root):
-        raise mcp.ToolError("a workspace is a folder inside %s; %s is not" % (root, path))
-    if not os.path.isdir(path):
-        raise mcp.ToolError("no workspace at %s; make the job's workspace with ./setup-workspace <job id>, "
-                            "which prints the path to pass here" % path)
-    return path
-
-
 def _recorded(call, run):
     """run()'s result, once what came back, or the error raised, is written to the call's record."""
     try:
@@ -163,27 +151,29 @@ def _recorded(call, run):
     return result
 
 
-def queue_tool(tabs, workers, allowed, root=REPO):
+def queue_tool(tabs, workers, allowed, calls=CALLS):
     """The queue tool: run a list of chrome-devtools-mcp steps on a tab through that tab's own process.
 
     Args:
         tabs (Tabs): resolves the tab id, and refuses a closed tab.
         workers (Workers): each tab's Worker, made on the tab's first use.
         allowed (dict): the chrome-devtools-mcp tools a step may name, from steps.chrome_tools.
-        root (str): a workspace has to be inside this folder; the checks pass one of their own.
+        calls (str): holds each tab's record folder, <calls>/<tab>/; the checks pass one of their own.
     """
     def queue(arguments):
-        unknown = set(arguments) - {"tab", "workspace", "steps", "file"}
+        unknown = set(arguments) - {"tab", "steps", "file"}
         if unknown:
-            raise mcp.ToolError("queue takes tab, workspace, and steps or file; not %s" % ", ".join(sorted(unknown)))
+            raise mcp.ToolError("queue takes tab, and steps or file; not %s" % ", ".join(sorted(unknown)))
         tab = _text(arguments, "tab")
-        workspace = _workspace(arguments, root)
+        if not is_id(tab):  # it names a folder, so "../x" must not reach os.path.join
+            raise mcp.ToolError("no tab has the id %r; tab_list gives the open tabs their ids" % tab)
+        folder = os.path.join(calls, tab)
         try:
-            planned = steps.load(arguments, workspace)
+            planned = steps.load(arguments, folder)
             steps.check(planned, allowed)
         except steps.StepError as exc:
             raise mcp.ToolError(str(exc))
-        call = record.Call(workspace, "queue")
+        call = record.Call(folder, "queue")
         planned = steps.place_screenshots(planned, call.path)
         call.asked({"tab": tab, "steps": planned})
 
@@ -202,15 +192,15 @@ def queue_tool(tabs, workers, allowed, root=REPO):
 
     return {
         "name": "queue", "run": _refusing(queue),
-        "description": QUEUE_HELP + steps.describe(allowed),
+        "description": QUEUE_HELP % calls + steps.describe(allowed),
         "inputSchema": {
-            "type": "object", "required": ["tab", "workspace"], "additionalProperties": False,
+            "type": "object", "required": ["tab"], "additionalProperties": False,
             "properties": {
                 "tab": {"type": "string", "description": "a tab id from tab_open or tab_list"},
-                "workspace": WORKSPACE_ARGUMENT,
                 "steps": {"type": "array", "items": {"type": "object"}, "description": "the steps, in order"},
                 "file": {"type": "string",
-                         "description": "path to a JSON file holding the steps, relative to the workspace or absolute"},
+                         "description": "path to a JSON file holding the steps, relative to the tab's record folder "
+                                        "or absolute"},
             },
         },
     }
