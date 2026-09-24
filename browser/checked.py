@@ -1,4 +1,4 @@
-"""The queue's checked steps, pick, expect and type, which check their result instead of trusting a tool's "Successfully".
+"""The queue's checked steps, pick, expect, type and wait: they read the page, not a tool's "Successfully".
 
 server.QUEUE_HELP says when to use which.
 """
@@ -13,11 +13,15 @@ from .worker import returned
 PICK_WAIT = 8.0
 POLL = 0.4
 SETTLE = 2.0
+WAIT_TIMEOUT = 30000  # ms a wait step gives its condition by default
+WAIT_MOST = 60000  # ms, the longest timeout a wait step may give
 SHOWN_OPTIONS = 12
 # An option line ends with value="<its name>" (chrome-devtools-mcp sets it), which is what bounds a name that
 # holds quotes; a line without one falls back to the first quote followed by an attribute-like word.
 OPTION = re.compile(r'uid=(\S+) option "(.*)" .*value="\2"(?: \[selected in the DevTools Elements panel\])?$')
 OPTION_LOOSE = re.compile(r'uid=(\S+) option "(.*?)"(?= [a-zA-Z-]+(?:=| |$)|$)')
+# Parts of a snapshot reply that are not page text: its header, each line's uid and role, and urls.
+NOT_TEXT = re.compile(r'^## Latest page snapshot$|^ *uid=\S+ \S+| url="[^"]*"', re.M)
 
 # The field's own value, or for a widget that shows its choice beside its text box (react-select), the text
 # of the outermost wrapper, up to four levels up, that holds no other field, less any option list and label.
@@ -128,6 +132,8 @@ def problem(step):
     extra = set(step) - KEYS[tool]
     if extra:
         return "%s does not take %s" % (tool, ", ".join(sorted(extra)))
+    if tool == "wait":
+        return _wait_problem(step)
     for key in ("uid", "value") if tool == "expect" else ("uid", "text"):
         if not isinstance(step.get(key), str) or not step[key]:
             return "%s needs %s, as a non-empty string" % (tool, key)
@@ -137,6 +143,27 @@ def problem(step):
         wait = step.get("wait", PICK_WAIT)
         if isinstance(wait, bool) or not isinstance(wait, (int, float)) or not 0 < wait <= 60:
             return "pick's wait must be a number of seconds above 0, up to 60"
+    return None
+
+
+def _milliseconds(value):
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and 0 < value <= WAIT_MOST
+
+
+def _wait_problem(step):
+    """Why a wait step cannot run as written, or None: it needs exactly one condition, each part well formed."""
+    if len([key for key in ("gone", "value", "still") if key in step]) != 1:
+        return "wait takes exactly one of gone, value (with uid) or still"
+    if ("uid" in step) != ("value" in step):
+        return "wait's uid and value go together: the field's uid, and what it should hold"
+    for key in ("gone", "uid", "value"):
+        if key in step and (not isinstance(step[key], str) or not step[key]):
+            return "wait's %s must be a non-empty string" % key
+    timeout = step.get("timeout", WAIT_TIMEOUT)
+    if not _milliseconds(timeout):
+        return "wait's timeout must be milliseconds above 0, up to %d" % WAIT_MOST
+    if "still" in step and not (_milliseconds(step["still"]) and step["still"] < timeout):
+        return "wait's still must be milliseconds above 0, and under its timeout (%g)" % timeout
     return None
 
 
@@ -232,14 +259,19 @@ def expect(devtools, page_id, step):
         page_id (int): the tab's page id in it.
         step (dict): {"tool": "expect", "uid": field uid, "value": what it should hold}.
     """
-    deadline = time.monotonic() + SETTLE
+    return _until_holds(devtools, page_id, step["uid"], step["value"], SETTLE)
+
+
+def _until_holds(devtools, page_id, uid, value, seconds):
+    """What the field holds once it holds value, read again for up to `seconds`; expect's and wait's check."""
+    deadline = time.monotonic() + seconds
     while True:
-        read = _read(devtools, page_id, step["uid"])
-        if _holds(read, step["value"]):
+        read = _read(devtools, page_id, uid)
+        if _holds(read, value):
             return "the field holds %s" % json.dumps(read.get("value"))
         if time.monotonic() > deadline:
             raise CheckFailed("expected %s, but the field holds %s (read as %s)"
-                              % (json.dumps(step["value"]), json.dumps(read.get("value") or ""), read.get("kind")))
+                              % (json.dumps(value), json.dumps(read.get("value") or ""), read.get("kind")))
         time.sleep(POLL)
 
 
@@ -269,9 +301,64 @@ def type_(devtools, page_id, step):
     return "typed %d characters; %s" % (len(step["text"]), held)
 
 
-STEPS = {"pick": pick, "expect": expect, "type": type_}
+def wait(devtools, page_id, step):
+    """Wait until text is off the page, a field holds a value, or the page has stopped changing.
+
+    README.md, "Agent Gotchas & Invariants", says how each condition is read.
+
+    Args:
+        devtools (Devtools): the tab's process.
+        page_id (int): the tab's page id in it.
+        step (dict): {"tool": "wait", "gone": text | "uid": field uid, "value": what it should hold |
+            "still": ms the page must not change for, "timeout"?: ms}.
+    """
+    timeout = step.get("timeout", WAIT_TIMEOUT)
+    if "value" in step:
+        return _until_holds(devtools, page_id, step["uid"], step["value"], timeout / 1000)
+    if "gone" in step:
+        return _gone(devtools, page_id, step["gone"], timeout)
+    return _still(devtools, page_id, step["still"], timeout)
+
+
+def _snapshots(devtools, page_id, seconds):
+    """(seconds since the start, snapshot text), one snapshot after another, until `seconds` have passed."""
+    began = time.monotonic()
+    while True:
+        snapshot = devtools.text("take_snapshot", {"pageId": page_id})
+        took = time.monotonic() - began
+        yield took, snapshot
+        if took > seconds:
+            return
+        time.sleep(POLL)
+
+
+def _gone(devtools, page_id, text, timeout):
+    seen = False
+    for took, snapshot in _snapshots(devtools, page_id, timeout / 1000):
+        if text in NOT_TEXT.sub("", snapshot):
+            seen = True
+        elif seen:
+            return "%s is off the page, after %.1fs" % (json.dumps(text), took)
+        else:
+            raise CheckFailed("%s was not on the page when the wait began, so its going proves nothing; text that runs "
+                              "across elements (a word in bold) sits on separate snapshot lines and never matches"
+                              % json.dumps(text))
+    raise CheckFailed("%s is still on the page after %gms" % (json.dumps(text), timeout))
+
+
+def _still(devtools, page_id, still, timeout):
+    last, changed = None, 0.0
+    for took, snapshot in _snapshots(devtools, page_id, timeout / 1000):
+        if snapshot != last:
+            last, changed = snapshot, took
+        elif took - changed >= still / 1000:
+            return "the page has not changed for %gms, after %.1fs" % (still, took)
+    raise CheckFailed("the page did not stay unchanged for %gms within %gms" % (still, timeout))
+
+
+STEPS = {"pick": pick, "expect": expect, "type": type_, "wait": wait}
 KEYS = {"pick": {"tool", "uid", "text", "search", "wait"}, "expect": {"tool", "uid", "value"},
-        "type": {"tool", "uid", "text"}}
+        "type": {"tool", "uid", "text"}, "wait": {"tool", "gone", "uid", "value", "still", "timeout"}}
 
 
 def describe():
@@ -286,6 +373,11 @@ def describe():
         "  type(uid: string, text: string) - Select the text box's text and type text over it with real keys, then fail "
         "unless the field holds exactly text; use it instead of fill for a value of 100 characters or more, which fill "
         "sets by script",
+        "  wait(gone?: string, uid?: string, value?: string, still?: number, timeout?: number) - Wait for one "
+        "condition: until the text in gone, seen on the page first, is off it, or the page has not changed for still "
+        "ms (both read from snapshots), or the field at uid holds value, read as expect reads; still and timeout are "
+        "ms, not seconds like pick's wait, and still must be under timeout (default %d, most %d)"
+        % (WAIT_TIMEOUT, WAIT_MOST),
     ])
 
 

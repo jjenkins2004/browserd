@@ -128,8 +128,10 @@ A chrome-devtools-mcp tool reports success once it has acted, not once the page 
 says "Successfully filled" and picks nothing. Use pick for any dropdown you type into; a native select still takes
 fill, with an option's exact text, which take_snapshot under the select's uid lists. fill types real keys only for
 a value under 100 characters; a longer one is set by script, which React ignores, so use type for it. Follow other
-fills and clicks whose result matters with expect, which reads the DOM. Steps a queue accepts, the ones that read
-the page back first:
+fills and clicks whose result matters with expect, which reads the DOM. For a page still at work, like a resume
+parser filling fields after an upload, use wait, not a setTimeout in evaluate_script: gone with the parser's status
+text, or uid and value for a field it fills; still passes once the page's text has held for still ms, as it does
+while a parser waits on its server behind a spinner. Steps a queue accepts, the ones that read the page back first:
 """
 
 

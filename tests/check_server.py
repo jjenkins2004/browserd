@@ -367,7 +367,12 @@ def queue_offline():
                 ("a pick with an empty search", {"tool": "pick", "uid": "1_1", "text": "x", "search": ""}, "search"),
                 ("an expect whose value is not a string", {"tool": "expect", "uid": "1_1", "value": 3}, "needs value"),
                 ("a type without text", {"tool": "type", "uid": "1_1"}, "needs text"),
-                ("a type with a key it does not take", {"tool": "type", "uid": "1_1", "text": "x", "value": "x"}, "value")):
+                ("a type with a key it does not take", {"tool": "type", "uid": "1_1", "text": "x", "value": "x"}, "value"),
+                ("a wait with two conditions", {"tool": "wait", "gone": "x", "still": 500}, "exactly one"),
+                ("a wait with no condition", {"tool": "wait", "timeout": 500}, "exactly one"),
+                ("a wait for a value with no uid", {"tool": "wait", "value": "x"}, "uid"),
+                ("a wait whose timeout is 0", {"tool": "wait", "gone": "x", "timeout": 0}, "timeout"),
+                ("a wait whose still is not under its timeout", {"tool": "wait", "still": 5000, "timeout": 5000}, "still")):
             said = refusal(lambda: steps.check([{"tool": "take_snapshot"}, step], {"take_snapshot": {}}), steps.StepError)
             check("%s is refused before any step runs, by number" % label, "step 2" in said and words in said, said)
         check("pick and expect need no chrome-devtools-mcp tool of that name",
@@ -427,6 +432,7 @@ def queue_offline():
         check("a queue on a restarted process says old uids are gone", report.startswith("note:") and "uids" in report, report)
 
         views(workdir)
+        waits()
 
         workers = Workers(workdir)
         first = workers.get("ab12", "T1")
@@ -534,6 +540,38 @@ def views(workdir):
                                ("a full that is not true or false", {"tool": "take_snapshot", "full": "yes"}, "full")):
         said = refusal(lambda: steps.check([step], {"take_snapshot": {}}), steps.StepError)
         check("%s is refused before any step runs" % label, "step 1" in said and words in said, said)
+
+
+class Page:
+    """A page whose snapshot is page(n) at its nth take_snapshot."""
+
+    def __init__(self, page):
+        self.page, self.taken = page, 0
+
+    def text(self, tool, arguments, wait=None):
+        self.taken += 1
+        return "## Latest page snapshot\n" + self.page(self.taken)
+
+
+def waits():
+    """checked.wait's snapshot conditions over pages whose text goes, stays, or always changes."""
+    root = 'uid=1_0 RootWebArea "Form" url="https://example.com/Parsing"'
+    going = Page(lambda n: root + ('\n  uid=1_1 StaticText "Parsing your resume"' if n < 3 else ""))
+    said, failed = checked.run(going, 1, {"tool": "wait", "gone": "Parsing your resume"})
+    check("a wait for text to go passes once a snapshot no longer holds it",
+          not failed and "is off the page" in said and going.taken == 3, said)
+    for text in ("Parsing", "RootWebArea"):
+        said, failed = checked.run(Page(lambda n: root), 1, {"tool": "wait", "gone": text})
+        check("a wait for text found only in a url, uid or role fails at once, as never on the page (%s)" % text,
+              failed and "was not on the page" in said, said)
+    said, failed = checked.run(Page(lambda n: root), 1, {"tool": "wait", "gone": "Form", "timeout": 500})
+    check("a wait for text that stays fails at its timeout, saying so", failed and "still on the page after 500ms" in said, said)
+    began = time.monotonic()
+    said, failed = checked.run(Page(lambda n: root), 1, {"tool": "wait", "still": 500, "timeout": 3000})
+    check("a wait for a page that does not change passes once still ms have gone by",
+          not failed and "not changed for 500ms" in said and time.monotonic() - began >= 0.5, said)
+    said, failed = checked.run(Page(lambda n: 'uid=1_0 RootWebArea "Tick %d"' % n), 1, {"tool": "wait", "still": 500, "timeout": 1500})
+    check("a wait for a page that keeps changing fails at its timeout", failed and "did not stay unchanged" in said, said)
 
 
 def records_offline():
@@ -769,6 +807,7 @@ WIDGETS = r"""<title>checked scratch</title>
 <label for=letter>Cover letter</label><textarea id=letter>Old letter</textarea>
 <label for=zip>Zip</label><input id=zip maxlength=5>
 <div id=bio contenteditable role=textbox aria-multiline=true aria-label=Bio></div>
+<button id=parse onclick="parseResume()">Parse resume</button><p id=parsing></p><label for=city>City</label><input id=city>
 <div class=field><label id=llab>Language</label>
   <div class=control><div id=lshown></div><input id=lang role=combobox aria-labelledby=llab></div><div id=llist role=listbox hidden></div></div>
 <script>
@@ -795,6 +834,14 @@ wire(dud, dlist, ['Python'], (t) => false);  // an option whose click takes noth
 wire(lang, llist, ['Python', 'Rust'], (t) => { lshown.textContent = t; lang.value = ''; });
 wire(cc, clist, ['United States +1', 'United Kingdom +44'], (t) => { cshown.textContent = t.split(' ').pop(); cc.value = ''; });
 wire(loc, loclist, ['Los Angeles, California, United States', 'Los Ángeles, Biobío, Chile'], (t) => { loc.value = t; });
+// Like a resume parser: a status that changes for 4s, then goes, and a field filled once it has.
+function parseResume() {
+  city.value = '';
+  parsing.textContent = 'Parsing your resume';
+  let ticks = 0;
+  const timer = setInterval(() => { parsing.textContent = 'Parsing your resume' + '.'.repeat(++ticks % 4); }, 200);
+  setTimeout(() => { clearInterval(timer); parsing.textContent = ''; city.value = 'Los Angeles'; }, 4000);
+}
 // Like React, keeps its own copy of the value and puts it back after any input event that is not trusted.
 let letterKept = letter.value;
 letter.addEventListener('input', (e) => { if (e.isTrusted) letterKept = letter.value; else letter.value = letterKept; });
@@ -802,7 +849,7 @@ letter.addEventListener('input', (e) => { if (e.isTrusted) letterKept = letter.v
 
 
 def checked_live(httpd, tabs, opened):
-    """pick, expect and type over the queue tool, against widgets that take only trusted input."""
+    """The checked steps over the queue tool, against widgets that take only trusted input and a stand-in resume parser."""
     text, _ = call(httpd, "tab_open", url="data:text/html," + urllib.parse.quote(WIDGETS))
     tab = text.split()[0]
     opened.append(tab)
@@ -889,6 +936,23 @@ def checked_live(httpd, tabs, opened):
     check("type refuses a line break for a one-line box, where it would press Enter", is_error and "one-line" in text, text)
     text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
     check("type into a contenteditable element takes a line break and reads the text back", not is_error, text)
+
+    parse, city = field("button", "Parse resume"), field("textbox", "City")
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
+        {"tool": "click", "uid": parse}, {"tool": "wait", "gone": "Parsing your resume", "timeout": 10000},
+        {"tool": "expect", "uid": city, "value": "Los Angeles"}])
+    check("wait for text to go waits out a parser, and the field it fills is then filled", not is_error, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
+        {"tool": "click", "uid": parse}, {"tool": "wait", "uid": city, "value": "Los Angeles", "timeout": 10000}])
+    check("wait for a value waits until the field holds it", not is_error and "the field holds \"Los Angeles\"" in text, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
+        {"tool": "click", "uid": parse}, {"tool": "wait", "still": 1000, "timeout": 10000}])
+    took = re.search(r"^--- 2 wait ok ([\d.]+)s$", text, re.M)
+    check("wait for the page to stop changing waits out the changes, then still ms more",
+          not is_error and took is not None and float(took.group(1)) >= 4.0, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
+        {"tool": "click", "uid": parse}, {"tool": "wait", "gone": "Parsing your resume", "timeout": 500}])
+    check("a wait whose condition does not come fails at its timeout", is_error and "still on the page" in text, text)
 
 
 def queue_live():

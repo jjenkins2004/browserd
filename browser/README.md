@@ -25,7 +25,7 @@ chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
       worker.py    one tab's process, paired with its page; Workers registry
       steps.py     the queue: load, check, run, report; snapshot views
-      checked.py   the queue's checked steps: pick, expect, type
+      checked.py   the queue's checked steps: pick, expect, type, wait
       record.py    one queue call's numbered files in a folder
     ../start, ../stop           launchers
     ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/
@@ -165,6 +165,15 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     an input that is not text-like (a checkbox, a submit, a date), a combobox input (that takes
     `pick`), or a one-line box given a line break, which `type_text` would send as Enter and so submit
     the form.
+  - **`wait`** takes one condition: `gone` (the text, once seen, is in no snapshot line's page text,
+    the title included; uids, roles and urls are left out), `uid` and `value` (the field holds it, read
+    as `expect` reads), or `still` (ms without a change). `timeout` is ms, like `wait_for`'s; `pick`'s
+    `wait` stays seconds. `gone` fails at once when its text was not on the page as the wait began,
+    since text split across elements (a word in bold) never matches and would pass at once. `gone`
+    and `still` read snapshots, taken one after another, not a script, so they see every frame and
+    every field's value, which a MutationObserver misses when a script sets `.value`; a page whose
+    text changes more often than every `still` ms (a clock, a carousel) never counts as still, and a
+    change a snapshot does not carry (a CSS spinner) is no change.
   - **Each is checked for its keys and types before any step of the queue runs.**
 - **Element uids come from `take_snapshot` and live in that tab's process.** They stay valid
   across queue calls until the page navigates or the element goes away. When the process died and
@@ -184,8 +193,8 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     `service_offline` for the spawned server, with real `ps`.
   - **Live:** the live groups need the School Chrome up. Nothing listening on 9223 skips them;
     anything else wrong with the port is a failure. `queue_live` also needs `npm ci` done, and skips
-    without it, and records into a temporary folder; its `pick`, `expect`
-    and `type` checks run on a local page whose dropdowns and one textarea take only trusted input.
+    without it, and records into a temporary folder; its checked steps run on a local page whose
+    dropdowns and one textarea take only trusted input, and whose Parse resume button runs a stand-in resume parser.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; a tab already open is never touched. The live `tab_show` check brings the
     School Chrome to the front.
