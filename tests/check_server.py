@@ -320,7 +320,7 @@ class FakeDevtools:
 
     def text(self, tool, arguments, wait=None):
         self.calls.append((tool, arguments))
-        return "## Latest page snapshot\nuid=1_0 RootWebArea"
+        return '## Latest page snapshot\nuid=1_0 RootWebArea "Form"\n  uid=1_1 generic'
 
 
 def text_of(content):
@@ -404,7 +404,8 @@ def queue_offline():
                              ([{"type": "text", "text": "Element uid 9_9 not found"}], True)])
         planned = [{"tool": "fill", "uid": "1_2", "value": "x"}, {"tool": "take_screenshot"},
                    {"tool": "click", "uid": "9_9"}, {"tool": "fill", "uid": "1_3", "value": "y"}]
-        result = steps.run(fake, 7, planned)
+        called = lambda name: os.path.join(workdir, "004-" + name)
+        result = steps.run(fake, 7, planned, called)
         content = result["content"]
         report = text_of(content)
         check("a queue that stopped at a failure is an error result", result["isError"] is True)
@@ -414,12 +415,15 @@ def queue_offline():
         check("the report heads each step with its number, tool and outcome",
               "--- 1 fill ok" in report and "--- 3 click FAILED" in report, report)
         check("the report names the steps not run", "--- not run: 4 fill" in report, report)
-        check("the report ends with the page as it is now", report.rstrip().endswith("uid=1_0 RootWebArea"), report)
+        check("the report ends with the page as it is now, as a view", report.rstrip().endswith('uid=1_0 RootWebArea "Form"'), report)
+        check("and saves that snapshot whole", open(called("page-now-snapshot.txt")).read().endswith("  uid=1_1 generic\n"))
         check("an image a step returned comes back as an image", content[1:] == [image])
         fake = FakeDevtools([cdp.CdpError("chrome-devtools-mcp exited during tools/call; see x.log")])
-        report = text_of(steps.run(fake, 1, [{"tool": "click", "uid": "1_1"}], restarted=True)["content"])
+        report = text_of(steps.run(fake, 1, [{"tool": "click", "uid": "1_1"}], called, restarted=True)["content"])
         check("a process that dies mid-step is a failed step, not a crash", "--- 1 click FAILED" in report and "exited" in report, report)
         check("a queue on a restarted process says old uids are gone", report.startswith("note:") and "uids" in report, report)
+
+        views(workdir)
 
         workers = Workers(workdir)
         first = workers.get("ab12", "T1")
@@ -435,6 +439,98 @@ def queue_offline():
         check("a listing stops the worker of every tab it no longer shows, and only those", stopped[1:] == ["gone"], repr(stopped))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+SNAPSHOT = """uid=1_0 RootWebArea "Apply" url="https://example.com/apply"
+  uid=1_1 generic
+    uid=1_2 heading "Your details" level="2"
+    uid=1_3 LabelText
+      uid=1_4 StaticText "Country"
+    uid=1_5 combobox "Country" expandable haspopup="menu" invalid="true" value="United States"
+      uid=1_6 option "Canada" selectable value="Canada"
+      uid=1_7 option "United States" selectable selected value="United States"
+    uid=1_8 textbox "Why us?" multiline value="Line one
+Line two"
+    uid=1_9 textbox
+  uid=2_0 combobox "Clearance" expandable haspopup="listbox"
+  uid=2_1 listbox
+    uid=2_2 option "Say "yes" here" selectable value="Say "yes" here"
+  uid=2_3 image
+  uid=2_4 LineBreak "
+"
+  uid=2_5 StaticText " "
+  uid=3_0 combobox "Skills"
+    uid=3_1 option "Python" selectable
+      uid=3_2 button "Remove Python"
+    uid=3_3 searchbox "Search skills"
+  uid=3_4 textbox "Cover letter" multiline value="Dear team,
+#LI-Remote
+I build things."
+  uid=3_5 generic"""
+
+
+def views(workdir):
+    """steps.view over a snapshot holding each kind of line it treats differently."""
+    path = os.path.join(workdir, "001-step1-snapshot.txt")
+    reply = "Clicked.\n## Latest page snapshot\n" + SNAPSHOT + "\n\n## Console messages\nnone"
+    text, missing = steps.view(reply, path)
+    lines = text.split("\n")
+    check("a view keeps what came before and after the snapshot", lines[0] == "Clicked." and lines[-2:] == ["## Console messages", "none"], text)
+    check("a view's header names where the whole snapshot is saved", lines[1] == "## Latest page snapshot (view; saved whole to %s)" % path, lines[1])
+    check("the whole snapshot is saved there", open(path).read() == SNAPSHOT + "\n")
+    check("a view keeps lines with words and controls, drops the rest, and indents by the kept lines it sits under",
+          lines[2:-3] == ['uid=1_0 RootWebArea "Apply" url="https://example.com/apply"',
+                          '  uid=1_2 heading "Your details" level="2"',
+                          '  uid=1_4 StaticText "Country"',
+                          '  uid=1_5 combobox "Country" = "United States" invalid="true" (2 options)',
+                          '  uid=1_8 textbox "Why us?" multiline value="Line one',
+                          'Line two"',
+                          '  uid=1_9 textbox',
+                          '  uid=2_0 combobox "Clearance" expandable haspopup="listbox"',
+                          '  uid=2_1 listbox',
+                          '    uid=2_2 option "Say "yes" here" selectable value="Say "yes" here"',
+                          '  uid=3_0 combobox "Skills"',
+                          '    uid=3_1 option "Python" selectable',
+                          '      uid=3_2 button "Remove Python"',
+                          '    uid=3_3 searchbox "Search skills"',
+                          '  uid=3_4 textbox "Cover letter" multiline value="Dear team,',
+                          '#LI-Remote',
+                          'I build things."'] and not missing,
+          "\n".join(lines))
+    text, missing = steps.view(reply, path, under="1_5")
+    check("a view under a native select lists its options",
+          text.split("\n")[2:5] == ['uid=1_5 combobox "Country" expandable haspopup="menu" invalid="true" value="United States"',
+                                     '  uid=1_6 option "Canada" selectable value="Canada"',
+                                     '  uid=1_7 option "United States" selectable selected value="United States"'], text)
+    text, missing = steps.view(reply, path, under="2_1", full=True)
+    check("full under a uid gives that element's lines as they were written",
+          text.split("\n")[1:4] == ["## Latest page snapshot (full under 2_1; saved whole to %s)" % path, "  uid=2_1 listbox",
+                                     '    uid=2_2 option "Say "yes" here" selectable value="Say "yes" here"'], text)
+    text, missing = steps.view(reply, path, full=True)
+    check("full gives the whole snapshot", SNAPSHOT + "\n\n## Console" in text and not missing, text)
+    text, missing = steps.view(reply, path, under="9_9")
+    check("a view under a uid the snapshot lacks says so", missing and "no element has uid=9_9" in text, text)
+    os.remove(path)
+    check("a reply with no snapshot is left alone and saves nothing",
+          steps.view("Clicked.", path) == ("Clicked.", False) and not os.path.exists(path))
+
+    fake = FakeDevtools([([{"type": "text", "text": "## Latest page snapshot\n" + SNAPSHOT}], False)])
+    report = text_of(steps.run(fake, 3, [{"tool": "take_snapshot", "under": "2_1", "full": False, "verbose": True}],
+                               lambda name: os.path.join(workdir, "002-" + name))["content"])
+    check("take_snapshot's under and full are not sent on to chrome-devtools-mcp", fake.calls == [("take_snapshot", {"verbose": True, "pageId": 3})],
+          repr(fake.calls))
+    check("and its reply comes back as a view, the snapshot saved as 002-step1-snapshot.txt",
+          "(view under 2_1; saved whole to %s)" % os.path.join(workdir, "002-step1-snapshot.txt") in report
+          and "uid=2_0" not in report, report)
+    fake = FakeDevtools([([{"type": "text", "text": "## Latest page snapshot\n" + SNAPSHOT}], False)])
+    report = text_of(steps.run(fake, 3, [{"tool": "take_snapshot", "under": "9_9"}, {"tool": "click", "uid": "1_9"}],
+                               lambda name: os.path.join(workdir, "003-" + name))["content"])
+    check("a take_snapshot under a uid it does not find fails the queue", "--- 1 take_snapshot FAILED" in report
+          and "--- not run: 2 click" in report, report)
+    for label, step, words in (("an under that is not a string", {"tool": "take_snapshot", "under": 3}, "under"),
+                               ("a full that is not true or false", {"tool": "take_snapshot", "full": "yes"}, "full")):
+        said = refusal(lambda: steps.check([step], {"take_snapshot": {}}), steps.StepError)
+        check("%s is refused before any step runs" % label, "step 1" in said and words in said, said)
 
 
 def records_offline():
@@ -703,6 +799,9 @@ def checked_live(httpd, tabs, opened):
     opened.append(tab)
     snapshot, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "take_snapshot"}])
     field = lambda role, label: uid(snapshot, role, label) or uid(snapshot, role, " " + label)
+    check("a native select is one line in a view", 'combobox "Auth" = "Select" (2 options)' in snapshot, snapshot)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "take_snapshot", "under": field("combobox", "Auth")}])
+    check("and take_snapshot under its uid lists its options", not is_error and 'option "US Citizen"' in text, text)
 
     text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Clearance"), "text": 'Currently hold a "Secret" clearance'},
@@ -793,6 +892,10 @@ def queue_live():
         snap_a, error_a = call(httpd, "queue", tab=a, steps=[{"tool": "take_snapshot"}])
         snap_b, _ = call(httpd, "queue", tab=b, steps=[{"tool": "take_snapshot"}])
         check("a queue's first step reaches its tab through a new chrome-devtools-mcp", not error_a and "textbox \"Name\"" in snap_a, snap_a)
+        saved = re.search(r"\(view; saved whole to (\S+)\)$", snap_a, re.M)
+        check("its snapshot is a view, the whole one saved in the tab's record folder",
+              saved is not None and os.path.dirname(saved.group(1)) == os.path.join(root, a)
+              and "RootWebArea" in open(saved.group(1)).read(), snap_a)
 
         spans = {}
 

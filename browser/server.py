@@ -116,9 +116,17 @@ Each call is recorded in the tab's record folder, %s/<tab>/, numbered in order: 
 001-step2-screenshot.png (.jpeg or .webp when its format is one), and reports that path instead of sending the
 image; read the file to see it.
 
+Every snapshot in a report (take_snapshot's, wait_for's, a step's includeSnapshot, a failed queue's) is a view:
+each line that carries words, in page order with its uid (fields and their values, buttons, text, links,
+headings, image descriptions), and every control (an open dropdown's options among them); structure lines without
+words are dropped, and a native select is one line, like combobox "Country" = "United States" (249 options). A
+view's header names where the whole snapshot is saved, 001-step2-snapshot.txt (001-page-now-snapshot.txt for a
+failed queue's); grep that file for anything the view leaves out. take_snapshot also takes under, a uid, for only that element and what sits under it (on a native
+select, its options), and full: true, for the snapshot's lines as chrome-devtools-mcp wrote them.
+
 A chrome-devtools-mcp tool reports success once it has acted, not once the page took it: fill on a react-select
-says "Successfully filled" and picks nothing. Use pick for any dropdown you type into; a native select, whose
-options the snapshot lists under its combobox, still takes fill. fill types real keys only for a value under 100
+says "Successfully filled" and picks nothing. Use pick for any dropdown you type into; a native select still takes
+fill, with an option's exact text, which take_snapshot under the select's uid lists. fill types real keys only for a value under 100
 characters; a longer one is set by script, which React ignores, so select the field's text with evaluate_script
 ((el) => { el.focus(); el.select(); } with the uid in args) and type_text it instead. Follow other fills and
 clicks whose result matters with expect, which reads the DOM. Steps a queue accepts, pick and expect first:
@@ -181,7 +189,7 @@ def queue_tool(tabs, workers, allowed, calls=CALLS):
             worker = _worker(tabs, workers, tab)
             with worker.lock:
                 devtools, page_id, restarted = worker.ensure()
-                result = steps.run(devtools, page_id, planned, restarted)
+                result = steps.run(devtools, page_id, planned, call.path, restarted)
                 if result["isError"] and "No page found" in result["content"][0]["text"]:
                     # It renumbered its pages after reconnecting; the next queue pairs a new process and notes the
                     # restart.

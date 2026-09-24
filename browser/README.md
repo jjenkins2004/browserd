@@ -24,7 +24,7 @@ chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
       service.py   ../start and ../stop: background start, locked; stop by pid
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
       worker.py    one tab's process, paired with its page; Workers registry
-      steps.py     the queue: load, check, run, report
+      steps.py     the queue: load, check, run, report; snapshot views
       checked.py   the queue's checked steps: pick, expect
       record.py    one queue call's numbered files in a folder
     ../start, ../stop           launchers
@@ -63,9 +63,10 @@ fresh listing no longer shows drop it; any other failure to reach a tab leaves i
 alone.
 
 **`steps.place_screenshots`** first gives each `take_screenshot` without a `filePath` one among the
-call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added, hands
-`pick` and `expect` to `checked.run`, and returns a whole MCP result: a text report, any images, and
-`isError` when a step failed.
+call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added (and
+without take_snapshot's own `under` and `full`), hands `pick` and `expect` to `checked.run`, passes
+every reply's text through **`steps.view`**, and returns a whole MCP result: a text report, any
+images, and `isError` when a step failed.
 
 **Server lifecycle**, in `server.serve()`: ask a chrome-devtools-mcp process for its tool list (no
 browser needed), bind 9230, install SIGTERM/SIGINT handlers, write `.run/server.pid`, then
@@ -131,6 +132,20 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   (`.jpeg` or `.webp` for those formats), and the report gives that path, not an image:
   chrome-devtools-mcp attaches an image only when no path is given, and even then saves one of 2MB
   or more to a temporary file instead.
+- **Every snapshot a queue reports is a view**: `take_snapshot`'s, `wait_for`'s, an `includeSnapshot`
+  step's and the failed queue's. A reply's snapshot runs from chrome-devtools-mcp's
+  `## Latest page snapshot` line to the next `## ` line after a blank one. The view keeps each line
+  with words (a name that is not only spaces, or a `description`, `url`, `value` or `valuetext`) and
+  each role in `steps.CONTROLS`, indented one level per kept line it sits under. A native select, a
+  combobox with options and no other control under it, becomes
+  `combobox "<name>" = "<value>" <attributes> (<n> options)`; a custom multi-select, with a search box
+  or remove buttons among its options, stays whole. The whole snapshot is saved in the tab's record
+  folder as `<n>-step<k>-snapshot.txt`, or `<n>-page-now-snapshot.txt` for the failed queue's, and the
+  view's header names it. take_snapshot's own `under: uid` keeps only that element and what sits under
+  it, a native select there not collapsed, and fails its step when the snapshot lacks the uid;
+  `full: true` gives the lines as chrome-devtools-mcp wrote them instead of a view. A collapsed
+  select's name or value holding a quote followed by a word can end early, as in
+  `checked.OPTION_LOOSE`.
 - **A chrome-devtools-mcp tool reports success once it has acted, not once the page took it,** so
   `checked.py` adds two checked steps that read the page back; `server.QUEUE_HELP` tells agents
   when to use each.
