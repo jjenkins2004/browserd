@@ -158,8 +158,21 @@ def protocol():
 
         check("a tool's text comes back", call(httpd, "echo", say="hi") == ("echo hi", False))
         check("a tool can return a whole result, error flag included", call(httpd, "whole") == ("partly", True))
-        check("a ToolError comes back as an error result the agent can read",
-              call(httpd, "refuse") == ("no, and here is why", True))
+        logged, saved_log = [], mcp.log
+        mcp.log = logged.append
+        try:
+            refused = call(httpd, "refuse", why="test")
+            rpc(httpd, "tools/call", {"name": "nope", "arguments": {"a": 1}})
+            post(httpd, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": "x"})
+        finally:
+            mcp.log = saved_log
+        check("a ToolError comes back as an error result the agent can read", refused == ("no, and here is why", True))
+        check("a refused call, a call to no such tool, and params that are not an object are each one log line naming "
+              "what they were given",
+              len(logged) == 3 and logged[0].startswith("refuse failed ")
+              and logged[0].endswith('s; refused: no, and here is why; given {"why": "test"}')
+              and logged[1:] == ["'nope' refused: no such tool; given {\"a\": 1}",
+                                 'tools/call refused: params are not an object; given "x"'], repr(logged))
         text, is_error = call(httpd, "crash")
         check("a tool that crashes is an error result, not a dropped connection", is_error and "boom" in text, text)
         check("the server still answers after a crash", call(httpd, "echo", say="again") == ("echo again", False))
@@ -1149,19 +1162,6 @@ def records_offline():
             thread.join()
         check("calls made at once each get their own number", len(set(made)) == 20, repr(sorted(made)))
 
-        run = os.path.join(root, "run")
-        for name in ("calls/k3f9", "calls/ab2c", "calls/notes"):
-            os.makedirs(os.path.join(run, name))
-        for name in ("devtools-k3f9.log", "devtools-ab2c.log", "devtools-tools.log", "server.log"):
-            open(os.path.join(run, name), "w").close()
-        weeks = time.time() - 8 * 86400
-        for name in ("calls/k3f9", "calls/notes", "devtools-k3f9.log", "devtools-tools.log", "server.log"):
-            os.utime(os.path.join(run, name), (weeks, weeks))
-        removed = server.prune(run)
-        check("prune removes each tab's record folder and devtools log unused for 7 days, and only names shaped like a tab id",
-              removed == (1, 1) and sorted(os.listdir(os.path.join(run, "calls"))) == ["ab2c", "notes"]
-              and sorted(os.listdir(run)) == ["calls", "devtools-ab2c.log", "devtools-tools.log", "server.log"],
-              repr((removed, os.listdir(run), os.listdir(os.path.join(run, "calls")))))
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1186,21 +1186,34 @@ def recording_offline():
         check("a queue given a workspace is refused, naming it and asking for a /mcp reconnect",
               is_error and "workspace" in text and "reconnect browserd with /mcp" in text, text)
         text, is_error = call(httpd, "queue", tab="zzzz", steps=[{"tool": "new_page"}])
-        check("a call refused before it runs records nothing", is_error and os.listdir(root) == [], repr(os.listdir(root)))
+        with open(os.path.join(folder, "002-queue.json")) as handle:
+            asked = json.load(handle)
+        check("a queue refused for its arguments or its steps is recorded as sent, with the refusal as what came back",
+              is_error and sorted(os.listdir(folder)) == ["001-queue.json", "001-queue.txt", "002-queue.json", "002-queue.txt"]
+              and json.load(open(os.path.join(folder, "001-queue.json"))) == {"tab": "zzzz", "workspace": root,
+                                                                               "steps": [{"tool": "take_snapshot"}]}
+              and asked == {"tab": "zzzz", "steps": [{"tool": "new_page"}]}
+              and open(os.path.join(folder, "002-queue.txt")).read() == "error: %s\n" % text, repr(os.listdir(folder)))
 
-        os.makedirs(folder)
         with open(os.path.join(folder, "steps.json"), "w") as handle:
             json.dump([{"tool": "take_snapshot"}, {"tool": "take_screenshot"}], handle)
         text, is_error = call(httpd, "queue", tab="zzzz", file="steps.json")
         check("a queue that cannot reach its tab is still recorded in the tab's record folder, with the error as what came back",
-              is_error and sorted(os.listdir(folder)) == ["001-queue.json", "001-queue.txt", "steps.json"]
-              and "no tab has the id" in open(os.path.join(folder, "001-queue.txt")).read(), repr(os.listdir(folder)))
-        with open(os.path.join(folder, "001-queue.json")) as handle:
+              is_error and sorted(os.listdir(folder))[4:] == ["003-queue.json", "003-queue.txt", "steps.json"]
+              and "no tab has the id" in open(os.path.join(folder, "003-queue.txt")).read(), repr(os.listdir(folder)))
+        with open(os.path.join(folder, "003-queue.json")) as handle:
             asked = json.load(handle)
         check("the record holds the tab and the steps read from the tab's record folder, the screenshot given its path",
               asked == {"tab": "zzzz", "steps": [{"tool": "take_snapshot"},
-                                                 {"tool": "take_screenshot", "filePath": os.path.join(folder, "001-step2-screenshot.png")}]},
+                                                 {"tool": "take_screenshot", "filePath": os.path.join(folder, "003-step2-screenshot.png")}]},
               repr(asked))
+        with open(os.path.join(folder, "bad.json"), "w") as handle:
+            json.dump([{"tool": "new_page"}], handle)
+        text, is_error = call(httpd, "queue", tab="zzzz", file="bad.json")
+        with open(os.path.join(folder, "004-queue.json")) as handle:
+            asked = json.load(handle)
+        check("a queue whose file holds a refused step records the file's steps with it",
+              is_error and asked == {"tab": "zzzz", "file": "bad.json", "steps": [{"tool": "new_page"}]}, repr(asked))
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -1696,8 +1709,12 @@ def queue_live():
         text, is_error = call(httpd, "queue", tab=a, steps=[
             {"tool": "fill", "uid": uid(snap_a, "textbox", "Name"), "value": "never"},
             {"tool": "take_snapshot", "bogus": 1}])
-        check("a step's argument chrome-devtools-mcp would refuse stops the queue before any step runs, recording nothing",
-              is_error and "step 2: take_snapshot does not take bogus" in text and sorted(os.listdir(os.path.join(root, a))) == before, text)
+        added = sorted(set(os.listdir(os.path.join(root, a))) - set(before))
+        check("a step's argument chrome-devtools-mcp would refuse stops the queue before any step runs, and is recorded as sent",
+              is_error and "step 2: take_snapshot does not take bogus" in text and len(added) == 2
+              and all(name.endswith(("-queue.json", "-queue.txt")) for name in added)
+              and json.load(open(os.path.join(root, a, added[0])))["steps"][1] == {"tool": "take_snapshot", "bogus": 1},
+              repr(added))
 
         worker = workers.get(a, tabs.target(a))
         process = worker._devtools._process if worker._devtools else None

@@ -12,7 +12,7 @@ records each `queue` call in that tab's record folder, `.run/calls/<tab>/`.
     start, stop             launchers for browser/service.py
     browser/                the server: tabs, the queue, and its own README
     package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
-    .run/                   gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/; a tab's log and calls/<tab>/ go at start once 7 days unused
+    .run/                   gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/
     tests/                  check_browser.py, check_server.py
 
 `browser/README.md` is the one to read before changing any of it: the Chrome proof, the tab ids, the

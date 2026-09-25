@@ -69,6 +69,8 @@ class Server(ThreadingHTTPServer):
         method, message_id = message["method"], message["id"]
         params = message.get("params") or {}
         if not isinstance(params, dict):
+            if method == "tools/call":
+                log("tools/call refused: params are not an object; given %s" % json.dumps(params, ensure_ascii=False))
             return _error(message_id, -32602, "params must be an object")
         if method == "initialize":
             return {"jsonrpc": "2.0", "id": message_id, "result": {
@@ -86,27 +88,32 @@ class Server(ThreadingHTTPServer):
             name = params.get("name")
             tool = self.tools.get(name) if isinstance(name, str) else None
             if tool is None:
+                log("%r refused: no such tool; given %s" % (name, json.dumps(params.get("arguments"), ensure_ascii=False)))
                 return _error(message_id, -32602, "unknown tool %r" % name)
             arguments = params.get("arguments") or {}
             if not isinstance(arguments, dict):
+                log("%s refused: arguments are not an object; given %s" % (name, json.dumps(arguments, ensure_ascii=False)))
                 return _error(message_id, -32602, "arguments must be an object")
             return {"jsonrpc": "2.0", "id": message_id, "result": self.call(tool, arguments)}
         return _error(message_id, -32601, "method %r is not supported" % method)
 
     def call(self, tool, arguments):
-        began = time.monotonic()
+        began, refused = time.monotonic(), None
         try:
             returned = tool["run"](arguments)
             # A dict is a whole result, for a tool that reports failure with more than text.
             result = returned if isinstance(returned, dict) else {"content": _content(returned)}
         except ToolError as exc:
-            result = {"content": _content(str(exc)), "isError": True}
+            result, refused = {"content": _content(str(exc)), "isError": True}, str(exc)
         except Exception:
             # A bug in a tool must not take the server down; the agent sees it and the log keeps the trace.
             log(traceback.format_exc().rstrip())
             result = {"content": _content("internal error in %s: %s" % (tool["name"], traceback.format_exc(limit=1).strip())),
                       "isError": True}
-        log("%s %s %.1fs" % (tool["name"], "failed" if result.get("isError") else "ok", time.monotonic() - began))
+        # One line, since calls run at once. Only a queue naming a tab id keeps a record, so a refused call's line also
+        # holds what it was given.
+        log("%s %s %.1fs" % (tool["name"], "failed" if result.get("isError") else "ok", time.monotonic() - began)
+            + ("" if refused is None else "; refused: %s; given %s" % (refused, json.dumps(arguments, ensure_ascii=False))))
         return result
 
 
@@ -114,7 +121,7 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, format, *args):
-        pass  # one line per tool call is logged by Server.call instead
+        pass  # tool calls are logged by Server.dispatch and Server.call instead
 
     def _send(self, status, body=None, session=None):
         self._write(status, json.dumps(body).encode() if body is not None else b"",

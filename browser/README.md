@@ -31,7 +31,7 @@ chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       record.py    one queue call's numbered files in a folder
     ../start, ../stop           launchers
-    ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/; a tab's log and calls/<tab>/ go at start once 7 days unused
+    ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
     ../tests/check_server.py    protocol, tab ids, focus, queue, recording, service; live tabs, queue
     ../tests/check_browser.py   framing, School Chrome proof, launch; live proof, tab load
@@ -53,11 +53,13 @@ process only.
 `run` returns a string, a list of MCP content items, or a whole result dict, which is passed through
 as is. Raising `mcp.ToolError` sends the agent a readable error result; any other exception becomes
 an error result naming it, with the traceback in the log; a client dropping its connection is one
-log line. `server.tab_tools(tabs, workers)` builds
+log line. Every tool call is one log line; one a tool refuses (`ToolError`), one naming no such tool, and
+one whose params or arguments are not an object also name what they were given. `server.tab_tools(tabs, workers)` builds
 the four tab tools, `server.queue_tool` the queue; all turn `cdp.CdpError` into `ToolError`. The queue
 records into `server.CALLS/<tab>/`, so it refuses a tab argument not shaped like a tab id (`tabs.is_id`)
-before that reaches a path, and once its arguments pass, makes a `record.Call`, writes what was asked,
-and writes what came back through `_recorded`, a raised error included.
+before that reaches a path, then makes a `record.Call` and writes what was asked as sent, so a queue
+refused for its other arguments or its steps is recorded too, with a `file`'s steps added once read; once they pass, what was asked is rewritten as the
+steps it runs, and what came back is written through `_recorded`, a refusal or raised error included.
 
 **`worker.Worker`** is one tab's `devtools.Devtools` process and its page id there, behind a lock,
 so one tab's queues run in turn and different tabs run at once. `Worker.ensure()` starts and pairs
@@ -81,9 +83,8 @@ step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view s
 `<n>-page-now-reply.txt`.
 
 **Server lifecycle**, in `server.serve()`: ask a chrome-devtools-mcp process for its tool list (no
-browser needed), bind 9230, install SIGTERM/SIGINT handlers, write `.run/server.pid`, remove each
-tab's record folder and `devtools-<tab>.log` unused for `server.KEEP_DAYS` (7; `server.prune`, which
-touches only names shaped like a tab id), then `launch.launch()` (start the School Chrome, or adopt it once `require` passes), then serve. If
+browser needed), bind 9230, install SIGTERM/SIGINT handlers, write `.run/server.pid`, then
+`launch.launch()` (start the School Chrome, or adopt it once `require` passes), then serve. If
 `launch` fails after this start launched Chrome, that Chrome is sent SIGTERM. A watcher polls
 `cdp.school_chrome()` every 2s, and when Chrome quits the server stops. Another thread runs `focus.keep` on a connection of its own; if that
 connection fails, it logs so and gives no more focus back until the server restarts. When the server stops, every
@@ -292,7 +293,7 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   project's, so a relative or `~` path would land inside it. Usage statistics and CrUX are off, and the performance, network and
   emulation tools are not loaded.
 - **No tool types a password safely.** A queue's chrome-devtools-mcp steps refuse nothing, and every
-  step's arguments are recorded in the tab's record folder.
+  step's arguments are recorded in the tab's record folder, and a refused call's in `../.run/server.log` too.
 - **Checks.**
   - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for `lsof`,
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
