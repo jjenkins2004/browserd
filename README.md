@@ -6,7 +6,7 @@ records each `queue` call in that tab's record folder, `.run/calls/<profile>/<se
 agent starts with `session_start {profile, label}`, and sees only its session's tabs.
 
     ./start    the server, in the background; each profile's Chrome starts on its first use. The
-               browserd page, http://127.0.0.1:9231/, lists and makes profiles
+               browserd page, http://127.0.0.1:9231/, makes profiles and shows their sessions and tabs
     ./stop     stops the server, which quits every profile's Chrome with it and closes every session
     ./restart  restarts the server alone: every Chrome keeps running and every session stays open
 

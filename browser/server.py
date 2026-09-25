@@ -88,14 +88,14 @@ SESSION_HELP = """Start a browserd session: call it once, before any other brows
 instructions name (if they name none, ask the user which) and a label of a few words saying what you are doing,
 like "apply acme backend". It returns the session id every other browserd tool takes as session.
 
-A profile is one Chrome with its own logins. A session sees and drives only its own tabs: the ones it opened, and
-the ones their pages opened (a popup, a target=_blank link). Every agent starts its own session, a subagent
+A profile is one Chrome with its own logins. A session sees and drives only its own tabs: the ones it opened, the
+ones their pages opened (a popup, a target=_blank link), and any the user hands it on the browserd page. Every agent starts its own session, a subagent
 included; pass yours on only to an agent that carries on your task in your tabs.
 
 No agent ends a session: when your task is done, leave its tabs open. After %d minutes without a call a session is
 paused, which stops the processes that drive its tabs, so their element uids are gone; any call with its id resumes
-it. A session closes only when browserd stops, its tabs with it; a closed session's id is refused, so start a new
-one and open its tabs again."""
+it. A session closes only when the user closes it on the browserd page or browserd stops, its tabs with it; a
+closed session's id is refused, so start a new one and open its tabs again."""
 
 
 def tab_tools(state, tabs, workers):
@@ -400,7 +400,7 @@ def serve():
     tools = tab_tools(state, tabs, workers) + [queue_tool(state, tabs, workers, _allowed_tools())]
     # A port another program holds fails the start here, before the pid file is written.
     server = mcp.Server(HOST, PORT, tools, NAME)
-    page_server = page.Page(HOST, page.PORT, state, (PORT, page.PORT), chromes)
+    page_server = page.Page(HOST, page.PORT, state, (PORT, page.PORT), chromes, tabs, workers)
     stopping, signals = threading.Event(), set()
 
     def on_signal(number, frame):

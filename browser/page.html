@@ -6,41 +6,61 @@
 <title>browserd</title>
 <style>
 :root {
-  --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e2dd;
-  --accent: #2f5bd3; --accent-text: #ffffff; --bad: #b3261e; --good: #1f7a3a;
+  --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e2dd; --soft: #f0f0ec;
+  --accent: #2f5bd3; --accent-text: #ffffff; --bad: #b3261e; --good: #1f7a3a; --wait: #9a6700;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #161615; --panel: #1f1f1d; --text: #ecece8; --muted: #9a9a93; --line: #34342f;
-    --accent: #7c9bf0; --accent-text: #10131c; --bad: #f2877f; --good: #6fcf8f;
+    --bg: #161615; --panel: #1f1f1d; --text: #ecece8; --muted: #9a9a93; --line: #34342f; --soft: #262624;
+    --accent: #7c9bf0; --accent-text: #10131c; --bad: #f2877f; --good: #6fcf8f; --wait: #e3b341;
   }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, system-ui, sans-serif; }
-main { max-width: 880px; margin: 0 auto; padding: 24px 16px 48px; }
-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+main { max-width: 920px; margin: 0 auto; padding: 24px 16px 48px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-bottom: 20px; }
 h1 { font-size: 20px; margin: 0; }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 28px 0 10px; }
+h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
 .status { color: var(--muted); font-size: 13px; }
 .status.bad { color: var(--bad); }
+.spacer { flex: 1; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
-.profile { padding: 12px 16px; border-top: 1px solid var(--line); }
+.profile { padding: 14px 16px; border-top: 1px solid var(--line); }
 .profile:first-child { border-top: 0; }
 .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
-.name { font-weight: 600; }
+.name { font-weight: 600; font-size: 15px; }
 .state { font-size: 12px; color: var(--muted); }
-.state.up { color: var(--good); }
+.state.up, .badge.active { color: var(--good); }
+.badge.paused { color: var(--wait); }
 .where { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; margin-top: 2px; }
-.profile form { padding: 10px 0 0; }
+.profile > form { padding: 10px 0 0; }
 .profile .said { padding: 8px 0 0; }
+.session { background: var(--soft); border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+.shead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.label { font-weight: 600; }
+.sid, .tid, .age { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.badge { font-size: 12px; font-weight: 600; }
+.tabs { list-style: none; margin: 6px 0 0; padding: 0; }
+.tab { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); }
+.tab:first-child { border-top: 0; }
+.title { font-weight: 500; }
+.url { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; flex: 1 1 200px; min-width: 0; }
+.quiet { color: var(--muted); font-size: 13px; padding: 4px 0; }
+.closed { color: var(--muted); font-size: 13px; }
 .empty { padding: 16px; color: var(--muted); }
 form { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 16px; align-items: center; }
+.inline { display: inline-flex; gap: 6px; }
 input, select, button { font: inherit; color: inherit; }
 input, select { background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; min-width: 0; }
-input { flex: 1 1 160px; }
-select { flex: 2 1 220px; }
+form > input { flex: 1 1 160px; }
+form > select { flex: 2 1 220px; }
+.inline select { padding: 3px 6px; font-size: 12px; }
 button { background: var(--accent); color: var(--accent-text); border: 0; border-radius: 7px; padding: 8px 14px;
   font-weight: 600; cursor: pointer; }
+button.small { padding: 3px 9px; font-size: 12px; font-weight: 500; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); }
+button.small.danger { color: var(--bad); }
 button:disabled { opacity: .5; cursor: default; }
 .said { padding: 0 16px 14px; font-size: 13px; }
 .said:empty { display: none; }
@@ -50,7 +70,11 @@ button:disabled { opacity: .5; cursor: default; }
 </head>
 <body>
 <main>
-  <header><h1>browserd</h1><span class="status" id="status">connecting…</span></header>
+  <header>
+    <h1>browserd</h1><span class="status" id="status">connecting…</span><span class="spacer"></span>
+    <button class="small" id="close-paused" hidden>Close all paused</button>
+  </header>
+  <div class="said" id="page-said"></div>
 
   <h2>Profiles</h2>
   <div class="panel" id="profiles"><div class="empty" id="empty">No profiles yet.</div></div>
@@ -93,6 +117,103 @@ function tell(said, text, good) {
   said.className = "said " + (good ? "good" : "bad");
 }
 
+function ago(seconds) {
+  const gone = Math.max(0, Date.now() / 1000 - seconds);
+  if (gone < 60) return Math.round(gone) + " s ago";
+  if (gone < 3600) return Math.round(gone / 60) + " min ago";
+  if (gone < 86400) return Math.round(gone / 3600) + " h ago";
+  return Math.round(gone / 86400) + " d ago";
+}
+
+// A time shown as how long ago, kept current by each poll.
+function aged(className, prefix, when) {
+  const node = el("span", className);
+  node.dataset.when = when;
+  node.dataset.prefix = prefix;
+  node.textContent = prefix + ago(when);
+  return node;
+}
+
+// A button that posts what act() returns, if anything, then shows the state it left; a refusal goes in said.
+function button(text, className, said, act) {
+  const node = el("button", "small " + className, text);
+  node.type = "button";
+  node.addEventListener("click", async () => {
+    const asked = act();
+    if (!asked) return;
+    node.disabled = true;
+    try {
+      await api(asked.path, asked.send);
+      said.textContent = "";
+      await refresh();
+    } catch (error) {
+      tell(said, error.message, false);
+    } finally {
+      node.disabled = false;
+    }
+  });
+  return node;
+}
+
+function tabItem(tab, said, extra) {
+  const item = el("li", "tab");
+  item.append(el("span", "title", tab.title || "(untitled)"), el("span", "url", tab.url), el("span", "tid", tab.id),
+    button("Show", "", said, () => ({path: "/show", send: {tab: tab.id}})),
+    button("Close", "danger", said, () => ({path: "/close-tab", send: {tab: tab.id}})), ...(extra || []));
+  return item;
+}
+
+function sessionBlock(session, said) {
+  const block = el("div", "session");
+  const head = el("div", "shead");
+  head.append(el("span", "label", session.label), el("span", "sid", session.id),
+    el("span", "badge " + session.state, session.state), aged("age", "last call ", session.last_call),
+    el("span", "spacer"),
+    button("Close session", "danger", said, () => {
+      const titles = session.tabs.map((tab) => "  " + (tab.title || tab.url)).join("\n");
+      const asked = "Close session " + session.id + " (" + session.label + ") and its " + session.tabs.length +
+        " tab(s)?" + (titles ? "\n\n" + titles : "");
+      return confirm(asked) ? {path: "/close-session", send: {session: session.id}} : null;
+    }));
+  const list = el("ul", "tabs");
+  list.append(...session.tabs.map((tab) => tabItem(tab, said)));
+  block.append(head, session.tabs.length ? list : el("div", "quiet", "No open tabs."));
+  return block;
+}
+
+function byHandBlock(profile, said, picks) {
+  const block = el("div");
+  const list = el("ul", "tabs");
+  list.append(...profile.by_hand.map((tab) => {
+    if (!profile.sessions.length) return tabItem(tab, said);
+    const pick = el("select");
+    pick.append(...profile.sessions.map((session) => {
+      const option = el("option", "", session.label + " · " + session.id);
+      option.value = session.id;
+      return option;
+    }));
+    // A rebuild keeps the choice; a session gone since leaves none, and the server refuses it.
+    if (picks.has(tab.id)) pick.value = picks.get(tab.id);
+    pick.addEventListener("change", () => picks.set(tab.id, pick.value));
+    const hand = el("span", "inline");
+    hand.append(pick, button("Hand over", "", said, () => ({path: "/handover", send: {tab: tab.id, session: pick.value}})));
+    return tabItem(tab, said, [hand]);
+  }));
+  block.append(el("h3", "", "Opened by hand"), list);
+  return block;
+}
+
+function closedBlock(profile) {
+  const block = el("div");
+  block.append(el("h3", "", "Closed sessions"));
+  for (const session of profile.closed) {
+    const line = el("div", "closed");
+    line.append(el("span", "", session.label + " · " + session.id + " · "), aged("", "closed ", session.closed));
+    block.append(line);
+  }
+  return block;
+}
+
 function profileRow(name) {
   const node = el("div", "profile");
   const status = el("span", "state");
@@ -104,14 +225,15 @@ function profileRow(name) {
   url.placeholder = "URL to open, or blank";
   url.autocomplete = "off";
   url.spellcheck = false;
-  const button = el("button", "", "Open Chrome");
-  button.type = "submit";
-  form.append(url, button);
+  const open = el("button", "", "Open Chrome");
+  open.type = "submit";
+  form.append(url, open);
   const said = el("div", "said");
-  node.append(head, where, form, said);
+  const body = el("div");
+  node.append(head, where, form, said, body);
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    button.disabled = true;
+    open.disabled = true;
     try {
       await api("/open", {profile: name, url: url.value.trim()});
       url.value = "";
@@ -120,10 +242,28 @@ function profileRow(name) {
     } catch (error) {
       tell(said, error.message, false);
     } finally {
-      button.disabled = false;
+      open.disabled = false;
     }
   });
-  return {node, status, where};
+  return {node, status, where, said, body, key: null, picks: new Map()};
+}
+
+function showBody(row, profile) {
+  // Rebuilt only when what it shows changed, so a hand-over choice held open is not reset every 2s.
+  const key = JSON.stringify([profile.error, profile.sessions, profile.by_hand, profile.closed]);
+  if (key !== row.key) {
+    row.key = key;
+    const parts = [];
+    if (profile.error) parts.push(el("div", "said bad", profile.error));
+    parts.push(...profile.sessions.map((session) => sessionBlock(session, row.said)));
+    if (!profile.sessions.length) parts.push(el("div", "quiet", "No open sessions."));
+    if (profile.by_hand.length) parts.push(byHandBlock(profile, row.said, row.picks));
+    if (profile.closed.length) parts.push(closedBlock(profile));
+    row.body.replaceChildren(...parts);
+  }
+  for (const node of row.body.querySelectorAll("[data-when]")) {
+    node.textContent = node.dataset.prefix + ago(Number(node.dataset.when));
+  }
 }
 
 // Rows are kept and changed in place, never rebuilt, so a URL being typed survives each poll.
@@ -147,12 +287,19 @@ function showProfiles(profiles) {
     row.status.textContent = p.pid ? "running, pid " + p.pid : "not running";
     row.status.className = "state" + (p.pid ? " up" : "");
     row.where.textContent = "port " + p.port + " · " + p.folder;
+    showBody(row, p);
     if (row.node.previousElementSibling !== before || row.node.parentNode !== box) {
       if (before) before.after(row.node); else box.prepend(row.node);
     }
     before = row.node;
   }
   document.getElementById("empty").hidden = profiles.length > 0;
+  const paused = profiles.flatMap((p) => p.sessions.filter((s) => s.state === "paused"));
+  const closeAll = document.getElementById("close-paused");
+  closeAll.hidden = !paused.length;
+  closeAll.textContent = "Close all paused (" + paused.length + ")";
+  closeAll.dataset.asked = "Close " + paused.length + " paused session(s) and every tab of them?\n\n" +
+    paused.map((s) => "  " + s.label + " · " + s.id).join("\n");
 }
 
 let shownFolders = null;
@@ -186,11 +333,26 @@ async function refresh() {
   }
 }
 
+document.getElementById("close-paused").addEventListener("click", async (event) => {
+  const said = document.getElementById("page-said");
+  if (!confirm(event.target.dataset.asked)) return;
+  event.target.disabled = true;
+  try {
+    const answer = await api("/close-paused", {});
+    tell(said, "Closed " + answer.closed.length + " paused session(s).", true);
+    await refresh();
+  } catch (error) {
+    tell(said, error.message, false);
+  } finally {
+    event.target.disabled = false;
+  }
+});
+
 document.getElementById("new").addEventListener("submit", async (event) => {
   event.preventDefault();
   const said = document.getElementById("said");
-  const button = document.getElementById("make");
-  button.disabled = true;
+  const make = document.getElementById("make");
+  make.disabled = true;
   try {
     const made = await api("/profiles", {
       name: document.getElementById("name").value.trim(),
@@ -202,12 +364,16 @@ document.getElementById("new").addEventListener("submit", async (event) => {
   } catch (error) {
     tell(said, error.message, false);
   } finally {
-    button.disabled = false;
+    make.disabled = false;
   }
 });
 
-refresh();
-setInterval(refresh, 2000);
+// Each poll waits for the one before, so a slow Chrome cannot pile requests up.
+async function poll() {
+  await refresh();
+  setTimeout(poll, 2000);
+}
+poll();
 </script>
 </body>
 </html>

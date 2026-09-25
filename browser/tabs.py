@@ -1,4 +1,4 @@
-"""Tab ids, and opening, listing, showing and closing a session's tabs in its profile's Chrome.
+"""Tab ids, and opening, listing, showing, closing and handing over tabs in a profile's Chrome.
 
 README.md, "Core Abstractions & Shared Pieces", has the contract.
 """
@@ -10,6 +10,7 @@ import time
 
 from . import cdp, focus
 from .state import Tab
+from .ws import WebSocketError
 
 LETTERS = "abcdefghjkmnpqrstuvwxyz23456789"
 LOAD_WAIT = 10.0
@@ -111,38 +112,90 @@ class Tabs:
                 rows[target] = self._add(profile, target, owner(target), now)
         return rows
 
+    def listing(self, profile):
+        """Every open tab of a profile's Chrome as (Tab, target info), and the count of tabs in another browser context.
+
+        Args:
+            profile (Profile): whose Chrome.
+        """
+        own, outside, asked = self._pages(profile)
+        with self._lock:
+            rows = self._sync(profile, own, asked)
+        return [(rows[info["targetId"]], info) for info in own if info["targetId"] in rows], outside
+
     def list(self, session):
         """Every open tab of a session as (tab id, target info), and the count of tabs in another browser context.
 
         Args:
             session (Session): whose tabs.
         """
-        profile = self.profile(session)
-        own, outside, asked = self._pages(profile)
-        with self._lock:
-            rows = self._sync(profile, own, asked)
-        return [(rows[info["targetId"]].id, info) for info in own
-                if info["targetId"] in rows and rows[info["targetId"]].session == session.id], outside
+        listed, outside = self.listing(self.profile(session))
+        return [(row.id, info) for row, info in listed if row.session == session.id], outside
+
+    def _row(self, session, tab):
+        """The open Tab behind a tab id, checked to be the session's; any tab for session None, the browserd page."""
+        if not is_id(tab):
+            raise cdp.CdpError(NOT_AN_ID % tab)
+        row = self._state.tab(tab)
+        if row is None or session is not None and row.session != session.id:
+            raise cdp.CdpError(NOT_YOURS % tab if session is not None else "no tab has the id %r" % tab)
+        if row.closed is not None:
+            raise cdp.CdpError("tab %s is closed" % tab)
+        return row
+
+    def _profile_of(self, row):
+        profile = self._state.profile(row.profile)
+        if profile is None:
+            raise cdp.CdpError("tab %s's profile, %s, is gone" % (row.id, row.profile))
+        return profile
 
     def target(self, session, tab):
         """The target id behind a tab id, checked to be the session's and open still.
 
         Args:
-            session (Session): who asks.
+            session (Session | None): who asks; None for the browserd page, which reaches every tab.
             tab (str): a tab id from list or open.
         """
-        if not is_id(tab):
-            raise cdp.CdpError(NOT_AN_ID % tab)
-        row = self._state.tab(tab)
-        if row is None or row.session != session.id:
-            raise cdp.CdpError(NOT_YOURS % tab)
-        if row.closed is not None:
-            raise cdp.CdpError("tab %s is closed" % tab)
-        own, _, _ = self._pages(self.profile(session))
+        row = self._row(session, tab)
+        own, _, _ = self._pages(self._profile_of(row))
         if row.target not in {info["targetId"] for info in own}:
             self._state.close_tab(tab, time.time())
             raise cdp.CdpError("tab %s is closed" % tab)
         return row.target
+
+    def close_session(self, session):
+        """Close a session and every tab of it, and return the ids of the tabs closed.
+
+        Args:
+            session (Session): an open session.
+        """
+        # Closed first, so any call of the session's made meanwhile is refused.
+        self._state.close_session(session.id, time.time())
+        closed = []
+        for row in self._state.session_tabs(session.id):
+            try:
+                self.close(None, row.id)
+            except (cdp.CdpError, WebSocketError, OSError):
+                self._state.close_tab(row.id, time.time())  # gone already, its Chrome is not running, or it dropped the connection
+            closed.append(row.id)
+        return closed
+
+    def hand_over(self, tab, session):
+        """Give a tab no session owns, one opened by hand, to an open session of the same profile.
+
+        Args:
+            tab (str): the tab's id.
+            session (Session): who takes it.
+        """
+        with self._lock:
+            row = self._row(None, tab)
+            owner = self._state.session(row.session) if row.session is not None else None
+            if owner is not None and owner.closed is None:
+                raise cdp.CdpError("tab %s is session %s's already; only a tab no open session owns is handed over"
+                                   % (tab, row.session))
+            if session.closed is not None or session.profile.lower() != row.profile.lower():
+                raise cdp.CdpError("session %s is not an open session of the %s profile" % (session.id, row.profile))
+            self._state.give_tab(tab, session.id)
 
     def open(self, session, url):
         """Open url in a new background tab of the session's, starting its profile's Chrome first if it is down; wait
@@ -195,14 +248,14 @@ class Tabs:
         return tab, info
 
     def show(self, session, tab):
-        """Bring a session's tab to the front and return its target info.
+        """Bring a tab to the front and return its target info.
 
         Args:
-            session (Session): who asks.
+            session (Session | None): who asks; None for the browserd page.
             tab (str): a tab id from list or open.
         """
         target = self.target(session, tab)
-        browser = self._connect(self.profile(session))
+        browser = self._connect(self._profile_of(self._state.tab(tab)))
         try:
             browser.call("Target.activateTarget", targetId=target)
             info = browser.call("Target.getTargetInfo", targetId=target)["targetInfo"]
@@ -215,14 +268,14 @@ class Tabs:
             browser.close()
 
     def close(self, session, tab):
-        """Close a session's tab.
+        """Close a tab.
 
         Args:
-            session (Session): who asks.
+            session (Session | None): who asks; None for the browserd page.
             tab (str): a tab id from list or open.
         """
         target = self.target(session, tab)
-        browser = self._connect(self.profile(session))
+        browser = self._connect(self._profile_of(self._state.tab(tab)))
         try:
             browser.call("Target.closeTarget", targetId=target)
         finally:

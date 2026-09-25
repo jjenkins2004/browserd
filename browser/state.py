@@ -100,6 +100,14 @@ class State:
         """Every session not closed, oldest first."""
         return [Session(*row) for row in self._all("SELECT * FROM sessions WHERE closed IS NULL ORDER BY started")]
 
+    def closed_sessions(self, profile, most):
+        """A profile's most recently closed sessions, newest first."""
+        return [Session(*row) for row in self._all("SELECT * FROM sessions WHERE profile = ? AND closed IS NOT NULL "
+                                                   "ORDER BY closed DESC LIMIT ?", profile, most)]
+
+    def close_session(self, session_id, when):
+        self._run("UPDATE sessions SET closed = ? WHERE id = ? AND closed IS NULL", when, session_id)
+
     def touch(self, session_id, when):
         self._run("UPDATE sessions SET last_call = ? WHERE id = ?", when, session_id)
 

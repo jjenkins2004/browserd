@@ -7,8 +7,9 @@ over HTTP on `127.0.0.1:9230`, so pages are read and driven with that profile's 
 gets to every other tool. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage the session's own tabs by
 short tab ids; `queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
 records every call in that tab's record folder, `../.run/calls/<profile>/<session>-<label>/<tab>/`. The
-browserd page, at `http://127.0.0.1:9231/`, lists the profiles kept in `../.run/state.db`, makes new ones and
-opens a profile's Chrome. Python standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`;
+browserd page, at `http://127.0.0.1:9231/`, lists the profiles kept in `../.run/state.db` with their sessions
+and tabs, makes new profiles, opens a profile's Chrome, shows, closes and hands over tabs, and closes sessions.
+Python standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`;
 run `npm ci`).
 
     ../start    start the server in the background; no Chrome starts with it
@@ -22,7 +23,7 @@ run `npm ci`).
       cdp.py       which Chrome, port proof, one websocket to it
       launch.py    starts a profile's Chrome, or adopts one already up
       chromes.py   each profile's Chrome: started on first use, focus kept, quit at stop
-      tabs.py      tab ids in state.db; a session's tabs: open, list, show, close
+      tabs.py      tab ids in state.db; open, list, show, close, hand over
       focus.py     the Mac's focus: which app has it; gives it back from tabs pages open
       mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch
       server.py    the server process: tools, page, pid file
@@ -37,7 +38,7 @@ run `npm ci`).
       profiles.py  Profile (name, folder, port); what a new profile is given
       state.py     .run/state.db: the profiles, sessions and tabs
       sessions.py  session ids, labels, record folder names, when a session is paused
-      page.py      the browserd page on 9231: GET /state, POST /profiles and /open
+      page.py      the browserd page on 9231: GET /state, and a POST per button
       page.html    the page itself: one file, plain JavaScript, polls /state
     ../start, ../stop, ../restart  launchers
     ../.run/                    gitignored: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/; a tab's log and a closed session's folder go at start once 7 days unused
@@ -75,18 +76,26 @@ profile: a folder taken over must hold no Chrome profile but Chrome's `Default` 
 Its port is the one that folder's Chrome already runs with, when no profile has it; otherwise the lowest from 9223
 to 9299 that no profile has, the server does not hold (9230, 9231), and nothing listens on.
 
-**`page.Page`** serves the page on 9231 on a thread of the server's own: `GET /` the HTML, `GET /state` every
-profile with its Chrome's pid (or `null`, not running) and the folders a new one may take over, `POST
-/profiles` a new profile, `POST /open` a window of a profile's Chrome in front, at a URL or blank. A
-`ProfileError`, `page.Refused` or `cdp.CdpError` is answered as `{"error": ...}` for the page to show.
+**`page.Page`** serves the page on 9231 on a thread of the server's own. `GET /` is the HTML. `GET /state` gives
+every profile with its Chrome's pid (or `null`, not running), `error` when its Chrome's tabs could not be
+listed, its open sessions (active or paused) with their
+tabs, the tabs no session owns, and its last `page.CLOSED_SHOWN` (10) closed sessions, from one
+`Tabs.listing` per profile, which also keeps `state.db` in step with each Chrome; and the folders a new profile
+may take over. Each button POSTs: `/profiles` a new profile, `/open` a window of a profile's Chrome in front (at
+a URL or blank), `/show` and `/close-tab` any tab, `/close-session` a session and every tab of it,
+`/close-paused` every paused session and its tabs, and `/handover` a tab no session owns to an open session of its
+profile. A tab of a session closed as it opened (a `tab_open` or popup under way) is shown with those by hand,
+so it can still be closed or handed over. A `ProfileError`,
+`page.Refused` or `cdp.CdpError` is answered as `{"error": ...}` for the page to show.
 
 **`state.Session`** is one agent's task on one profile: a six-character id (`k3f9x2`), the profile's name, a
 label, and its last call. `sessions.py` holds what an id and a label may be, the record folder they name
 (`<id>-<the label's words, dashed>`), and `sessions.paused`: no call for `sessions.PAUSE_AFTER` (30 minutes).
 
 **`tabs.Tabs`** gives each page of a profile's Chrome a four-character tab id (`k3f9`), kept in `state.db`
-as a `state.Tab` with its target id and its session, and never given out again. Every method takes the asking
-session, and a tab of any other session is "no tab of this session". It opens a new `cdp.Browser` for every
+as a `state.Tab` with its target id and its session, and never given out again. `list`, `open`, `target`, `show`
+and `close` take the asking session, and a tab of any other session is "no tab of this session"; the page asks
+as `None`, and reaches every tab. It opens a new `cdp.Browser` for every
 operation, through its `connect`, so every tab tool re-proves the Chrome; `open` first calls its `start`, which
 starts the profile's Chrome, and a Chrome not running lists no tabs. Each listing (`_sync`) marks closed every
 tab whose page is gone, and gives each new page a tab: the session of the page that opened it (its
@@ -111,7 +120,8 @@ reach the tab. `Worker.ensure()` starts and pairs
 the process on the tab's first queue, and again after it dies; the first report on a tab older than this
 server (carried over: `Workers.get`'s `made` is before `Workers.started`) also says its uids are gone, since an
 earlier server's process may have given some out. **`worker.Workers`** holds
-one per tab id. `tab_close`, `tab_list` (for tabs found closed) and a queue on a tab found closed drop it;
+one per tab id. `tab_close`, the page's Close, Close session and Close all paused, `tab_list` (for tabs found closed) and a
+queue on a tab found closed drop it;
 any other failure to reach a tab leaves its process and uids alone. `Workers.pause` stops the processes of a
 paused session's tabs but keeps each dead one, so its next queue starts a new one and says the uids are gone;
 it asks once more, as each queue lets go of its tab, whether the session is paused still.
@@ -172,7 +182,7 @@ the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits ev
   no default context. With no page open either, `Tabs` lists no tabs rather than refusing, and
   `tab_open`'s `Target.createTarget` loads it again. No default context beside open pages
   is still refused, since those tabs cannot be told apart.
-- **Nothing but `tab_show` and the page's Open Chrome leaves a profile's Chrome with the Mac's focus.** Chrome raises itself over
+- **Nothing but `tab_show` and the page's Open Chrome and Show leaves a profile's Chrome with the Mac's focus.** Chrome raises itself over
   the app in front each time it shows a window. macOS lets it at launch, even under `open -g`, and
   after that only once Chrome has been in front at least once. So `launch` starts it with `open -g`
   and `--no-startup-window`: with no window, the tabs it had open when it last quit do not come back, and the first
@@ -190,13 +200,15 @@ the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits ev
   For `tab_show`, `Target.activateTarget` picks the tab, and `focus.bring` brings the tab's Chrome
   to the front by pid, which `activateTarget` alone does not do for a Chrome never yet in front; when
   macOS refuses, `tab_show` fails.
-- **No agent ends a session.** An agent would end one while its task still needed it, so only `../stop`
-  closes sessions. A session is paused after 30 minutes without a call, which stops its tabs' chrome-devtools-mcp processes;
+- **No agent ends a session.** An agent would end one while its task still needed it, so only Joshua
+  closes one: on the page (Close session, Close all paused) or with `../stop`. `Tabs.close_session` marks the
+  session closed before it closes its tabs, so any call of the session's made meanwhile is refused. A session is paused after 30 minutes without a call, which stops its tabs' chrome-devtools-mcp processes;
   any call resumes it. A closed session's id is refused, pointing at `session_start`. Every agent, a subagent
   included, starts its own session; `SESSION_HELP` says so, and that only an agent carrying on the same task
   in the same tabs is given another's id. Sessions of one profile share its logins and cookies: one signing
   out of a site signs every one out.
-- **A tab opened by hand is no session's.** It gets a tab id at the next listing, but no session's `tab_list` shows it. A tab
+- **A tab opened by hand is no session's** until the page hands it over. It gets a tab id at the next listing, but
+  no session's `tab_list` shows it before then. A tab
   closed outside the server is marked closed at the next listing or use, and its id stays refused.
 - **The MCP port, 9230, refuses any request with an `Origin` header, a `Host` other than
   `127.0.0.1:9230` or `localhost:9230`, or a body that is not `application/json`.** A web page
@@ -368,8 +380,8 @@ the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits ev
     `dialogs_offline` for the answerer's connection; `paste_offline` for chrome-devtools-mcp, the
     clipboard and the connection that presses the paste key; `limits_offline` for a slow tool;
     `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
-    and a folder's running Chrome, and `page_offline` for `.run/state.db` and the Google folder, each in a
-    temporary folder;
+    and a folder's running Chrome, and `page_offline` for Chrome, `focus.bring` and each tab's Worker, with `.run/state.db` and the Google
+    folder each in a temporary folder;
     `service_offline` for the spawned server, with real `ps`, and for the server `../stop` and `../restart`
     signal, a process that runs `-m browser.server` in its command line.
   - **Live:** the live groups start a Chrome of their own, `throwaway.chrome()`, on a new folder under

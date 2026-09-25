@@ -1,4 +1,5 @@
-"""The browserd page, http://127.0.0.1:9231/: every profile and whether its Chrome runs; New profile and Open Chrome.
+"""The browserd page, http://127.0.0.1:9231/: every profile, its Chrome, its sessions and their tabs, and the buttons
+that make a profile, open its Chrome, show, close or hand over a tab, and close sessions.
 
 One HTML file, page.html, that polls GET /state and POSTs its buttons. README.md, "Agent Gotchas & Invariants",
 says what each request must carry and why the page has a port of its own.
@@ -8,16 +9,18 @@ import json
 import os
 import secrets
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
-from . import cdp, mcp, profiles
+from . import cdp, mcp, profiles, sessions
 from .ws import WebSocketError
 
 PORT = 9231
 HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html")
 TOKEN = "X-Browserd-Token"
 MAX_BODY = 64 << 10
+CLOSED_SHOWN = 10  # closed sessions the page lists per profile, newest first
 # The page runs only its own inline script and talks only to itself, and no other page may frame it and steer a click.
 POLICY = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; "
           "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
@@ -30,16 +33,19 @@ class Refused(Exception):
 class Page(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, host, port, state, reserved, chromes):
+    def __init__(self, host, port, state, reserved, chromes, tabs, workers):
         """
         Args:
             host (str): address to bind; only 127.0.0.1 is meant.
             port (int): port to bind; 0 picks a free one.
-            state (State): the profiles shown and added to.
+            state (State): the profiles, sessions and tabs shown and changed.
             reserved (tuple[int, ...]): ports the server holds, which no profile's Chrome may take.
             chromes (Chromes): starts a profile's Chrome for Open Chrome.
+            tabs (Tabs): lists each profile's tabs, and shows, closes and hands them over.
+            workers (Workers): each tab's Worker, dropped when the page closes its tab.
         """
         self.state, self.reserved, self.chromes = state, reserved, chromes
+        self.tabs, self.workers = tabs, workers
         self.token = secrets.token_urlsafe(24)  # written into the page it serves; every other request carries it
         super().__init__((host, port), Handler)
         bound = self.server_address[1]
@@ -54,9 +60,44 @@ class Page(ThreadingHTTPServer):
 
     def snapshot(self):
         """What GET /state answers; README.md, "Core Abstractions & Shared Pieces"."""
-        known = self.state.profiles()
-        return {"profiles": [{"name": p.name, "folder": p.folder, "port": p.port, "pid": _running(p)} for p in known],
-                "folders": profiles.free_folders(known)}
+        known, now = self.state.profiles(), time.time()
+        return {"profiles": [self._shown(profile, now) for profile in known], "folders": profiles.free_folders(known)}
+
+    def _shown(self, profile, now):
+        """One profile of GET /state's answer; README.md, "Core Abstractions & Shared Pieces"."""
+        shown = {"name": profile.name, "folder": profile.folder, "port": profile.port, "pid": _running(profile),
+                 "error": None, "sessions": [], "by_hand": []}
+        try:
+            listed, _ = self.tabs.listing(profile)
+        except (cdp.CdpError, WebSocketError, OSError) as exc:
+            listed, shown["error"] = [], "could not list the %s Chrome's tabs: %s" % (profile.name, exc)
+        here = [session for session in self.state.open_sessions() if session.profile.lower() == profile.name.lower()]
+        by_session = {session.id: [] for session in here}
+        for row, info in listed:
+            tab = {"id": row.id, "title": info.get("title") or "", "url": info.get("url", "")}
+            # A tab of a session closed as it opened (a tab_open or popup under way) is shown with those by hand, so
+            # it can still be closed or handed over.
+            by_session.get(row.session, shown["by_hand"]).append(tab)
+        for session in here:
+            shown["sessions"].append({"id": session.id, "label": session.label, "last_call": session.last_call,
+                                      "state": "paused" if sessions.paused(session, now) else "active",
+                                      "tabs": by_session[session.id]})
+        shown["closed"] = [{"id": session.id, "label": session.label, "closed": session.closed}
+                           for session in self.state.closed_sessions(profile.name, CLOSED_SHOWN)]
+        return shown
+
+    def _session(self, body):
+        """The open session a request names."""
+        given = body.get("session")
+        session = self.state.session(given) if sessions.is_id(given) else None
+        if session is None or session.closed is not None:
+            raise Refused("there is no open session %r" % given)
+        return session
+
+    def _close_session(self, session):
+        for tab in self.tabs.close_session(session):
+            self.workers.drop(tab)
+        mcp.log("the page closed session %s (%s)" % (session.id, session.label))
 
     def act(self, path, body):
         """Do what a POST asks, and return its answer, or None for a path no button posts to."""
@@ -75,6 +116,34 @@ class Page(ThreadingHTTPServer):
             self.chromes.window(profile, url)
             mcp.log("the page opened a window of the %s Chrome at %s" % (profile.name, url or "about:blank"))
             return {"opened": profile.name}
+        tab = body.get("tab")
+        if not isinstance(tab, str):
+            tab = ""  # refused below as no tab id at all
+        if path == "/show":
+            self.tabs.show(None, tab)
+            return {"shown": tab}
+        if path == "/close-tab":
+            self.tabs.close(None, tab)
+            self.workers.drop(tab)
+            mcp.log("the page closed tab %s" % tab)
+            return {"closed": [tab]}
+        if path == "/close-session":
+            self._close_session(self._session(body))
+            return {"closed": [body["session"]]}
+        if path == "/close-paused":
+            closed = []
+            for listed in self.state.open_sessions():
+                # Read again: closing the ones before takes seconds, and a call may have resumed this one.
+                session = self.state.session(listed.id)
+                if sessions.paused(session, time.time()):
+                    self._close_session(session)
+                    closed.append(session.id)
+            return {"closed": closed}
+        if path == "/handover":
+            session = self._session(body)
+            self.tabs.hand_over(tab, session)
+            mcp.log("the page handed tab %s to session %s (%s)" % (tab, session.id, session.label))
+            return {"handed": tab, "to": session.id}
         return None
 
 

@@ -1526,7 +1526,8 @@ def profiles_offline():
 
 
 def page_offline():
-    """The page's requests: what each must carry, and the profile its button makes."""
+    """The page's requests: what each must carry, the profile its button makes, and its tabs shown, closed and handed
+    over, and its sessions closed, in a stand-in Chrome."""
     saved = (profiles.GOOGLE, profiles.FIRST_PORT)
     workdir = tempfile.mkdtemp(prefix="browser-page-")
     state = State(os.path.join(workdir, "state.db"))
@@ -1539,8 +1540,15 @@ def page_offline():
                 raise cdp.CdpError("Target.createTarget: refused")
             self.opened.append((profile.name, url))
 
-    windows = Windows()
-    board = page.Page("127.0.0.1", 0, state, (), windows)
+    class Dropped:
+        tabs = []
+
+        def drop(self, tab):
+            self.tabs.append(tab)
+
+    windows, dropped, chrome = Windows(), Dropped(), FakeChrome()
+    tabs = Tabs(state, chrome.connect)
+    board = page.Page("127.0.0.1", 0, state, (), windows, tabs, dropped)
     threading.Thread(target=board.serve_forever, daemon=True).start()
     here = "127.0.0.1:%d" % board.server_address[1]
 
@@ -1593,6 +1601,49 @@ def page_offline():
         check("Open Chrome refuses a profile there is not", status == 400 and "no profile named 'Nobody'" in raw.decode(), raw.decode())
         status, raw, _ = ask("POST", "/open", {"profile": "Jobs", "url": "chrome://refused"}, **own)
         check("and passes on why Chrome refused", status == 400 and "refused" in json.loads(raw)["error"], raw.decode())
+
+        jobs = state.profile("Jobs")
+        working, idle = open_session(state, "apply acme", jobs), open_session(state, "old run", jobs)
+        state.touch(idle.id, time.time() - 31 * 60)
+        mine, _ = tabs.open(working, "https://example.com/a")
+        stale, _ = tabs.open(idle, "https://example.com/b")
+        chrome.add("https://example.com/hand", title="By hand")
+        shown = json.loads(ask("GET", "/state", **{page.TOKEN: board.token})[1])["profiles"][0]
+        check("state lists each open session with its state and tabs, and the tabs no session owns",
+              [(s["label"], s["state"], [t["id"] for t in s["tabs"]]) for s in shown["sessions"]]
+              == [("apply acme", "active", [mine]), ("old run", "paused", [stale])]
+              and [t["title"] for t in shown["by_hand"]] == ["By hand"] and shown["closed"] == [], repr(shown))
+        loose = shown["by_hand"][0]["id"]
+        status, raw, _ = ask("POST", "/handover", {"tab": loose, "session": working.id}, **own)
+        check("Hand over gives a tab no session owns to a session", status == 200
+              and loose in [t for t, _ in tabs.list(working)[0]], raw.decode())
+        status, raw, _ = ask("POST", "/handover", {"tab": loose, "session": idle.id}, **own)
+        check("but not a tab a session owns", status == 400 and "already" in raw.decode(), raw.decode())
+        status, raw, _ = ask("POST", "/handover", {"tab": stale, "session": "zzzzzz"}, **own)
+        check("nor to a session there is not", status == 400 and "no open session" in raw.decode(), raw.decode())
+        saved_bring, focus.bring = focus.bring, lambda pid: True
+        try:
+            status, raw, _ = ask("POST", "/show", {"tab": stale}, **own)
+        finally:
+            focus.bring = saved_bring
+        check("Show brings any session's tab to the front", status == 200 and chrome.activated[-1] == state.tab(stale).target,
+              raw.decode())
+        status, raw, _ = ask("POST", "/close-paused", {}, **own)
+        check("Close all paused closes each paused session and its tabs, and no other",
+              status == 200 and json.loads(raw)["closed"] == [idle.id] and state.session(idle.id).closed is not None
+              and state.session(working.id).closed is None and state.tab(stale).closed is not None
+              and dropped.tabs == [stale], raw.decode())
+        status, raw, _ = ask("POST", "/close-tab", {"tab": stale}, **own)
+        check("a closed tab is refused as closed", status == 400 and "is closed" in raw.decode(), raw.decode())
+        status, raw, _ = ask("POST", "/close-session", {"session": working.id}, **own)
+        targets = {target["targetId"] for target in chrome.targets}
+        check("Close session closes the session and every tab of it, the one handed over included",
+              status == 200 and state.session(working.id).closed is not None
+              and state.tab(mine).target not in targets and state.tab(loose).target not in targets
+              and sorted(dropped.tabs[1:]) == sorted([mine, loose]), raw.decode())
+        shown = json.loads(ask("GET", "/state", **{page.TOKEN: board.token})[1])["profiles"][0]
+        check("and state lists both sessions as closed, the last closed first",
+              shown["sessions"] == [] and [s["id"] for s in shown["closed"]] == [working.id, idle.id], repr(shown))
     finally:
         profiles.GOOGLE, profiles.FIRST_PORT = saved
         board.shutdown()
