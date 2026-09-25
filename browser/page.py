@@ -1,6 +1,6 @@
-"""The browserd page, http://127.0.0.1:9231/: every profile, and the button that makes one.
+"""The browserd page, http://127.0.0.1:9231/: every profile and whether its Chrome runs; New profile and Open Chrome.
 
-One HTML file, page.html, that polls GET /state and POSTs /profiles from its New profile button. README.md, "Agent Gotchas & Invariants",
+One HTML file, page.html, that polls GET /state and POSTs its buttons. README.md, "Agent Gotchas & Invariants",
 says what each request must carry and why the page has a port of its own.
 """
 
@@ -11,7 +11,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
-from . import mcp, profiles
+from . import cdp, mcp, profiles
+from .ws import WebSocketError
 
 PORT = 9231
 HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html")
@@ -22,18 +23,23 @@ POLICY = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inl
           "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 
 
+class Refused(Exception):
+    """A button's request the page cannot carry out, in words for the page."""
+
+
 class Page(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, host, port, state, reserved):
+    def __init__(self, host, port, state, reserved, chromes):
         """
         Args:
             host (str): address to bind; only 127.0.0.1 is meant.
             port (int): port to bind; 0 picks a free one.
             state (State): the profiles shown and added to.
             reserved (tuple[int, ...]): ports the server holds, which no profile's Chrome may take.
+            chromes (Chromes): starts a profile's Chrome for Open Chrome.
         """
-        self.state, self.reserved = state, reserved
+        self.state, self.reserved, self.chromes = state, reserved, chromes
         self.token = secrets.token_urlsafe(24)  # written into the page it serves; every other request carries it
         super().__init__((host, port), Handler)
         bound = self.server_address[1]
@@ -47,19 +53,36 @@ class Page(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
     def snapshot(self):
-        """What GET /state answers: every profile, and the folders a new one may take over."""
+        """What GET /state answers; README.md, "Core Abstractions & Shared Pieces"."""
         known = self.state.profiles()
-        return {"profiles": [{"name": p.name, "folder": p.folder, "port": p.port} for p in known],
+        return {"profiles": [{"name": p.name, "folder": p.folder, "port": p.port, "pid": _running(p)} for p in known],
                 "folders": profiles.free_folders(known)}
 
     def act(self, path, body):
-        """Do what a POST asks, and return its answer; a ProfileError is the refusal the page shows."""
+        """Do what a POST asks, and return its answer, or None for a path no button posts to."""
         if path == "/profiles":
             folder = body.get("folder") or None
             made = profiles.make(self.state, body.get("name"), folder, self.reserved)
             mcp.log("the page made the profile %s, %s on port %d" % (made.name, made.folder, made.port))
             return {"name": made.name, "folder": made.folder, "port": made.port}
+        if path == "/open":
+            name, url = body.get("profile"), body.get("url", "")
+            profile = self.state.profile(name) if isinstance(name, str) else None
+            if profile is None:
+                raise Refused("there is no profile named %r" % name)
+            if not isinstance(url, str):
+                raise Refused("a URL is text")
+            self.chromes.window(profile, url)
+            mcp.log("the page opened a window of the %s Chrome at %s" % (profile.name, url or "about:blank"))
+            return {"opened": profile.name}
         return None
+
+
+def _running(profile):
+    try:
+        return cdp.owner(profile.folder)
+    except cdp.CdpError:
+        return None  # ps could not run; the page's next poll asks again
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -131,7 +154,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": "the body is not a JSON object"})
         try:
             answer = page.act(self.path, body)
-        except profiles.ProfileError as exc:
+        except (profiles.ProfileError, Refused, cdp.CdpError, WebSocketError, OSError) as exc:
             return self._send(400, {"error": str(exc)})
         if answer is None:
             return self._send(404, {"error": "no such action"})

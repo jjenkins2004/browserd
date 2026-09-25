@@ -29,19 +29,22 @@ def returned(text):
 class Worker:
     """One tab's chrome-devtools-mcp and page id. Hold `lock` for anything that uses them."""
 
-    def __init__(self, tab, target_id, log_dir, connect=None):
+    def __init__(self, tab, target_id, profile, log_dir, connect=None):
         """
         Args:
             tab (str): the tab id, used in messages and the log name.
             target_id (str): the DevTools target id behind the tab id.
+            profile (Profile): whose Chrome holds the tab.
             log_dir (str): where devtools-<tab>.log goes.
-            connect (callable | None): opens a proven connection to the School Chrome; cdp.Browser by default.
+            connect (callable | None): opens a proven connection to that Chrome; a cdp.Browser unless a check passes a
+                stand-in.
         """
         self.tab = tab
         self.target_id = target_id
+        self.profile = profile
         self.lock = threading.Lock()
         self._log_dir = log_dir
-        self._connect = connect or cdp.Browser
+        self.connect = connect or (lambda: cdp.Browser(profile))
         self._devtools = None
         self.page_id = None
 
@@ -54,7 +57,7 @@ class Worker:
         if self._devtools is not None and self._devtools.alive():
             return self._devtools, self.page_id, False
         restarted = self._devtools is not None  # the dead process stays here until a new one pairs, so this holds
-        devtools = Devtools(os.path.join(self._log_dir, "devtools-%s.log" % self.tab))
+        devtools = Devtools(os.path.join(self._log_dir, "devtools-%s.log" % self.tab), self.profile.endpoint)
         try:
             self.page_id = self._pair(devtools)
         except Exception:
@@ -69,7 +72,7 @@ class Worker:
         pages = [(int(found.group(1)), found.group(2)) for found in PAGE_LINE.finditer(listing)]
         refused = []
         nonce = secrets.token_hex(8)
-        browser = self._connect()
+        browser = self.connect()
         try:
             url = browser.call("Target.getTargetInfo", targetId=self.target_id)["targetInfo"].get("url", "")
             session = browser.call("Target.attachToTarget", targetId=self.target_id, flatten=True)["sessionId"]
@@ -120,11 +123,11 @@ class Workers:
         self._lock = threading.Lock()
         self._workers = {}
 
-    def get(self, tab, target_id):
+    def get(self, tab, target_id, profile):
         with self._lock:
             worker = self._workers.get(tab)
             if worker is None:
-                worker = self._workers[tab] = Worker(tab, target_id, self._log_dir, self._connect)
+                worker = self._workers[tab] = Worker(tab, target_id, profile, self._log_dir, self._connect)
             return worker
 
     def drop(self, tab):

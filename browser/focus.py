@@ -1,13 +1,13 @@
-"""The Mac's focus: which app has it, bringing one to the front, and giving the focus back from the School Chrome.
+"""The Mac's focus: which app has it, bringing one to the front, and giving the focus back from a profile's Chrome.
 
-README.md, "Agent Gotchas & Invariants", says when the School Chrome takes the Mac's focus, and why keep gives it back.
+README.md, "Agent Gotchas & Invariants", says when a profile's Chrome takes the Mac's focus, and why keep gives it back.
 """
 
 import re
 import subprocess
 import time
 
-TAKE_WAIT = 0.5  # seconds keep waits, once it hears of a tab a page opened, for the School Chrome to take the focus
+TAKE_WAIT = 0.5  # seconds keep waits, once it hears of a tab a page opened, for the Chrome to take the focus
 POLL = 0.02
 
 
@@ -30,7 +30,7 @@ def bring(pid):
         pid (int): the app's process id.
     """
     # AppKit by pid, through osascript: it needs no Automation permission, and it reaches one copy of an app that
-    # runs two, as Chrome does beside the School Chrome.
+    # runs several, as Chrome does, one copy per folder.
     script = ('ObjC.import("AppKit"); '
               "$.NSRunningApplication.runningApplicationWithProcessIdentifier(%d).activateWithOptions(0)" % pid)
     try:
@@ -68,7 +68,7 @@ def keep(browser):
             continue
         if before == browser.pid:
             # Joshua is in it, or his own click opened this; logged, since a read later than Chrome's own lands here.
-            yield "left the Mac's focus with the School Chrome, which had it when a page opened %s" % opened
+            yield "left the Mac's focus with this Chrome, which had it when a page opened %s" % opened
             continue
         deadline = time.monotonic() + TAKE_WAIT
         while time.monotonic() < deadline:

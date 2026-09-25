@@ -1,4 +1,5 @@
-"""The browser MCP server: starts or adopts the School Chrome, serves the tools, and stops with it.
+"""The browser MCP server: serves the tools and the browserd page; each profile's Chrome starts on its first use
+and quits when the server stops.
 
 Run in the background by service.py (../start). README.md covers the lifecycle and the tools.
 """
@@ -10,12 +11,12 @@ import sqlite3
 import threading
 import time
 
-from . import cdp, focus, launch, mcp, page, record, steps
+from . import cdp, mcp, page, record, steps
+from .chromes import Chromes
 from .devtools import Devtools
 from .state import State
 from .tabs import NOT_AN_ID, Tabs, is_id
 from .worker import Workers
-from .ws import WebSocketError
 
 HOST = "127.0.0.1"
 PORT = 9230
@@ -28,8 +29,7 @@ CALLS = os.path.join(RUN, "calls")
 PID_FILE = os.path.join(RUN, "server.pid")
 LOG_FILE = os.path.join(RUN, "server.log")
 STATE_FILE = os.path.join(RUN, "state.db")
-CHROME_POLL = 2.0
-QUIT_WAIT = 15.0
+SCHOOL = "School"  # the profile the tools drive, until sessions let an agent pick one
 KEEP_DAYS = 7  # a tab's record folder and devtools log, once unused this long, are removed at start
 
 
@@ -69,7 +69,8 @@ def tab_tools(tabs, workers):
         workers.drop_except({tab for tab, _ in found})
         lines = [_line(tab, info) for tab, info in found] or ["no School-profile tabs are open"]
         if outside:
-            lines.append("(%d tab(s) outside the School profile are not listed and cannot be driven)" % outside)
+            lines.append("(%d tab(s) in another browser context, like Incognito, are not listed and cannot be driven)"
+                         % outside)
         return "\n".join(lines)
 
     def tab_show(arguments):
@@ -86,7 +87,8 @@ def tab_tools(tabs, workers):
               "properties": {"tab": {"type": "string", "description": "a tab id from tab_open or tab_list"}}}
     return [
         {"name": "tab_open", "run": _refusing(tab_open),
-         "description": "Open a URL in a new background tab of the School Chrome, wait for it to load (up to about "
+         "description": "Open a URL in a new background tab of the School Chrome, starting that Chrome first if it is "
+                        "not running; wait for the tab to load (up to about "
                         "30s), and return its tab id, title and URL; a page still loading is returned as it is. The Mac's focus "
                         "does not move.",
          "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"],
@@ -160,8 +162,8 @@ uid=5_1..25 StaticText "<words>": word k has uid 5_(1+k), and a step given 5_1..
 """
 
 
-def _worker(tabs, workers, tab):
-    """The Worker for a tab id, once the tab is proven open."""
+def _worker(tabs, workers, tab, profile):
+    """The Worker for a tab id, once the tab is proven open in the profile's Chrome."""
     try:
         target = tabs.target(tab)
     except cdp.CdpError:
@@ -172,7 +174,7 @@ def _worker(tabs, workers, tab):
         except cdp.CdpError:
             pass
         raise
-    return workers.get(tab, target)
+    return workers.get(tab, target, profile)
 
 
 def _recorded(call, run):
@@ -186,12 +188,13 @@ def _recorded(call, run):
     return result
 
 
-def queue_tool(tabs, workers, allowed, calls=CALLS):
+def queue_tool(tabs, workers, profile, allowed, calls=CALLS):
     """The queue tool: run a list of chrome-devtools-mcp steps on a tab through that tab's own process.
 
     Args:
         tabs (Tabs): resolves the tab id, and refuses a closed tab.
         workers (Workers): each tab's Worker, made on the tab's first use.
+        profile (callable): returns the Profile whose Chrome holds the tabs, looked up at each call.
         allowed (dict): the chrome-devtools-mcp tools a step may name, from steps.chrome_tools.
         calls (str): holds each tab's record folder, <calls>/<tab>/; the checks pass one of their own.
     """
@@ -216,10 +219,10 @@ def queue_tool(tabs, workers, allowed, calls=CALLS):
         call.asked({"tab": tab, "steps": planned})
 
         def run():
-            worker = _worker(tabs, workers, tab)
+            worker = _worker(tabs, workers, tab, profile())
             with worker.lock:
                 devtools, page_id, restarted = worker.ensure()
-                result = steps.run(devtools, page_id, planned, call.path, restarted, worker.target_id)
+                result = steps.run(devtools, page_id, planned, call.path, restarted, worker.target_id, worker.connect)
                 if result["isError"] and "No page found" in result["content"][0]["text"]:
                     # It renumbered its pages after reconnecting; the next queue pairs a new process and notes the
                     # restart.
@@ -261,37 +264,6 @@ def _remove_pid():
         pass
 
 
-def _quit_chrome():
-    """Close the School Chrome and wait for it to exit, so the two stop together."""
-    try:
-        browser = cdp.Browser()
-        try:
-            browser.call("Browser.close")
-        except (cdp.CdpError, WebSocketError, OSError):
-            pass  # Chrome can drop the connection before it answers
-        finally:
-            browser.close()
-    except (cdp.CdpError, WebSocketError, OSError) as exc:
-        mcp.log("could not ask the School Chrome to quit: %s" % exc)
-        return
-    deadline = time.time() + QUIT_WAIT
-    while time.time() < deadline and cdp.school_chrome() is not None:
-        time.sleep(0.25)
-    mcp.log("the School Chrome %s" % ("has quit" if cdp.school_chrome() is None else "is still running"))
-
-
-def _stop_started_chrome():
-    """Stop a School Chrome this start launched but never saw answer, so it is not left up without the server."""
-    try:
-        pid = cdp.school_chrome()
-    except cdp.CdpError as exc:
-        mcp.log("could not check for a School Chrome to stop: %s" % exc)
-        return
-    if pid is not None:
-        mcp.log("stopping the School Chrome this start launched (pid %d)" % pid)
-        os.kill(pid, signal.SIGTERM)
-
-
 def prune(run):
     """Remove each tab's record folder, <run>/calls/<tab>/, and devtools log, <run>/devtools-<tab>.log, unused for
     KEEP_DAYS, and return how many of each went. Only names shaped like a tab id are touched.
@@ -323,45 +295,32 @@ def _allowed_tools():
         devtools.close()
 
 
+def _school(state):
+    """The profile named SCHOOL, which the tools drive."""
+    profile = state.profile(SCHOOL)
+    if profile is None:
+        raise cdp.CdpError("there is no profile named %s for the tools to drive; make one on the browserd page, %s"
+                           % (SCHOOL, PAGE_URL))
+    return profile
+
+
 def serve():
-    tabs, workers = Tabs(), Workers(RUN)
-    tools = tab_tools(tabs, workers) + [queue_tool(tabs, workers, _allowed_tools())]
-    # Bound before launch, so a port another program holds fails before Chrome is started for nothing.
+    os.makedirs(RUN, exist_ok=True)
+    state, chromes = State(STATE_FILE), Chromes()
+    school = lambda: _school(state)
+    tabs, workers = Tabs(lambda: cdp.Browser(school()), lambda: chromes.ensure(school())), Workers(RUN)
+    tools = tab_tools(tabs, workers) + [queue_tool(tabs, workers, school, _allowed_tools())]
+    # A port another program holds fails the start here, before the pid file is written.
     server = mcp.Server(HOST, PORT, tools, NAME)
-    state = State(STATE_FILE)
-    try:
-        page_server = page.Page(HOST, page.PORT, state, (PORT, page.PORT))
-    except OSError:
-        server.server_close()
-        state.close()
-        raise
-    chrome_quit = threading.Event()
-
-    def watch_chrome():
-        while not chrome_quit.wait(CHROME_POLL):
-            try:
-                gone = cdp.school_chrome() is None
-            except cdp.CdpError as exc:
-                mcp.log("could not check the School Chrome is still running: %s" % exc)
-                continue
-            if gone:
-                mcp.log("the School Chrome quit, so the server stops too")
-                chrome_quit.set()
-                server.shutdown()
-
-    def keep_focus():
-        try:
-            for line in focus.keep(cdp.Browser()):
-                mcp.log(line)
-        except (cdp.CdpError, WebSocketError, OSError) as exc:
-            mcp.log("stopped giving the Mac's focus back: %s" % exc)
+    page_server = page.Page(HOST, page.PORT, state, (PORT, page.PORT), chromes)
 
     def on_signal(number, frame):
         mcp.log("stopping on signal %d" % number)
         # shutdown waits for serve_forever to return, and that runs on this thread, so it needs another.
         threading.Thread(target=server.shutdown, daemon=True).start()
 
-    # Installed before Chrome starts, so a ./stop during launch still stops both: serve_forever then returns at once.
+    # Installed before serving, so a ./stop at any point from here still stops the server and every Chrome, a start
+    # under way included.
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
     _write_pid()
@@ -372,20 +331,7 @@ def serve():
             mcp.log("removed %d record folders and %d devtools logs unused for %d days" % (folders, logs, KEEP_DAYS))
     except OSError as exc:
         mcp.log("could not remove old record folders and devtools logs: %s" % exc)
-    was_up = None
-    try:
-        was_up = cdp.school_chrome() is not None
-        mcp.log("the School Chrome: %s" % launch.launch())
-    except cdp.CdpError:
-        if was_up is False:
-            _stop_started_chrome()
-        server.server_close()
-        page_server.server_close()
-        state.close()
-        _remove_pid()
-        raise
-    threading.Thread(target=watch_chrome, daemon=True).start()
-    threading.Thread(target=keep_focus, daemon=True).start()
+    chromes.adopt(state.profiles())
     threading.Thread(target=page_server.serve_forever, daemon=True).start()
     mcp.log("serving %s, and the page at %s (pid %d)" % (URL, PAGE_URL, os.getpid()))
     try:
@@ -393,9 +339,7 @@ def serve():
     finally:
         page_server.shutdown()
         workers.stop_all()
-        if not chrome_quit.is_set():
-            chrome_quit.set()
-            _quit_chrome()
+        chromes.quit_all(state.profiles())
         server.server_close()
         page_server.server_close()
         state.close()

@@ -1,7 +1,8 @@
-"""The School Chrome: which one it is, and one websocket to it.
+"""A profile's Chrome: which process it is, and one websocket to it.
 
-`require` is the proof that what answers on the port is the School Chrome, and
-every connection goes through it. README.md says what it checks and why.
+`require` is the proof that what answers on a profile's port is that profile's Chrome, and every connection goes
+through it. README.md says what it checks and why. A profile here is anything with a name, folder, port and
+endpoint, as profiles.Profile has.
 """
 
 import http.client
@@ -15,12 +16,9 @@ import urllib.request
 
 from .ws import Timeout, WebSocket
 
-PORT = 9223
-ENDPOINT = "http://127.0.0.1:%d" % PORT
 APP = "/Applications/Google Chrome.app"
 CHROME = APP + "/Contents/MacOS/Google Chrome"
-DATA_DIR = os.path.expanduser("~/Library/Application Support/Google/Chrome-School")
-PROFILE = "Default"
+PROFILE = "Default"  # the one Chrome profile in every profile's folder
 
 
 CALL_WAIT = 20.0  # seconds a command waits for its answer
@@ -34,35 +32,40 @@ class Late(CdpError):
     """A command Chrome did not answer in time."""
 
 
+class NotRunning(CdpError):
+    """A profile's Chrome that is not running at all."""
+
+
 def _run(*command):
     try:
         done = subprocess.run(command, capture_output=True, text=True, errors="replace", timeout=10)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise CdpError("could not run %s to check what holds port %d (%s)" % (command[0], PORT, exc))
+        raise CdpError("could not run %s to check which Chrome holds a port (%s)" % (command[0], exc))
     # A blocked lsof exits the way "nothing found" does; only stderr tells them apart.
     if done.stderr.strip():
-        raise CdpError("could not run %s to check what holds port %d (%s)" % (command[0], PORT, done.stderr.strip()))
+        raise CdpError("could not run %s to check which Chrome holds a port (%s)" % (command[0], done.stderr.strip()))
     return done.stdout
 
 
-def _get(path):
+def _get(profile, path):
     try:
-        with urllib.request.urlopen(ENDPOINT + path, timeout=5) as response:
+        with urllib.request.urlopen(profile.endpoint + path, timeout=5) as response:
             return json.loads(response.read())
     except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
-        raise CdpError("the School Chrome holds port %d, but DevTools did not answer %s (%s)" % (PORT, path, exc))
+        raise CdpError("the %s Chrome holds port %d, but DevTools did not answer %s (%s)"
+                       % (profile.name, profile.port, path, exc))
 
 
 def _command(pid):
     return _run("/bin/ps", "-ww", "-o", "command=", "-p", str(pid)).strip()
 
 
-def listener():
-    """The pid listening on PORT, or None."""
-    pids = sorted(set(_run("/usr/sbin/lsof", "-w", "-nP", "-iTCP:%d" % PORT, "-sTCP:LISTEN", "-t").split()), key=int)
+def listener(port):
+    """The pid listening on a port, or None."""
+    pids = sorted(set(_run("/usr/sbin/lsof", "-w", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t").split()), key=int)
     if len(pids) > 1:
         raise CdpError("port %d is held by more than one process (pids %s), so which one answers cannot be told. "
-                       "Quit all but the School Chrome" % (PORT, ", ".join(pids)))
+                       "Quit all but the profile's Chrome" % (port, ", ".join(pids)))
     return int(pids[0]) if pids else None
 
 
@@ -80,11 +83,6 @@ def owner(folder):
     return pid if (_command(pid) + " ").startswith(CHROME + " ") else None
 
 
-def school_chrome():
-    """The pid of the Chrome that has DATA_DIR open, with or without its port, or None."""
-    return owner(DATA_DIR)
-
-
 def port_of(pid):
     """The --remote-debugging-port a Chrome's command line gives, or None.
 
@@ -96,7 +94,7 @@ def port_of(pid):
 
 
 def check_folder(folder):
-    """Raise unless a Chrome folder holds the one profile PROFILE and no other.
+    """Raise unless a Chrome folder holds no Chrome profile but PROFILE.
 
     Args:
         folder (str): the Chrome's --user-data-dir.
@@ -104,57 +102,71 @@ def check_folder(folder):
     path = os.path.join(folder, "Local State")
     try:
         with open(path) as handle:
-            names = sorted(json.load(handle)["profile"]["info_cache"])
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise CdpError("cannot read which profiles the Chrome folder holds from %s (%s)" % (path, exc))
-    if names != [PROFILE]:
+            # A new folder's Chrome lists no Chrome profile until its first tab loads one.
+            names = sorted(json.load(handle).get("profile", {}).get("info_cache", {}))
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        raise CdpError("cannot read which Chrome profiles the Chrome folder holds from %s (%s)" % (path, exc))
+    if set(names) - {PROFILE}:
         raise CdpError(
-            "the Chrome folder %s holds the profiles %s, and only %r is ever driven, so a tab on any other "
-            "would act as the wrong account" % (folder, ", ".join(names) or "(none)", PROFILE)
+            "the Chrome folder %s holds the Chrome profiles %s, and only %r is ever driven, so a tab on any other "
+            "would act as the wrong account" % (folder, ", ".join(names), PROFILE)
         )
 
 
-def require():
-    """The School Chrome's /json/version, or a CdpError that says what is wrong and what to do."""
+def require(profile):
+    """A profile's Chrome's /json/version, or a CdpError that says what is wrong and what to do.
+
+    Args:
+        profile (Profile): whose Chrome must be what answers on its port.
+    """
+    pid = listener(profile.port)
+    running = owner(profile.folder)
+    if pid is None and running is None:
+        # Checked before the folder, which a new profile's Chrome has not yet filled.
+        raise NotRunning("the %s Chrome is not running: nothing is listening on port %d. tab_open or the page's Open "
+                         "Chrome starts it" % (profile.name, profile.port))
+    if pid is None:
+        raise CdpError(
+            "the %s Chrome is running (pid %d) without DevTools on port %d. If it was started seconds ago, wait "
+            "and try again; otherwise Chrome only reads the port at startup, so quit it fully (Cmd+Q), and the "
+            "next tab_open or Open Chrome starts it with its port" % (profile.name, running, profile.port)
+        )
+    if pid != running:
+        raise CdpError(
+            "port %d is held by pid %d, which is not the %s Chrome (%s):\n  %s\n"
+            "Quit that; the next tab_open or Open Chrome starts the %s Chrome"
+            % (profile.port, pid, profile.name, "that is pid %d" % running if running else "it is not running",
+               _command(pid)[:200] or "(it has exited)", profile.name)
+        )
     try:
-        check_folder(DATA_DIR)
+        check_folder(profile.folder)
     except CdpError as exc:
         raise CdpError("%s. Stop and tell Joshua" % exc)
-    pid = listener()
-    school = school_chrome()
-    if pid is None:
-        if school:
-            raise CdpError(
-                "the School Chrome is running (pid %d) without DevTools on port %d. If it was started seconds "
-                "ago, wait and try again; otherwise Chrome only reads the port at startup, so quit it fully "
-                "(Cmd+Q) and start it with ./start" % (school, PORT)
-            )
-        raise CdpError("nothing is listening on port %d. Start the School Chrome with ./start" % PORT)
-    if pid != school:
-        raise CdpError(
-            "port %d is held by pid %d, which is not the School Chrome (%s):\n  %s\n"
-            "Quit that, then start the School Chrome with ./start"
-            % (PORT, pid, "that is pid %d" % school if school else "it is not running", _command(pid)[:200] or "(it has exited)")
-        )
-    info = _get("/json/version")
+    info = _get(profile, "/json/version")
     if not isinstance(info, dict) or "webSocketDebuggerUrl" not in info:
-        raise CdpError("the School Chrome holds port %d, but what answers there is not DevTools" % PORT)
+        raise CdpError("the %s Chrome holds port %d, but what answers there is not DevTools" % (profile.name, profile.port))
     return info
 
 
 class Browser:
-    """The browser-wide connection. Commands carry a session id to reach a tab."""
+    """A profile's browser-wide connection. Commands carry a session id to reach a tab."""
 
-    def __init__(self):
-        self._ws = WebSocket(require()["webSocketDebuggerUrl"], CALL_WAIT)
+    def __init__(self, profile):
+        """
+        Args:
+            profile (Profile): whose Chrome to connect to, once require proves it.
+        """
+        self.profile = profile
+        self._ws = WebSocket(require(profile)["webSocketDebuggerUrl"], CALL_WAIT)
         self._last = 0
         self._events = []
         # lsof sees only this user's processes, so the browser that answered says which process it is.
         answered = [p["id"] for p in self.call("SystemInfo.getProcessInfo")["processInfo"] if p.get("type") == "browser"]
-        if answered != [school_chrome()]:
+        if answered != [owner(profile.folder)]:
             self.close()
-            raise CdpError("what answered on port %d is pid %s, not the School Chrome's. Quit it, then start the "
-                           "School Chrome with ./start" % (PORT, ", ".join(map(str, answered)) or "unknown"))
+            raise CdpError("what answered on port %d is pid %s, not the %s Chrome's. Quit it; the next tab_open or "
+                           "Open Chrome starts the %s Chrome" % (profile.port, ", ".join(map(str, answered)) or "unknown",
+                                                     profile.name, profile.name))
         self.pid = answered[0]
 
     def call(self, method, session=None, **params):

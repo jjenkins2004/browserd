@@ -2,28 +2,29 @@
 
 ## Module TL;DR
 
-The browser MCP server: it starts and owns Joshua's School Chrome and serves tools to Claude
-sessions over HTTP on `127.0.0.1:9230`, so pages are read and driven inside his logged-in
-session. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage tabs by short tab ids;
+The browser MCP server: it starts and owns one Chrome per profile and serves tools to Claude
+sessions over HTTP on `127.0.0.1:9230`, so pages are read and driven inside that profile's
+logged-in session. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage tabs by short tab ids;
 `queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
 records every call in that tab's record folder, `../.run/calls/<tab>/`. The browserd page, at
-`http://127.0.0.1:9231/`, lists the profiles kept in `../.run/state.db` and makes new ones; the tools drive
-only the School Chrome. Python standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`;
+`http://127.0.0.1:9231/`, lists the profiles kept in `../.run/state.db`, makes new ones and opens a
+profile's Chrome; the tools drive the profile named School. Python standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`;
 run `npm ci`).
 
-    ../start    start the server and the School Chrome, in the background
-    ../stop     stop the server, which quits the School Chrome
+    ../start    start the server in the background; no Chrome starts with it
+    ../stop     stop the server, which quits every profile's Chrome
 
 ## Directory Layout
 
     browser/
       ws.py        RFC 6455 cut down to one local, trusted, text-only connection
       cdp.py       which Chrome, port proof, one websocket to it
-      launch.py    starts the School Chrome, or adopts one already up
+      launch.py    starts a profile's Chrome, or adopts one already up
+      chromes.py   each profile's Chrome: started on first use, focus kept, quit at stop
       tabs.py      short tab ids; open, list, show, close
       focus.py     the Mac's focus: which app has it; gives it back from tabs pages open
       mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch
-      server.py    the server process: tools, Chrome lifecycle, pid file
+      server.py    the server process: tools, page, pid file
       service.py   ../start and ../stop: background start, locked; stop by pid
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
       worker.py    one tab's process, paired with its page; Workers registry
@@ -34,27 +35,37 @@ run `npm ci`).
       record.py    one queue call's numbered files in a folder
       profiles.py  Profile (name, folder, port); what a new profile is given
       state.py     .run/state.db: the profiles
-      page.py      the browserd page on 9231: GET /state, POST /profiles
+      page.py      the browserd page on 9231: GET /state, POST /profiles and /open
       page.html    the page itself: one file, plain JavaScript, polls /state
     ../start, ../stop           launchers
     ../.run/                    gitignored: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<tab>/; a tab's log and calls/<tab>/ go at start once 7 days unused
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
     ../tests/check_server.py    protocol, tab ids, focus, queue, recording, profiles, page, service; live tabs, queue
-    ../tests/check_browser.py   framing, School Chrome proof, launch; live proof, tab load
+    ../tests/check_browser.py   framing, a profile's Chrome proof, launch; live proof, tab load
+    ../tests/throwaway.py       the live checks' own Chrome, on a new folder and a free port
 
 ## Core Abstractions & Shared Pieces
 
-**`cdp.require()`** is the proof that port 9223 is the School Chrome, and every connection goes
-through it: `cdp.Browser()` and `launch.launch()` both call it. The fixed facts it checks against
-live at the top of `cdp.py`: port 9223, folder `~/Library/Application Support/Google/Chrome-School`
-(not Chrome's default folder, where Chrome refuses a debugging port), profile `Default` (named
-School), and Chrome's binary path. **`cdp.Browser`** is one browser-wide websocket; a command
-carries a session id to reach a tab, and `pid` is the School Chrome's, as `SystemInfo.getProcessInfo` gave it.
+**`cdp.require(profile)`** is the proof that a profile's port is that profile's Chrome, and every connection
+goes through it: `cdp.Browser(profile)` and `launch.launch(profile)` both call it. It checks against the
+profile's port and folder (never Chrome's default folder, where Chrome refuses a debugging port), the one
+Chrome profile `cdp.PROFILE` (`Default`), and Chrome's binary path. A Chrome not running at all is
+`cdp.NotRunning`, found before the folder's `Local State` is read, since a new profile's folder stays empty until its Chrome
+first starts. **`cdp.Browser`** is one browser-wide websocket; a command carries a session id to reach a tab,
+`pid` is that Chrome's, as `SystemInfo.getProcessInfo` gave it, and `profile` is whose it is.
+
+**`chromes.Chromes`** is where the server starts and quits each profile's Chrome; it keeps no list of running
+ones, asking `cdp.owner` each time. `ensure(profile)` starts a profile's
+Chrome with `launch.launch` unless it is up, one start at a time per folder, and sends SIGTERM to a Chrome
+it launched but never saw answer. It then runs `focus.keep` for that Chrome on a connection of its own: a
+thread that ends when the Chrome quits and starts again with it. `adopt` does the same for every profile's
+Chrome already running as the server starts, `window` is the page's Open Chrome, and `quit_all` quits every
+running one when the server stops, once any start under way has finished; no Chrome starts after it.
 
 **`profiles.Profile`** is one Chrome: a name, its folder (`--user-data-dir`) and its debugging port.
 **`state.State`** keeps them in `../.run/state.db`, one SQLite connection shared by the server's threads; the
 file is gitignored, so each person's profiles stay theirs, and a name is taken whatever its case. Not a Chrome
-profile: a folder taken over must hold only Chrome's `Default` one.
+profile: a folder taken over must hold no Chrome profile but Chrome's `Default` one.
 **`profiles.make`**, which only the page's New profile button calls, adds one: either a new folder,
 `~/Library/Application Support/Google/Chrome-<name>`, made empty, or one of `profiles.free_folders` (a
 `Chrome-*` folder there that no profile uses) taken over with its logins, once `cdp.check_folder` passes.
@@ -62,12 +73,15 @@ Its port is the one that folder's Chrome already runs with, when no profile has 
 to 9299 that no profile has, the server does not hold (9230, 9231), and nothing listens on.
 
 **`page.Page`** serves the page on 9231 on a thread of the server's own: `GET /` the HTML, `GET /state` every
-profile and the folders a new one may take over, `POST /profiles` a new profile; a `ProfileError` is answered as
-`{"error": ...}` for the page to show.
+profile with its Chrome's pid (or `null`, not running) and the folders a new one may take over, `POST
+/profiles` a new profile, `POST /open` a window of a profile's Chrome in front, at a URL or blank. A
+`ProfileError`, `page.Refused` or `cdp.CdpError` is answered as `{"error": ...}` for the page to show.
 
 **`tabs.Tabs`** maps four-character tab ids (`k3f9`) to DevTools target ids. It opens a new
-`cdp.Browser` for every operation, so every tab tool re-proves the Chrome. Ids live in the server
-process only.
+`cdp.Browser` for every operation, through its `connect`, so every tab tool re-proves the Chrome; `open`
+first calls its `start`, which starts the profile's Chrome, and a Chrome not running lists no tabs. Ids live
+in the server process only. The server's one `Tabs` reaches the profile named `server.SCHOOL` (School),
+looked up at each call; with no such profile, every tool refuses, naming the page.
 
 **`mcp.Server`** takes tools as dicts (`name`, `description`, `inputSchema`, `run(arguments)`).
 `run` returns a string, a list of MCP content items, or a whole result dict, which is passed through
@@ -80,7 +94,9 @@ before that reaches a path, and once its arguments pass, makes a `record.Call`, 
 and writes what came back through `_recorded`, a raised error included.
 
 **`worker.Worker`** is one tab's `devtools.Devtools` process and its page id there, behind a lock,
-so one tab's queues run in turn and different tabs run at once. `Worker.ensure()` starts and pairs
+so one tab's queues run in turn and different tabs run at once. The process is pointed at the tab's
+profile's Chrome (`--browser-url`), and `Worker.connect` is how the queue's dialog answerer and paste
+reach the tab. `Worker.ensure()` starts and pairs
 the process on the tab's first queue, and again after it dies. **`worker.Workers`** holds
 one per tab id. `tab_close`, `tab_list` (for tabs no longer open) and a queue on a tab a
 fresh listing no longer shows drop it; any other failure to reach a tab leaves its process and uids
@@ -100,66 +116,66 @@ whole of it saved as `<n>-step<k>-reply.txt`. A failed queue's view of the page 
 step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view saved as
 `<n>-page-now-reply.txt`.
 
-**Server lifecycle**, in `server.serve()`: ask a chrome-devtools-mcp process for its tool list (no
-browser needed), bind 9230, open `.run/state.db` and bind the page's 9231, install SIGTERM/SIGINT handlers, write `.run/server.pid`, remove each
-tab's record folder and `devtools-<tab>.log` unused for `server.KEEP_DAYS` (7; `server.prune`, which
-touches only names shaped like a tab id), then `launch.launch()` (start the School Chrome, or adopt it once `require` passes), then serve. If
-`launch` fails after this start launched Chrome, that Chrome is sent SIGTERM. A watcher polls
-`cdp.school_chrome()` every 2s, and when Chrome quits the server stops. Another thread runs `focus.keep` on a connection of its own; if that
-connection fails, it logs so and gives no more focus back until the server restarts. When the server stops, every
-tab's process is stopped; unless Chrome already quit, it sends `Browser.close` and waits for Chrome
-to exit, and if Chrome has not exited 15s later the server logs it and stops anyway.
+**Server lifecycle**, in `server.serve()`: open `.run/state.db`, ask a chrome-devtools-mcp process for its
+tool list (no browser needed), bind 9230 and the page's 9231, install SIGTERM/SIGINT handlers, write
+`.run/server.pid`, remove each tab's record folder and `devtools-<tab>.log` unused for `server.KEEP_DAYS`
+(7; `server.prune`, which touches only names shaped like a tab id), `chromes.adopt` every profile's Chrome
+already running, then serve the page on a thread and the tools. No Chrome starts with the server, and one
+quitting leaves the server up. When the server stops, every tab's process is stopped, and
+`chromes.quit_all` sends each running Chrome `Browser.close` and waits for it to exit; one not exited 15s
+later is logged, and the server stops anyway.
 
 ## Agent Gotchas & Invariants (⚠️)
 
-- **An answer on 9223 proves nothing by itself.** `require` stops with a `CdpError` naming what is
+- **An answer on a profile's port proves nothing by itself.** `require` stops with a `CdpError` naming what is
   wrong and what to do when:
-  - the folder's `Local State` is unreadable or lists any profile but `Default`;
-  - nothing listens on 9223;
-  - the School Chrome runs without its port (Chrome reads the port only at startup);
+  - nothing listens on the port and no Chrome holds the folder (`cdp.NotRunning`);
+  - the folder's `Local State` is unreadable or lists any Chrome profile but `Default` (a Chrome that has
+    not yet shown a tab lists none, which passes);
+  - the profile's Chrome runs without its port (Chrome reads the port only at startup);
   - more than one process listens, since `127.0.0.1` may reach the unchecked one;
-  - the listener is not the School Chrome;
+  - the listener is not the profile's Chrome;
   - no DevTools answer comes back;
   - `lsof` or `ps` cannot run, hangs past 10s, or prints an error, since a blocked `lsof` reads
     like an empty port.
-- **The School Chrome is whoever holds `SingletonLock`.** That symlink in the folder ends in the
+- **A profile's Chrome is whoever holds `SingletonLock` in its folder.** That symlink ends in the
   owning pid, and `ps` must show that pid's command line starting with Chrome's binary, so a lock
   left by a crash is not trusted. A command line alone never is: `ps` joins arguments with spaces,
   and argv[0] can be set to anything. `Browser()` also asks the browser that answered for its own
   pid (`SystemInfo.getProcessInfo`), because `lsof` sees only this user's processes.
-- **`require` proves the browser, not the tab.** An Incognito, Guest or other profile's window is
+- **`require` proves the browser, not the tab.** An Incognito, Guest or other Chrome profile's window is
   another browser context, and `Tabs` neither lists such a tab nor gives it an id, only counting
-  it. Chrome's default context is its last-used profile, and `Local State` reaches disk seconds
-  after a profile is added, so for those seconds a new profile's tab would pass. No Chrome profile is
-  ever to be added to this folder.
-- **A School Chrome with no window open has no profile loaded.** macOS keeps Chrome running after
-  its last window closes, and Chrome then unloads the profile, so `Target.getBrowserContexts` names
+  it. Chrome's default context is its last-used Chrome profile, and `Local State` reaches disk seconds
+  after a Chrome profile is added, so for those seconds a new Chrome profile's tab would pass. No Chrome
+  profile is ever to be added to a profile's folder.
+- **A Chrome with no window open has no Chrome profile loaded.** macOS keeps Chrome running after
+  its last window closes, and Chrome then unloads its Chrome profile, so `Target.getBrowserContexts` names
   no default context. With no page open either, `Tabs` lists no tabs rather than refusing, and
-  `tab_open`'s `Target.createTarget` loads the profile again. No default context beside open pages
+  `tab_open`'s `Target.createTarget` loads it again. No default context beside open pages
   is still refused, since those tabs cannot be told apart.
-- **Nothing but `tab_show` leaves the School Chrome with the Mac's focus.** Chrome raises itself over
+- **Nothing but `tab_show` and the page's Open Chrome leaves a profile's Chrome with the Mac's focus.** Chrome raises itself over
   the app in front each time it shows a window. macOS lets it at launch, even under `open -g`, and
   after that only once Chrome has been in front at least once. So `launch` starts it with `open -g`
   and `--no-startup-window`: with no window, its last session's tabs do not come back, and the first
   `tab_open` makes one. Nothing stops Chrome raising itself for a tab a page opens (a `target=_blank`
   link, a `window.open` popup), so `focus.keep` hears its `Target.targetCreated` (a page with an
-  `openerId`) 10 to 30ms after the click and, if the School Chrome takes the Mac's focus within
+  `openerId`) 10 to 30ms after the click and, if that Chrome takes the Mac's focus within
   `focus.TAKE_WAIT` (Chrome was measured taking it 50 to 90ms after the click), gives the focus back
-  to the app that had it. With the School Chrome in front when the event comes, as after Joshua's own
+  to the app that had it. With that Chrome in front when the event comes, as after Joshua's own
   click, it leaves the focus there; it logs a line for each such tab.
 - **Tabs open in the background.** `Tabs.open` creates the tab with `background: true`, so the
   Mac's focus never moves; without it, `Target.createTarget` brings Chrome to the front. Opening
   goes `about:blank`, attach, `Page.enable`, then navigate: Chrome can finish a load before a later
   `Page.enable` would hear it. A navigation the site has not answered by the websocket's 20s
   (`cdp.Late`) leaves the tab open and loading; a URL Chrome refuses is `could not open <url>: <why>`.
-  For `tab_show`, `Target.activateTarget` picks the tab, and `focus.bring` brings the School Chrome
+  For `tab_show`, `Target.activateTarget` picks the tab, and `focus.bring` brings the tab's Chrome
   to the front by pid, which `activateTarget` alone does not do for a Chrome never yet in front; when
   macOS refuses, `tab_show` fails.
 - **Tabs opened by hand get an id at `tab_list`.** An id dies with the server, and a tab closed
   outside the server loses its id on the next use.
 - **The MCP port, 9230, refuses any request with an `Origin` header, a `Host` other than
   `127.0.0.1:9230` or `localhost:9230`, or a body that is not `application/json`.** A web page
-  open in the School Chrome could otherwise POST to it and drive the browser.
+  open in any Chrome could otherwise POST to it and drive the browser.
 - **The page has a port of its own, 9231,** so the MCP port keeps refusing every request with an `Origin`. Every
   page request must carry a `Host` of `127.0.0.1:9231` or `localhost:9231`, and no `Origin` but the page's own;
   a POST must carry that one. `GET /state` and every POST must also carry `X-Browserd-Token`, a random value
@@ -329,8 +345,9 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     and a folder's running Chrome, and `page_offline` for `.run/state.db` and the Google folder, each in a
     temporary folder;
     `service_offline` for the spawned server, with real `ps`.
-  - **Live:** the live groups need the School Chrome up. Nothing listening on 9223 skips them;
-    anything else wrong with the port is a failure. `queue_live` also needs `npm ci` done, and skips
+  - **Live:** the live groups start a Chrome of their own, `throwaway.chrome()`, on a new folder under
+    `$TMPDIR` and a free port, and quit it after, so no live check touches a profile's Chrome; with no
+    Chrome installed they skip. `queue_live` also needs `npm ci` done, and skips
     without it, and records into a temporary folder; its checked steps run on a local page whose
     dropdowns and one textarea take only trusted input, whose Parse resume button runs a stand-in resume parser,
     whose Quoted editor curls quotes as they are typed, and whose Warn me confirm, clicked with no handle_dialog
@@ -339,5 +356,5 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; a tab already open is never touched. No live check moves the Mac's focus:
     `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
-  - **Never automated:** `../start` and `../stop` are never run against the real School Chrome,
-    because stopping quits it.
+  - **Never automated:** `../start` and `../stop` are never run, because stopping quits every profile's
+    Chrome.

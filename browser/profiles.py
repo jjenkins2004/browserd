@@ -26,6 +26,10 @@ class Profile(NamedTuple):
     folder: str  # the Chrome's --user-data-dir
     port: int  # its --remote-debugging-port
 
+    @property
+    def endpoint(self):
+        return "http://127.0.0.1:%d" % self.port
+
 
 class ProfileError(Exception):
     """A new profile refused, in words for the page."""

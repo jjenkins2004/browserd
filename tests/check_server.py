@@ -23,14 +23,17 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from browser import cdp, checked, clipboard, dialogs, focus, mcp, page, profiles, record, server, service, steps
+import throwaway
+from browser import cdp, checked, chromes, clipboard, dialogs, focus, mcp, page, profiles, record, server, service, steps
 from browser.devtools import PACKAGE, Devtools
+from browser.profiles import Profile
 from browser.state import State
 from browser.tabs import LETTERS, Tabs
 from browser.worker import Workers, returned
 from browser.ws import WebSocketError
 
 passed, failed, skipped = [], [], []
+STAND_IN = Profile("School", "/nowhere/Chrome-School", 9223)  # the profile offline checks name; no Chrome is behind it
 
 
 def check(name, condition, detail=""):
@@ -227,6 +230,7 @@ class FakeChrome:
 
 class FakeConnection:
     pid = 4242
+    profile = STAND_IN
 
     def __init__(self, chrome):
         self.chrome = chrome
@@ -338,7 +342,7 @@ def tabs_offline():
     check("an id of the wrong shape is refused as no tab id at all", "'../..' is not a tab id" in refusal(lambda: tabs.show("../..")))
     focus.bring = lambda pid: False
     check("show fails when macOS does not bring the School Chrome to the front",
-          "did not bring the School Chrome" in refusal(lambda: tabs.show(tab)))
+          "did not bring that Chrome" in refusal(lambda: tabs.show(tab)))
     focus.bring = lambda pid: brought.append(pid) or True
 
     tabs.close(tab)
@@ -346,12 +350,25 @@ def tabs_offline():
     check("and forgets its id", "no tab has the id" in refusal(lambda: tabs.close(tab)))
 
     chrome.default = None
-    check("a Chrome that names no School browser context is refused", "School profile" in refusal(tabs.list))
+    check("a Chrome that names no School browser context is refused", "its Chrome profile" in refusal(tabs.list))
     open_targets, chrome.targets = chrome.targets, []
     check("a Chrome with no window open lists no tabs", tabs.list() == ([], 0))
     chrome.targets = open_targets
     chrome.default = "school"
     check("every connection opened was closed", chrome.open_connections == 0, repr(chrome.open_connections))
+
+    started = []
+    starting = Tabs(chrome.connect, lambda: started.append(len(chrome.created)))
+    starting.open("https://example.com/started")
+    check("open starts the profile's Chrome before it opens the tab", started == [len(chrome.created) - 1], repr(started))
+
+    def not_running():
+        raise cdp.NotRunning("the School Chrome is not running: nothing is listening on port 9223. tab_open starts it")
+
+    down = Tabs(not_running, lambda: started.append("started"))
+    check("a Chrome that is not running lists no tabs, and is not started by a list", down.list() == ([], 0)
+          and started[-1] != "started")
+    check("and a tab id is refused as no tab", "no tab has the id" in refusal(lambda: down.target("k3f9")))
 
     httpd = serving(server.tab_tools(Tabs(chrome.connect), Workers(tempfile.gettempdir())))
     try:
@@ -362,7 +379,7 @@ def tabs_offline():
         check("tab_open answers with the tab id first", not is_error and re.fullmatch(r"[%s]{4}" % LETTERS, opened), text)
         text, is_error = call(httpd, "tab_list")
         check("tab_list lists it by that id", not is_error and opened in text, text)
-        check("tab_list says how many tabs it is not listing", "outside the School profile" in text, text)
+        check("tab_list says how many tabs it is not listing", "in another browser context" in text, text)
         text, is_error = call(httpd, "tab_show", tab=opened)
         check("tab_show answers with the tab's id and URL", not is_error and text.split()[0] == opened
               and "https://example.com/c" in text, text)
@@ -427,7 +444,7 @@ def focus_offline():
               repr(browser.calls))
         _, lines = kept([created("P1")], [FakeEvents.pid, FakeEvents.pid])
         check("nothing is given back when the School Chrome was in front already, as after Joshua's own click, "
-              "and that is logged", brought == [] and lines == ["left the Mac's focus with the School Chrome, which "
+              "and that is logged", brought == [] and lines == ["left the Mac's focus with this Chrome, which "
                                                                "had it when a page opened https://example.com/P1"],
               repr((brought, lines)))
         focus.front = lambda: None
@@ -689,13 +706,14 @@ def queue_offline():
         waits()
 
         workers = Workers(workdir)
-        first = workers.get("ab12", "T1")
-        check("a tab keeps one worker", workers.get("ab12", "T1") is first)
+        first = workers.get("ab12", "T1", STAND_IN)
+        check("a tab keeps one worker", workers.get("ab12", "T1", STAND_IN) is first)
         stopped = []
         setattr(first, "stop", lambda: stopped.append(True))
         workers.drop("ab12")
-        check("dropping a tab stops its worker and forgets it", stopped == [True] and workers.get("ab12", "T1") is not first)
-        kept, gone = workers.get("keep", "T2"), workers.get("gone", "T3")
+        check("dropping a tab stops its worker and forgets it",
+              stopped == [True] and workers.get("ab12", "T1", STAND_IN) is not first)
+        kept, gone = workers.get("keep", "T2", STAND_IN), workers.get("gone", "T3", STAND_IN)
         setattr(gone, "stop", lambda: stopped.append("gone"))
         setattr(kept, "stop", lambda: stopped.append("kept"))
         workers.drop_except({"keep", "ab12"})
@@ -949,7 +967,7 @@ def dialogs_offline():
     workdir = tempfile.mkdtemp(prefix="browser-dialogs-")
     try:
         called = lambda name: os.path.join(workdir, "001-" + name)
-        dialogs.Answerer = lambda target, handle: saved(target, handle, lambda: FakeDialogs(opens=1))
+        dialogs.Answerer = lambda target, handle, connect: saved(target, handle, lambda: FakeDialogs(opens=1))
         fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False)])
         result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "handle_dialog", "action": "accept"}],
                            called, target="T1")
@@ -957,7 +975,7 @@ def dialogs_offline():
         check("the dialog a handle_dialog step waits on is answered by the queue's own answerer, not chrome-devtools-mcp",
               not result["isError"] and "--- 2 handle_dialog ok" in report and "was accepted as it opened" in report
               and [tool for tool, _ in fake.calls] == ["click"], report)
-        dialogs.Answerer = lambda target, handle: saved(target, handle, lambda: FakeDialogs())
+        dialogs.Answerer = lambda target, handle, connect: saved(target, handle, lambda: FakeDialogs())
         saved_late, dialogs.LATE = dialogs.LATE, 0.2
         fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False),
                              ([{"type": "text", "text": "Error: No open dialog found"}], True)])
@@ -968,7 +986,7 @@ def dialogs_offline():
               result["isError"] and "No open dialog found" in text_of(result["content"])
               and [tool for tool, _ in fake.calls][:2] == ["click", "handle_dialog"], text_of(result["content"]))
         made = []
-        dialogs.Answerer = lambda target, handle: made.append(handle) or saved(target, handle, lambda: FakeDialogs())
+        dialogs.Answerer = lambda target, handle, connect: made.append(handle) or saved(target, handle, lambda: FakeDialogs())
         fake = FakeDevtools([([{"type": "text", "text": "ran"}], False),
                              ([{"type": "text", "text": "Successfully accepted the dialog"}], False)])
         result = steps.run(fake, 7, [{"tool": "evaluate_script", "function": "() => confirm('x')"},
@@ -994,7 +1012,7 @@ class Lent:
 
 
 class Keys:
-    """A connection to the School Chrome that records what it is asked."""
+    """A connection to a profile's Chrome that records what it is asked."""
 
     def __init__(self):
         self.calls = []
@@ -1105,7 +1123,7 @@ def limits_offline():
         check("a long one-line script result is cut mid-line, not dropped", report.count("x") >= steps.REPLY_MOST - 100,
               repr(len(report)))
         saved_answerer = dialogs.Answerer
-        dialogs.Answerer = lambda target, handle: saved_answerer(target, handle, lambda: FakeDialogs(opens=1))
+        dialogs.Answerer = lambda target, handle, connect: saved_answerer(target, handle, lambda: FakeDialogs(opens=1))
         try:
             fake = FakeDevtools([([{"type": "text", "text": "Error: Element uid 1_1 not found"}], True)])
             report = text_of(steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "handle_dialog", "action": "accept"},
@@ -1171,7 +1189,7 @@ def records_offline():
 def recording_offline():
     root = tempfile.mkdtemp(prefix="browser-calls-")
     tabs, workers = Tabs(FakeChrome().connect), Workers(root)
-    tools = [server.queue_tool(tabs, workers, {"take_snapshot": {}, "take_screenshot": {}}, root)]
+    tools = [server.queue_tool(tabs, workers, lambda: STAND_IN, {"take_snapshot": {}, "take_screenshot": {}}, root)]
     httpd = serving(tools)
     try:
         described = tools[0]["inputSchema"]["properties"]["steps"]["description"]
@@ -1209,9 +1227,12 @@ def recording_offline():
 
 
 def quitting():
-    saved = (cdp.Browser, cdp.school_chrome)
+    saved = (cdp.Browser, cdp.owner)
 
     class Drops:
+        def __init__(self, profile):
+            pass
+
         def call(self, method, **params):
             raise WebSocketError("the browser closed the connection")
 
@@ -1220,11 +1241,11 @@ def quitting():
 
     try:
         setattr(cdp, "Browser", Drops)
-        setattr(cdp, "school_chrome", lambda: None)
-        said = refusal(server._quit_chrome, Exception)
+        setattr(cdp, "owner", lambda folder: None)
+        said = refusal(lambda: chromes.quit_chrome(STAND_IN), Exception)
         check("a Chrome that drops the connection as it quits does not break the server's stop", not said, said)
     finally:
-        cdp.Browser, cdp.school_chrome = saved
+        cdp.Browser, cdp.owner = saved
 
 
 def service_offline():
@@ -1358,7 +1379,17 @@ def page_offline():
     saved = (profiles.GOOGLE, profiles.FIRST_PORT)
     workdir = tempfile.mkdtemp(prefix="browser-page-")
     state = State(os.path.join(workdir, "state.db"))
-    board = page.Page("127.0.0.1", 0, state, ())
+
+    class Windows:
+        opened = []
+
+        def window(self, profile, url):
+            if url == "chrome://refused":
+                raise cdp.CdpError("Target.createTarget: refused")
+            self.opened.append((profile.name, url))
+
+    windows = Windows()
+    board = page.Page("127.0.0.1", 0, state, (), windows)
     threading.Thread(target=board.serve_forever, daemon=True).start()
     here = "127.0.0.1:%d" % board.server_address[1]
 
@@ -1402,6 +1433,15 @@ def page_offline():
         status, raw, _ = ask("POST", "/profiles", {"name": "no good"}, **own)
         check("a refusal is answered for the page to show", status == 400 and json.loads(raw)["error"] == profiles.NAME_RULE, raw.decode())
         check("an unknown action is refused", ask("POST", "/nothing", {}, **own)[0] == 404)
+        status, raw, _ = ask("GET", "/state", **{page.TOKEN: board.token})
+        check("state says a profile's Chrome is not running", json.loads(raw)["profiles"][0]["pid"] is None, raw.decode())
+        status, raw, _ = ask("POST", "/open", {"profile": "jobs", "url": "https://example.com/"}, **own)
+        check("Open Chrome opens a window of the named profile's Chrome, whatever the name's case, at the URL",
+              status == 200 and windows.opened == [("Jobs", "https://example.com/")], raw.decode())
+        status, raw, _ = ask("POST", "/open", {"profile": "Nobody"}, **own)
+        check("Open Chrome refuses a profile there is not", status == 400 and "no profile named 'Nobody'" in raw.decode(), raw.decode())
+        status, raw, _ = ask("POST", "/open", {"profile": "Jobs", "url": "chrome://refused"}, **own)
+        check("and passes on why Chrome refused", status == 400 and "refused" in json.loads(raw)["error"], raw.decode())
     finally:
         profiles.GOOGLE, profiles.FIRST_PORT = saved
         board.shutdown()
@@ -1421,16 +1461,9 @@ def front_app():
     return found.group(1) if found else None
 
 
-def live():
-    said = refusal(cdp.require)
-    if said.startswith("nothing is listening"):
-        skipped.append("live")
-        print("\nskipped the live checks: %s" % said)
-        return
-    check("what holds port %d passes require" % cdp.PORT, not said, said)
-    if said:
-        return
-    tabs = Tabs()
+def live(profile):
+    connect = lambda: cdp.Browser(profile)
+    tabs = Tabs(connect)
     before = front_app()
     tab, info = tabs.open("data:text/html,<title>server scratch</title><h1>hi</h1>")
     try:
@@ -1444,23 +1477,23 @@ def live():
     check("a closed tab is gone from the list", tab not in [t for t, _ in tabs.list()[0]])
     check("and its id is refused", "no tab has the id" in refusal(lambda: tabs.target(tab)))
 
-    browser = cdp.Browser()
+    browser = connect()
     context = browser.call("Target.createBrowserContext")["browserContextId"]
     try:
         hidden = browser.call("Target.createTarget", url="about:blank", browserContextId=context,
                               background=True)["targetId"]
         found, outside = tabs.list()
         check("an Incognito-like tab gets no id", hidden not in {info["targetId"] for _, info in found})
-        check("and is counted as outside the School profile", outside >= 1)
+        check("and is counted as in another browser context", outside >= 1)
     finally:
         browser.call("Target.disposeBrowserContext", browserContextId=context)
         browser.close()
 
-    httpd = serving(server.tab_tools(Tabs(), Workers(tempfile.gettempdir())), server.NAME)
+    httpd = serving(server.tab_tools(Tabs(connect), Workers(tempfile.gettempdir())), server.NAME)
     try:
         text, is_error = call(httpd, "tab_open", url="data:text/html,<title>over http</title>")
         opened = text.split()[0] if text else ""
-        check("tab_open works over HTTP against the School Chrome", not is_error and "over http" in text, text)
+        check("tab_open works over HTTP against a profile's Chrome", not is_error and "over http" in text, text)
         check("tab_list over HTTP lists it", opened in call(httpd, "tab_list")[0])
         check("tab_close over HTTP closes it", call(httpd, "tab_close", tab=opened) == ("closed %s" % opened, False))
     finally:
@@ -1727,13 +1760,11 @@ def checked_live(httpd, tabs, opened):
     check("wait for text to go waits for a status that shows a moment after the click", not is_error and "is off the page" in text, text)
 
 
-def queue_live():
+def queue_live(profile):
     if not os.path.exists(PACKAGE):
         skipped.append("queue")
         print("\nskipped the live queue checks: chrome-devtools-mcp is not installed; run npm ci")
         return
-    if refusal(cdp.require):
-        return  # live() has said why
     workdir = tempfile.mkdtemp(prefix="browser-queue-")
     devtools = Devtools(os.path.join(workdir, "tools.log"))
     try:
@@ -1742,9 +1773,10 @@ def queue_live():
         devtools.close()
     check("chrome-devtools-mcp lists the form tools a queue needs",
           {"take_snapshot", "fill", "fill_form", "click", "type_text", "press_key", "upload_file", "evaluate_script"} <= set(allowed))
-    tabs, workers = Tabs(), Workers(workdir)
+    tabs, workers = Tabs(lambda: cdp.Browser(profile)), Workers(workdir)
     root = os.path.join(workdir, "calls")
-    httpd = serving(server.tab_tools(tabs, workers) + [server.queue_tool(tabs, workers, allowed, root)], server.NAME)
+    httpd = serving(server.tab_tools(tabs, workers) + [server.queue_tool(tabs, workers, lambda: profile, allowed, root)],
+                    server.NAME)
     opened = []
     try:
         def open_tab(html):
@@ -1788,7 +1820,7 @@ def queue_live():
         read = "JSON.stringify([document.getElementById('n').value, document.getElementById('e').value, document.title])"
         for tab, who in ((a, "A"), (b, "B")):
             # Read over the server's own connection, not through the pairing this checks.
-            browser = cdp.Browser()
+            browser = cdp.Browser(profile)
             try:
                 session = browser.call("Target.attachToTarget", targetId=tabs.target(tab), flatten=True)["sessionId"]
                 held = json.loads(browser.call("Runtime.evaluate", session=session, expression=read)["result"]["value"])
@@ -1830,7 +1862,7 @@ def queue_live():
         check("a step's argument chrome-devtools-mcp would refuse stops the queue before any step runs, recording nothing",
               is_error and "step 2: take_snapshot does not take bogus" in text and sorted(os.listdir(os.path.join(root, a))) == before, text)
 
-        worker = workers.get(a, tabs.target(a))
+        worker = workers.get(a, tabs.target(a), profile)
         process = worker._devtools._process if worker._devtools else None
         if process:
             process.kill()
@@ -1851,10 +1883,10 @@ def queue_live():
             {"tool": "evaluate_script", "function": "() => document.querySelector('iframe') !== null"}])
         check("and fills", not is_error and "--- 1 fill ok" in text, text)
 
-        closer = cdp.Browser()
+        closer = cdp.Browser(profile)
         try:
             hand = open_tab(same)
-            process = workers.get(hand, tabs.target(hand))
+            process = workers.get(hand, tabs.target(hand), profile)
             call(httpd, "queue", tab=hand, steps=[{"tool": "take_snapshot"}])
             by_hand = process._devtools
             closer.call("Target.closeTarget", targetId=tabs.target(hand))
@@ -1864,7 +1896,7 @@ def queue_live():
         call(httpd, "tab_list")
         check("tab_list stops the chrome-devtools-mcp of a tab closed outside the server", by_hand is not None and not by_hand.alive())
 
-        process = workers.get(b, tabs.target(b))._devtools
+        process = workers.get(b, tabs.target(b), profile)._devtools
         call(httpd, "tab_close", tab=b)
         opened.remove(b)
         check("closing a tab stops its chrome-devtools-mcp", process is not None and not process.alive())
@@ -1915,8 +1947,13 @@ if __name__ == "__main__":
     quitting()
     service_offline()
     print()
-    live()
-    print()
-    queue_live()
+    with throwaway.chrome() as profile:
+        if profile is None:
+            skipped.append("live")
+            print("\nskipped the live checks: Chrome is not installed at %s" % cdp.CHROME)
+        else:
+            live(profile)
+            print()
+            queue_live(profile)
     print("\n%d passed, %d failed%s" % (len(passed), len(failed), ", live checks skipped" if skipped else ""))
     sys.exit(1 if failed else 0)

@@ -1,4 +1,4 @@
-"""Short tab ids, and opening, listing, showing and closing the School Chrome's tabs.
+"""Short tab ids, and opening, listing, showing and closing a profile's tabs.
 
 README.md, "Core Abstractions & Shared Pieces", has the contract.
 """
@@ -19,19 +19,23 @@ def is_id(tab):
 
 
 class Tabs:
-    def __init__(self, connect=None):
+    def __init__(self, connect, start=None):
         """
         Args:
-            connect (callable | None): opens a proven connection to the School Chrome; cdp.Browser unless a check
-                passes a stand-in.
+            connect (callable): opens a proven connection to the profile's Chrome, a cdp.Browser.
+            start (callable | None): starts the profile's Chrome if it is down, before open.
         """
-        self._connect = connect or cdp.Browser
+        self._connect = connect
+        self._start = start or (lambda: None)
         self._lock = threading.Lock()
         self._targets = {}  # tab id -> target id
 
     def _pages(self):
-        """The School-profile tabs as Chrome lists them, and how many tabs are outside that profile."""
-        browser = self._connect()
+        """The profile's tabs as Chrome lists them, and how many tabs are in another browser context."""
+        try:
+            browser = self._connect()
+        except cdp.NotRunning:
+            return [], 0  # a Chrome not running has no tabs, and is started only by open
         try:
             default = browser.call("Target.getBrowserContexts").get("defaultBrowserContextId")
             infos = browser.call("Target.getTargets")["targetInfos"]
@@ -44,9 +48,9 @@ class Tabs:
         if not default:
             if not pages:
                 return [], 0  # no window open, so Chrome unloaded the profile; README.md, "Agent Gotchas"
-            raise cdp.CdpError("the School Chrome did not say which browser context is its School profile")
-        school = [info for info in pages if info.get("browserContextId") == default]
-        return school, len(pages) - len(school)
+            raise cdp.CdpError("the %s Chrome did not say which browser context is its Chrome profile" % browser.profile.name)
+        own = [info for info in pages if info.get("browserContextId") == default]
+        return own, len(pages) - len(own)
 
     def _name(self, target_id):
         """The tab id for a target, made up the first time it is seen. Call with the lock held."""
@@ -60,15 +64,15 @@ class Tabs:
                 return tab
 
     def list(self):
-        """Every School-profile tab as (tab id, target info), and the count of tabs outside it."""
-        school, outside = self._pages()
+        """Every tab of the profile as (tab id, target info), and the count of tabs in another browser context."""
+        own, outside = self._pages()
         # Ids of closed tabs are not dropped here: this snapshot can predate a tab another call just opened.
         # target() drops them when they are next used, and Chrome never reuses a target id.
         with self._lock:
-            return [(self._name(info["targetId"]), info) for info in school], outside
+            return [(self._name(info["targetId"]), info) for info in own], outside
 
     def target(self, tab):
-        """The target id behind a tab id, checked to be an open School-profile tab still.
+        """The target id behind a tab id, checked to be an open tab of the profile still.
 
         Args:
             tab (str): a tab id from list or open.
@@ -79,19 +83,21 @@ class Tabs:
             target = self._targets.get(tab)
         if target is None:
             raise cdp.CdpError("no tab has the id %r; tab_list gives the open tabs their ids" % tab)
-        school, _ = self._pages()
-        if target not in {info["targetId"] for info in school}:
+        own, _ = self._pages()
+        if target not in {info["targetId"] for info in own}:
             with self._lock:
                 self._targets.pop(tab, None)
             raise cdp.CdpError("tab %s is closed" % tab)
         return target
 
     def open(self, url):
-        """Open url in a new background tab, wait for its load, and return (tab id, target info).
+        """Open url in a new background tab, starting the profile's Chrome first if it is down; wait for the tab's load,
+        and return (tab id, target info).
 
         Args:
             url (str): address the new tab navigates to.
         """
+        self._start()
         browser = self._connect()
         try:
             # background keeps Chrome from taking the Mac's focus; README.md, "Agent Gotchas".
@@ -135,10 +141,10 @@ class Tabs:
         try:
             browser.call("Target.activateTarget", targetId=target)
             info = browser.call("Target.getTargetInfo", targetId=target)["targetInfo"]
-            # activateTarget alone does not raise a School Chrome never yet in front; README.md, "Agent Gotchas".
+            # activateTarget alone does not raise a Chrome never yet in front; README.md, "Agent Gotchas".
             if not focus.bring(browser.pid):
-                raise cdp.CdpError("tab %s is picked in the School Chrome, but macOS did not bring the School Chrome "
-                                   "to the front" % tab)
+                raise cdp.CdpError("tab %s is picked in the %s Chrome, but macOS did not bring that Chrome to the front"
+                                   % (tab, browser.profile.name))
             return info
         finally:
             browser.close()

@@ -36,6 +36,12 @@ class State:
             rows = self._db.execute("SELECT name, folder, port FROM profiles ORDER BY name").fetchall()
         return [Profile(*row) for row in rows]
 
+    def profile(self, name):
+        """The profile of that name, whatever its case, or None."""
+        with self._lock:
+            row = self._db.execute("SELECT name, folder, port FROM profiles WHERE name = ?", (name,)).fetchone()
+        return Profile(*row) if row else None
+
     def add_profile(self, profile):
         """Add a profile, or raise sqlite3.IntegrityError when its name, folder or port is taken."""
         with self._lock:

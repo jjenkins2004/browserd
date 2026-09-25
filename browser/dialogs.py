@@ -17,17 +17,16 @@ POLL = 0.5
 class Answerer(threading.Thread):
     """Listens for a tab's next dialog and answers it as the handle_dialog step after the running step asks."""
 
-    def __init__(self, target, handle, connect=None):
+    def __init__(self, target, handle, connect):
         """
         Args:
             target (str): the tab's target id.
             handle (dict): the handle_dialog step: its action, and promptText for a prompt.
-            connect (callable | None): opens a proven connection to the School Chrome; cdp.Browser unless a check
-                passes a stand-in.
+            connect (callable): opens a proven connection to the tab's Chrome, a cdp.Browser.
         """
         super().__init__(daemon=True)
         self._target, self._handle = target, handle
-        self._connect = connect or cdp.Browser
+        self._connect = connect
         self._stopping = threading.Event()  # not _stop, which Thread itself uses before Python 3.13
         self._ready = threading.Event()
         self.opened = None  # the Page.javascriptDialogOpening of the dialog it answered

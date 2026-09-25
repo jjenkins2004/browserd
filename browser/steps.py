@@ -488,7 +488,7 @@ def _text(content):
     return "\n".join(item.get("text", "") for item in content if item.get("type") == "text").strip()
 
 
-def run(devtools, page_id, steps, path, restarted=False, target=None):
+def run(devtools, page_id, steps, path, restarted=False, target=None, connect=None):
     """Run the steps in order and return an MCP result: one text report, then any images the steps returned.
 
     The result is an error when a step failed, or the queue stopped at QUEUE_MOST, so the agent cannot mistake a
@@ -502,6 +502,7 @@ def run(devtools, page_id, steps, path, restarted=False, target=None):
         restarted (bool): the process was started again after dying, so the report says old uids are gone.
         target (str | None): the tab's target id, for answering a dialog the moment it opens and for a paste's key
             press; None leaves every dialog to chrome-devtools-mcp and fails every paste.
+        connect (callable | None): opens a proven connection to the tab's Chrome; given with target.
     """
     report, images, failed = [], [], False
     if restarted:
@@ -519,9 +520,9 @@ def run(devtools, page_id, steps, path, restarted=False, target=None):
             began = time.monotonic()
             following = steps[number] if number < len(steps) else None
             if target and following and following["tool"] == "handle_dialog" and step["tool"] not in OWN_DIALOGS:
-                answerer = dialogs.Answerer(target, following)
+                answerer = dialogs.Answerer(target, following, connect)
                 answerer.start_listening()
-            content, failed = _step(devtools, page_id, step, left, answerer, target)
+            content, failed = _step(devtools, page_id, step, left, answerer, target, connect)
             if step["tool"] == "handle_dialog":
                 answerer = None
             took = time.monotonic() - began
@@ -556,10 +557,10 @@ def run(devtools, page_id, steps, path, restarted=False, target=None):
     return {"content": [{"type": "text", "text": "\n".join(report)}] + images, "isError": failed}
 
 
-def _step(devtools, page_id, step, left, answerer, target):
+def _step(devtools, page_id, step, left, answerer, target, connect):
     """(content, failed) for one step: a checked step, a dialog the answerer answered, a refused fill, or the tool's own."""
     if step["tool"] in checked.STEPS:
-        text, failed = checked.run(devtools, page_id, step, left, target)
+        text, failed = checked.run(devtools, page_id, step, left, target, connect)
         return [{"type": "text", "text": text}], failed
     if step["tool"] == "handle_dialog" and answerer is not None:
         answered = answerer.answered(min(dialogs.LATE, left))

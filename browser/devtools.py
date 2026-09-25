@@ -20,7 +20,6 @@ PACKAGE = os.path.join(ROOT, "node_modules", "chrome-devtools-mcp", "build", "sr
 # ROOT holds the record folders a queue saves screenshots in, wherever this project sits.
 FILE_ROOTS = [DESKTOP, ROOT, "/private/tmp"]
 FLAGS = [
-    "--browser-url=%s" % cdp.ENDPOINT,
     "--no-usage-statistics", "--no-performance-crux",
     "--no-category-performance", "--no-category-network", "--no-category-emulation",
     *("--workspace=%s" % root for root in FILE_ROOTS),
@@ -39,12 +38,14 @@ def may_touch(path):
 
 
 class Devtools:
-    def __init__(self, log_path):
-        """Start chrome-devtools-mcp pointed at the School Chrome, which it connects to on its first tool call, and finish the
-        MCP handshake.
+    def __init__(self, log_path, endpoint=None):
+        """Start chrome-devtools-mcp pointed at a profile's Chrome, which it connects to on its first tool call, and
+        finish the MCP handshake.
 
         Args:
             log_path (str): where the process's stderr goes.
+            endpoint (str | None): the Chrome's DevTools address, like http://127.0.0.1:9223; None only to list the
+                tools, which needs no browser.
         """
         node = shutil.which("node")
         if node is None:
@@ -56,7 +57,7 @@ class Devtools:
             # Any NODE_DEBUG namespace would copy what is typed into this file: mcp:log writes each tool call's
             # arguments, puppeteer:protocol each CDP message.
             self._process = subprocess.Popen(
-                [node, PACKAGE, *FLAGS], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
+                [node, PACKAGE, *FLAGS, *(["--browser-url=%s" % endpoint] if endpoint else [])], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
                 text=True, env=dict({key: value for key, value in os.environ.items() if key != "NODE_DEBUG"}, **QUIET),
             )
         self._messages = queue.Queue()

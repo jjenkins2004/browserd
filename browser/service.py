@@ -1,4 +1,4 @@
-"""../start and ../stop: run the browser MCP server in the background, or stop it and the School Chrome with it."""
+"""../start and ../stop: run the browser MCP server in the background, or stop it and every profile's Chrome with it."""
 
 import fcntl
 import json
@@ -86,7 +86,7 @@ def start():
 
 
 def stop():
-    """Stop the server, which quits the School Chrome, and return a line saying what happened."""
+    """Stop the server, which quits every profile's Chrome, and return a line saying what happened."""
     pid = _pid()
     if pid is None or not _is_server(pid):
         if answering() == server.NAME:
@@ -97,7 +97,7 @@ def stop():
     deadline = time.time() + STOP_WAIT
     while time.time() < deadline:
         if not _is_server(pid):
-            return "stopped the browser MCP server and the School Chrome"
+            return "stopped the browser MCP server and every profile's Chrome"
         time.sleep(0.25)
     raise SystemExit("the browser MCP server (pid %d) is still running after %gs; see %s" % (pid, STOP_WAIT, server.LOG_FILE))
 

@@ -24,11 +24,15 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: v
 .status { color: var(--muted); font-size: 13px; }
 .status.bad { color: var(--bad); }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
-.profile { display: grid; grid-template-columns: minmax(90px, 160px) 70px 1fr; gap: 12px; align-items: baseline;
-  padding: 12px 16px; border-top: 1px solid var(--line); }
+.profile { padding: 12px 16px; border-top: 1px solid var(--line); }
 .profile:first-child { border-top: 0; }
+.head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
 .name { font-weight: 600; }
-.port, .folder { color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.state { font-size: 12px; color: var(--muted); }
+.state.up { color: var(--good); }
+.where { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; margin-top: 2px; }
+.profile form { padding: 10px 0 0; }
+.profile .said { padding: 8px 0 0; }
 .empty { padding: 16px; color: var(--muted); }
 form { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 16px; align-items: center; }
 input, select, button { font: inherit; color: inherit; }
@@ -42,10 +46,6 @@ button:disabled { opacity: .5; cursor: default; }
 .said:empty { display: none; }
 .said.bad { color: var(--bad); }
 .said.good { color: var(--good); }
-@media (max-width: 560px) {
-  .profile { grid-template-columns: 1fr auto; }
-  .folder { grid-column: 1 / -1; }
-}
 </style>
 </head>
 <body>
@@ -53,7 +53,7 @@ button:disabled { opacity: .5; cursor: default; }
   <header><h1>browserd</h1><span class="status" id="status">connecting…</span></header>
 
   <h2>Profiles</h2>
-  <div class="panel" id="profiles"><div class="empty">No profiles yet.</div></div>
+  <div class="panel" id="profiles"><div class="empty" id="empty">No profiles yet.</div></div>
 
   <h2>New profile</h2>
   <div class="panel">
@@ -88,13 +88,71 @@ function el(tag, className, text) {
   return node;
 }
 
+function tell(said, text, good) {
+  said.textContent = text;
+  said.className = "said " + (good ? "good" : "bad");
+}
+
+function profileRow(name) {
+  const node = el("div", "profile");
+  const status = el("span", "state");
+  const head = el("div", "head");
+  head.append(el("span", "name", name), status);
+  const where = el("div", "where");
+  const form = el("form");
+  const url = el("input");
+  url.placeholder = "URL to open, or blank";
+  url.autocomplete = "off";
+  url.spellcheck = false;
+  const button = el("button", "", "Open Chrome");
+  button.type = "submit";
+  form.append(url, button);
+  const said = el("div", "said");
+  node.append(head, where, form, said);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    button.disabled = true;
+    try {
+      await api("/open", {profile: name, url: url.value.trim()});
+      url.value = "";
+      said.textContent = "";
+      await refresh();
+    } catch (error) {
+      tell(said, error.message, false);
+    } finally {
+      button.disabled = false;
+    }
+  });
+  return {node, status, where};
+}
+
+// Rows are kept and changed in place, never rebuilt, so a URL being typed survives each poll.
+const rows = new Map();
 function showProfiles(profiles) {
   const box = document.getElementById("profiles");
-  box.replaceChildren(...(profiles.length ? profiles.map((p) => {
-    const row = el("div", "profile");
-    row.append(el("span", "name", p.name), el("span", "port", ":" + p.port), el("span", "folder", p.folder));
-    return row;
-  }) : [el("div", "empty", "No profiles yet.")]));
+  const names = new Set(profiles.map((p) => p.name));
+  for (const [name, row] of rows) {
+    if (!names.has(name)) {
+      row.node.remove();
+      rows.delete(name);
+    }
+  }
+  let before = null;
+  for (const p of profiles) {
+    let row = rows.get(p.name);
+    if (!row) {
+      row = profileRow(p.name);
+      rows.set(p.name, row);
+    }
+    row.status.textContent = p.pid ? "running, pid " + p.pid : "not running";
+    row.status.className = "state" + (p.pid ? " up" : "");
+    row.where.textContent = "port " + p.port + " · " + p.folder;
+    if (row.node.previousElementSibling !== before || row.node.parentNode !== box) {
+      if (before) before.after(row.node); else box.prepend(row.node);
+    }
+    before = row.node;
+  }
+  document.getElementById("empty").hidden = profiles.length > 0;
 }
 
 let shownFolders = null;
@@ -138,13 +196,11 @@ document.getElementById("new").addEventListener("submit", async (event) => {
       name: document.getElementById("name").value.trim(),
       folder: document.getElementById("folder").value,
     });
-    said.textContent = "Made " + made.name + ": folder " + made.folder + ", port " + made.port + ".";
-    said.className = "said good";
+    tell(said, "Made " + made.name + ": folder " + made.folder + ", port " + made.port + ".", true);
     document.getElementById("name").value = "";
     await refresh();
   } catch (error) {
-    said.textContent = error.message;
-    said.className = "said bad";
+    tell(said, error.message, false);
   } finally {
     button.disabled = false;
   }

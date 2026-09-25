@@ -1,4 +1,4 @@
 #!/bin/sh
-# Stop the browser MCP server, which quits the School Chrome with it. Works from any directory.
+# Stop the browser MCP server, which quits every profile's Chrome with it. Works from any directory.
 DIR=$(cd "$(dirname "$0")" && pwd)
 exec env PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -m browser.service stop "$@"

@@ -383,7 +383,7 @@ def _holds_text(devtools, page_id, uid, text, focused):
         raise
 
 
-def paste(devtools, page_id, step, target, connect=None):
+def paste(devtools, page_id, step, target, connect):
     """Put text in with a real paste, Meta+V from the Mac's clipboard, which an editor takes as it is: no quotes
     curled, brackets closed or lines indented, as typing gets.
 
@@ -392,8 +392,7 @@ def paste(devtools, page_id, step, target, connect=None):
         page_id (int): the tab's page id in it.
         step (dict): {"tool": "paste", "text": what to paste, "uid"?: a text box's uid}.
         target (str | None): the tab's target id, which the key press is sent to.
-        connect (callable | None): opens a proven connection to the School Chrome; cdp.Browser unless a check
-            passes a stand-in.
+        connect (callable): opens a proven connection to the tab's Chrome, a cdp.Browser.
     """
     if target is None:
         raise CheckFailed("paste needs the tab's target id to press its key, and this queue was not given one")
@@ -408,7 +407,7 @@ def paste(devtools, page_id, step, target, connect=None):
     pressed = False
     try:
         with clipboard.lent(step["text"]):
-            _press_paste(target, connect or cdp.Browser)
+            _press_paste(target, connect)
             pressed = True
     except clipboard.ClipboardError as exc:
         raise CheckFailed("%s%s" % (exc, "; the paste key was pressed, so the text went in all the same" if pressed else ""))
@@ -552,7 +551,7 @@ def describe():
     ])
 
 
-def run(devtools, page_id, step, left=None, target=None):
+def run(devtools, page_id, step, left=None, target=None, connect=None):
     """(report text, failed) for one checked step. A tool error inside it fails the step with that error.
 
     Args:
@@ -561,13 +560,14 @@ def run(devtools, page_id, step, left=None, target=None):
         step (dict): a checked step that problem has passed.
         left (float | None): seconds the queue has left; a wait's timeout or a pick's wait longer than that is cut to it.
         target (str | None): the tab's target id, which a paste sends its key press to.
+        connect (callable | None): opens a proven connection to the tab's Chrome, for a paste's key press.
     """
     asked, cut = _waits(step), None
     if left is not None and asked is not None and asked > left:
         cut = left
         step = dict(step, timeout=cut * 1000) if step["tool"] == "wait" else dict(step, wait=cut)
     try:
-        extra = (target,) if step["tool"] == "paste" else ()  # only paste reaches the tab past chrome-devtools-mcp
+        extra = (target, connect) if step["tool"] == "paste" else ()  # only paste reaches the tab past chrome-devtools-mcp
         return STEPS[step["tool"]](devtools, page_id, step, *extra), False
     except (CheckFailed, cdp.CdpError) as exc:
         return "%s%s" % (exc, "" if cut is None else "; its %s was cut to the %.1fs the queue had left, so give it a "
