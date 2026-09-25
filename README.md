@@ -27,7 +27,7 @@ call and has them from its next turn; a session that connected to a browserd fro
 
 ## Tests
 
-    python3 tests/check_browser.py    59 checks: framing, the School Chrome proof, launch
+    python3 tests/check_browser.py    60 checks: framing, the School Chrome proof, launch
     python3 tests/check_server.py     protocol, tab ids, focus, queue, recording, service
 
 The live groups need the School Chrome up, and `check_server.py`'s queue checks need `npm ci` done.

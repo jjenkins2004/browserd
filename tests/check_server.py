@@ -1033,28 +1033,23 @@ def paste_offline():
     methods = lambda keys: [method for method, _ in keys.calls]
     keys = Keys()
     said = paste(keys, step={"tool": "paste", "text": 'It\'s "a"'})
-    check("paste hands the page its text, checks the focus is where it was handed, makes the tab draw a frame with a "
-          "screenshot, presses Meta+V with Chrome's own paste command, sees the paste, and takes the text back",
-          methods(keys) == ["Target.attachToTarget", "Runtime.evaluate", "Runtime.evaluate", "Page.captureScreenshot",
-                            "Input.dispatchKeyEvent", "Input.dispatchKeyEvent", "Runtime.evaluate", "Runtime.evaluate"]
+    check("paste hands the page its text, checks the focus is where it was handed, presses Meta+V once with Chrome's "
+          "own paste command, sees the paste, and takes the text back",
+          methods(keys) == ["Target.attachToTarget", "Runtime.evaluate", "Runtime.evaluate", "Input.dispatchKeyEvent",
+                            "Input.dispatchKeyEvent", "Runtime.evaluate", "Runtime.evaluate"]
           and keys.calls[0][1] == {"targetId": "T1", "flatten": True}
           and json.dumps('It\'s "a"') in keys.calls[1][1]["expression"]
-          and keys.calls[4][1].get("commands") == ["paste"] and keys.calls[4][1].get("modifiers") == checked.META
-          and keys.calls[5][1].get("type") == "keyUp" and "undo()" in keys.calls[7][1]["expression"], repr(keys.calls))
+          and keys.calls[3][1].get("commands") == ["paste"] and keys.calls[3][1].get("modifiers") == checked.META
+          and keys.calls[4][1].get("type") == "keyUp" and "undo()" in keys.calls[6][1]["expression"], repr(keys.calls))
     check("and without a uid, says nothing reads the text back", "where the focus is; nothing reads them back" in said, said)
-    keys = Keys((None, True, [0, 0], True, [1, 1], None))
-    paste(keys)
-    check("a key press the page never saw is pressed again, after another screenshot",
-          methods(keys).count("Page.captureScreenshot") == 2 and methods(keys).count("Input.dispatchKeyEvent") == 4,
-          repr(methods(keys)))
-    keys = Keys((None, True, [0, 0], True, [0, 0], True, [0, 0], None))
+    keys = Keys((None, True, [0, 0], None))
     said = refusal(lambda: paste(keys), checked.CheckFailed)
-    check("a page that takes none of the presses fails the paste, and still has the text taken back",
-          "took none of %d paste key presses" % checked.PRESSES in said
+    check("a page that takes no paste key press fails the paste after its one press, and still has the text taken back",
+          "took no paste key press" in said and methods(keys).count("Input.dispatchKeyEvent") == 2
           and "undo()" in keys.calls[-1][1].get("expression", ""), said)
     keys = Keys((None, True, [0, 1], None))
     said = refusal(lambda: paste(keys), checked.CheckFailed)
-    check("a press the page took whose paste a script of its own had first is not pressed again, and says the field "
+    check("a press the page took whose paste a script of its own had first fails the paste, saying the field "
           "may hold the Mac's clipboard", "may hold the Mac's clipboard" in said
           and methods(keys).count("Input.dispatchKeyEvent") == 2, said)
     keys = Keys((None, False, None))

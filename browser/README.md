@@ -83,7 +83,7 @@ step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view s
 
 **Server lifecycle**, in `server.serve()`: ask a chrome-devtools-mcp process for its tool list (no
 browser needed), bind 9230, install SIGTERM/SIGINT handlers, write `.run/server.pid`, then
-`launch.launch()` (start the School Chrome, or adopt it once `require` passes), then serve. If
+`launch.launch()` (start the School Chrome, or adopt it once `require` passes and its command line has `launch.INPUT_FLAG`), then serve. If
 `launch` fails after this start launched Chrome, that Chrome is sent SIGTERM. A watcher polls
 `cdp.school_chrome()` every 2s, and when Chrome quits the server stops. Another thread runs `focus.keep` on a connection of its own; if that
 connection fails, it logs so and gives no more focus back until the server restarts. When the server stops, every
@@ -127,6 +127,12 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   `focus.TAKE_WAIT` (Chrome was measured taking it 50 to 90ms after the click), gives the focus back
   to the app that had it. With the School Chrome in front when the event comes, as after Joshua's own
   click, it leaves the focus there; it logs a line for each such tab.
+- **The School Chrome starts with `--allow-pre-commit-input` (`launch.INPUT_FLAG`).** Once a page
+  loads, Chrome holds its input until it first draws (paint holding), dropping every key press and
+  click while `Input.dispatchKeyEvent` and `Input.dispatchMouseEvent`, and so chrome-devtools-mcp, report success. The hold ends
+  only when Chrome draws the page, and it never draws a background tab by itself, so without the flag
+  such a tab drops input indefinitely (measured: 40 of 40 first key presses on fresh background tabs dropped). `launch`
+  refuses to adopt a School Chrome whose command line lacks the flag.
 - **Tabs open in the background.** `Tabs.open` creates the tab with `background: true`, so the
   Mac's focus never moves; without it, `Target.createTarget` brings Chrome to the front. Opening
   goes `about:blank`, attach, `Page.enable`, then navigate: Chrome can finish a load before a later
@@ -258,12 +264,10 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     block any paste after the first; the step takes the text back after, removing them all, or fails
     saying to reload the tab. A page script that reads the paste, or Chrome's insert, before them can
     still read the real clipboard. The focus in a frame from another site, where they cannot go, is
-    refused before the first press, and the focus moving where they are not stops the presses. Chrome
-    drops key presses unseen, reporting success, until a page that just loaded draws a frame (paint
-    holding), which a hidden tab never does by itself, so each press follows a 1-pixel screenshot that
-    makes it draw one. A press the page did not see is pressed again, `checked.PRESSES` (3) in all; one
-    it took whose paste a page script had first is not, and the step fails saying the field may hold the
-    Mac's clipboard. Three other ways were measured to fail: `Input.insertText` gets closed brackets and
+    refused, and so is the focus moving where they are not before the key is pressed. The key is
+    pressed once, since the School Chrome's `--allow-pre-commit-input` (above) keeps Chrome from dropping
+    it: a press the page did not take fails the step, and one it took whose paste a page script had first
+    fails it saying the field may hold the Mac's clipboard. Three other ways were measured to fail: `Input.insertText` gets closed brackets and
     curled quotes as typing does, a synthetic `paste` event puts nothing in a box with no paste handler,
     and dragging and dropping the text puts nothing in CodeMirror or Quill. With a uid, it focuses and
     selects as `type` does, refusing what `type` refuses but a line break in a one-line box (a paste

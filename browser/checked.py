@@ -156,7 +156,6 @@ HAND_JS = r"""(text) => {
   window.__browserdPaste = state;
   return null;
 }"""
-PRESSES = 3  # a paste key press the page never saw is pressed again, up to this many presses in all
 # What fill_refused reads first; README.md, "Agent Gotchas & Invariants", says why. A dropdown's option labels are
 # its options' accessible names, which chrome-devtools-mcp matches exactly; a <select multiple> matches by value.
 FILL_JS = r"""(el) => {
@@ -467,9 +466,9 @@ def paste(devtools, page_id, step, target, connect=None):
 
 
 def _press_paste(target, text, connect):
-    """Hand the tab's page the text in place of the Mac's clipboard (HAND_JS), then press Meta+V until the page sees
-    one paste, PRESSES presses at most, and take the text back. The key press carries Chrome's own paste command: on a
-    Mac a key press alone, as press_key sends it, pastes nothing."""
+    """Hand the tab's page the text in place of the Mac's clipboard (HAND_JS), press Meta+V once, check the page saw
+    the paste, and take the text back. The key press carries Chrome's own paste command; README.md, "Agent Gotchas &
+    Invariants", says why."""
     browser = connect()
     try:
         session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
@@ -490,27 +489,23 @@ def _press_paste(target, text, connect):
             if refused:
                 raise CheckFailed("%s, which paste cannot hand the text to, so nothing was pasted; click a field "
                                   "outside that frame, or type there instead" % refused)
+            if not evaluate("window.__browserdPaste.ready()", "the page changed before the paste key was pressed, so "
+                            "nothing was pasted"):
+                raise CheckFailed("the focus moved where the text was not handed, so the paste key was not pressed")
             key = {"key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": META}
-            for _ in range(PRESSES):
-                if not evaluate("window.__browserdPaste.ready()", "the page changed before the paste key was pressed, "
-                                "so nothing was pasted"):
-                    raise CheckFailed("the focus moved where the text was not handed, so the paste key was not pressed")
-                # README.md, "Agent Gotchas & Invariants", says why each press follows a screenshot (paint holding).
-                browser.call("Page.captureScreenshot", session, format="png",
-                             clip={"x": 0, "y": 0, "width": 1, "height": 1, "scale": 1})
-                browser.call("Input.dispatchKeyEvent", session, type="rawKeyDown", commands=["paste"], **key)
-                browser.call("Input.dispatchKeyEvent", session, type="keyUp", **key)
-                # A press the page takes has run its listeners by now; one it dropped is gone, not queued.
-                seen, pressed = evaluate("[window.__browserdPaste.seen, window.__browserdPaste.pressed]",
-                                         "the paste key was pressed, but whether the page took it could not be read; "
-                                         "check the field before pasting again")
-                if seen:
-                    pasted = True
-                    return
-                if pressed:
-                    raise CheckFailed("the page took the paste key, but a script of its own had the paste before the "
-                                      "text handed to it, so the field may hold the Mac's clipboard; check it")
-            raise CheckFailed("the page took none of %d paste key presses, so nothing was pasted" % PRESSES)
+            browser.call("Input.dispatchKeyEvent", session, type="rawKeyDown", commands=["paste"], **key)
+            browser.call("Input.dispatchKeyEvent", session, type="keyUp", **key)
+            # A press the page takes has run its listeners by now.
+            seen, pressed = evaluate("[window.__browserdPaste.seen, window.__browserdPaste.pressed]",
+                                     "the paste key was pressed, but whether the page took it could not be read; "
+                                     "check the field before pasting again")
+            if seen:
+                pasted = True
+                return
+            if pressed:
+                raise CheckFailed("the page took the paste key, but a script of its own had the paste before the text "
+                                  "handed to it, so the field may hold the Mac's clipboard; check it")
+            raise CheckFailed("the page took no paste key press, so nothing was pasted")
         finally:
             try:
                 evaluate("window.__browserdPaste && window.__browserdPaste.undo()", "the script failed")

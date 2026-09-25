@@ -5,6 +5,9 @@ import time
 
 from . import cdp
 
+# Lets key presses and clicks reach a page before it first draws; README.md, "Agent Gotchas", says why.
+INPUT_FLAG = "--allow-pre-commit-input"
+
 
 def _open():
     # -n starts a Chrome of its own, even beside one already open on another folder. -g and no startup window keep
@@ -15,7 +18,7 @@ def _open():
             "--remote-debugging-port=%d" % cdp.PORT,
             "--user-data-dir=%s" % cdp.DATA_DIR,
             "--profile-directory=%s" % cdp.PROFILE,
-            "--no-first-run", "--no-default-browser-check", "--no-startup-window",
+            "--no-first-run", "--no-default-browser-check", "--no-startup-window", INPUT_FLAG,
         ],
         capture_output=True,
         text=True,
@@ -36,6 +39,12 @@ def launch(wait=15.0):
         # Something is already up, so starting another would help nothing: it is the
         # School Chrome with its port, or require says what it is instead.
         cdp.require()
+        school = cdp.school_chrome()
+        if school is not None and INPUT_FLAG not in cdp.command(school).split():
+            raise cdp.CdpError(
+                "the School Chrome running now (pid %d) was started without %s, so a tab that loads in the background "
+                "drops every key press and click. Quit it fully (Cmd+Q), then run ./start" % (school, INPUT_FLAG)
+            )
         return "already running: %s" % cdp.ENDPOINT
     _open()
     deadline = time.time() + wait

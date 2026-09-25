@@ -52,7 +52,8 @@ def _get(path):
         raise CdpError("the School Chrome holds port %d, but DevTools did not answer %s (%s)" % (PORT, path, exc))
 
 
-def _command(pid):
+def command(pid):
+    """The command line pid was started with, or "" once it has exited."""
     return _run("/bin/ps", "-ww", "-o", "command=", "-p", str(pid)).strip()
 
 
@@ -72,7 +73,7 @@ def school_chrome():
     except (OSError, ValueError):
         return None
     # A lock left by a crash can name a pid since reused by something else.
-    return pid if (_command(pid) + " ").startswith(CHROME + " ") else None
+    return pid if (command(pid) + " ").startswith(CHROME + " ") else None
 
 
 def check_folder():
@@ -107,7 +108,7 @@ def require():
         raise CdpError(
             "port %d is held by pid %d, which is not the School Chrome (%s):\n  %s\n"
             "Quit that, then start the School Chrome with ./start"
-            % (PORT, pid, "that is pid %d" % school if school else "it is not running", _command(pid)[:200] or "(it has exited)")
+            % (PORT, pid, "that is pid %d" % school if school else "it is not running", command(pid)[:200] or "(it has exited)")
         )
     info = _get("/json/version")
     if not isinstance(info, dict) or "webSocketDebuggerUrl" not in info:
