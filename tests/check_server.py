@@ -23,7 +23,7 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from browser import cdp, checked, clipboard, dialogs, focus, mcp, record, server, service, steps
+from browser import cdp, checked, dialogs, focus, mcp, record, server, service, steps
 from browser.devtools import PACKAGE, Devtools
 from browser.tabs import LETTERS, Tabs
 from browser.worker import Workers, returned
@@ -694,7 +694,7 @@ def queue_offline():
               "before)." in report and "Page navigated to %s." % navigations[2] in report
               and "Page navigated to %s." % navigations[4] in report, report)
         report = text_of(steps.run(FakeDevtools([]), 7, [{"tool": "paste", "text": "x"}], called)["content"])
-        check("a paste in a queue not given the tab's target fails before it touches the clipboard",
+        check("a paste in a queue not given the tab's target fails before it presses a key",
               "--- 1 paste FAILED" in report and "not given" in report, report)
 
         views(workdir)
@@ -993,27 +993,24 @@ def dialogs_offline():
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-class Lent:
-    """Stands in for clipboard.lent: records each text lent, and touches no clipboard."""
-
-    def __init__(self):
-        self.texts = []
-
-    @contextlib.contextmanager
-    def lend(self, text):
-        self.texts.append(text)
-        yield
-
-
 class Keys:
-    """A connection to the School Chrome that records what it is asked."""
+    """A connection to the School Chrome that records what it is asked. Each Runtime.evaluate answers the next of
+    values, an exception as a script error: by default the page handed the text, ready, one paste seen, and the text
+    taken back."""
 
-    def __init__(self):
-        self.calls = []
+    def __init__(self, values=(None, True, [1, 1], None)):
+        self.calls, self.values = [], list(values)
 
     def call(self, method, session=None, **params):
         self.calls.append((method, params))
-        return {"sessionId": "S1"} if method == "Target.attachToTarget" else {}
+        if method == "Target.attachToTarget":
+            return {"sessionId": "S1"}
+        if method != "Runtime.evaluate":
+            return {}
+        value = self.values.pop(0)
+        if isinstance(value, Exception):
+            return {"exceptionDetails": {"text": "Uncaught", "exception": {"description": str(value)}}}
+        return {"result": {"value": value}}
 
     def close(self):
         pass
@@ -1030,42 +1027,59 @@ class Answers:
 
 
 def paste_offline():
-    """checked.paste with stand-ins for the tab, the connection that presses its key, and the clipboard."""
-    lent, saved = Lent(), clipboard.lent
-    setattr(clipboard, "lent", lent.lend)
-    try:
-        keys = Keys()
-        said = checked.paste(Answers([{"focused": "editable"}]), 7, {"tool": "paste", "text": 'It\'s "a"'}, "T1", lambda: keys)
-        check("paste lends the clipboard its text and presses Meta+V on the tab with Chrome's own paste command",
-              lent.texts == ['It\'s "a"'] and keys.calls[0] == ("Target.attachToTarget", {"targetId": "T1", "flatten": True})
-              and keys.calls[1][1].get("commands") == ["paste"] and keys.calls[1][1].get("modifiers") == checked.META
-              and keys.calls[2][1].get("type") == "keyUp", repr(keys.calls))
-        check("and without a uid, says nothing reads the text back", "where the focus is; nothing reads them back" in said, said)
-        keys, lent.texts = Keys(), []
-        said = refusal(lambda: checked.paste(Answers([{"refused": "button"}]), 7, {"tool": "paste", "text": "x"}, "T1",
-                                             lambda: keys), checked.CheckFailed)
-        check("paste refuses when nothing that takes text has the focus, lending no clipboard and pressing no key",
-              "(button has it), so nothing was pasted" in said and lent.texts == [] and keys.calls == [], said)
-        said = refusal(lambda: checked.paste(Answers([{"refused": "readonly"}]), 7, {"tool": "paste", "uid": "1_1", "text": "x"},
-                                             "T1", lambda: keys), checked.CheckFailed)
-        check("paste with a uid refuses what type refuses, saying so", "is a read-only text box, so nothing was pasted" in said
-              and lent.texts == [], said)
-        said = checked.paste(Answers([{"focused": "textarea"}, {"kind": "value", "value": "a\nb"}]), 7,
-                             {"tool": "paste", "uid": "1_1", "text": "a\nb"}, "T1", lambda: Keys())
-        check("paste with a uid reads the text box back", said == 'pasted 3 characters; the field holds "a\\nb"', said)
-
-        @contextlib.contextmanager
-        def unreturned(text):
-            yield
-            raise clipboard.ClipboardError("could not put the Mac's clipboard back as it was: boom")
-
-        setattr(clipboard, "lent", unreturned)
-        said = refusal(lambda: checked.paste(Answers([{"focused": "editable"}]), 7, {"tool": "paste", "text": "x"}, "T1",
-                                             lambda: Keys()), checked.CheckFailed)
-        check("a clipboard that could not be put back fails the paste, saying so, and that the paste key was pressed",
-              "could not put the Mac's clipboard back" in said and "the paste key was pressed" in said, said)
-    finally:
-        setattr(clipboard, "lent", saved)
+    """checked.paste with stand-ins for the tab, and the connection that hands the page its text and presses the key."""
+    paste = lambda keys, answers=({"focused": "editable"},), step=None: checked.paste(
+        Answers(list(answers)), 7, step or {"tool": "paste", "text": "x"}, "T1", lambda: keys)
+    methods = lambda keys: [method for method, _ in keys.calls]
+    keys = Keys()
+    said = paste(keys, step={"tool": "paste", "text": 'It\'s "a"'})
+    check("paste hands the page its text, checks the focus is where it was handed, makes the tab draw a frame with a "
+          "screenshot, presses Meta+V with Chrome's own paste command, sees the paste, and takes the text back",
+          methods(keys) == ["Target.attachToTarget", "Runtime.evaluate", "Runtime.evaluate", "Page.captureScreenshot",
+                            "Input.dispatchKeyEvent", "Input.dispatchKeyEvent", "Runtime.evaluate", "Runtime.evaluate"]
+          and keys.calls[0][1] == {"targetId": "T1", "flatten": True}
+          and json.dumps('It\'s "a"') in keys.calls[1][1]["expression"]
+          and keys.calls[4][1].get("commands") == ["paste"] and keys.calls[4][1].get("modifiers") == checked.META
+          and keys.calls[5][1].get("type") == "keyUp" and "undo()" in keys.calls[7][1]["expression"], repr(keys.calls))
+    check("and without a uid, says nothing reads the text back", "where the focus is; nothing reads them back" in said, said)
+    keys = Keys((None, True, [0, 0], True, [1, 1], None))
+    paste(keys)
+    check("a key press the page never saw is pressed again, after another screenshot",
+          methods(keys).count("Page.captureScreenshot") == 2 and methods(keys).count("Input.dispatchKeyEvent") == 4,
+          repr(methods(keys)))
+    keys = Keys((None, True, [0, 0], True, [0, 0], True, [0, 0], None))
+    said = refusal(lambda: paste(keys), checked.CheckFailed)
+    check("a page that takes none of the presses fails the paste, and still has the text taken back",
+          "took none of %d paste key presses" % checked.PRESSES in said
+          and "undo()" in keys.calls[-1][1].get("expression", ""), said)
+    keys = Keys((None, True, [0, 1], None))
+    said = refusal(lambda: paste(keys), checked.CheckFailed)
+    check("a press the page took whose paste a script of its own had first is not pressed again, and says the field "
+          "may hold the Mac's clipboard", "may hold the Mac's clipboard" in said
+          and methods(keys).count("Input.dispatchKeyEvent") == 2, said)
+    keys = Keys((None, False, None))
+    said = refusal(lambda: paste(keys), checked.CheckFailed)
+    check("the focus moved where the text was not handed stops the paste before its key is pressed",
+          "focus moved" in said and "Input.dispatchKeyEvent" not in methods(keys), said)
+    keys = Keys(("the focus is in a frame from another site", None))
+    said = refusal(lambda: paste(keys, ({"focused": "a frame from another site"},)), checked.CheckFailed)
+    check("paste refuses the focus in a frame from another site, pressing no key, and still takes the text back",
+          "frame from another site" in said and "so nothing was pasted" in said
+          and "Input.dispatchKeyEvent" not in methods(keys) and "undo()" in keys.calls[-1][1].get("expression", ""), said)
+    keys = Keys((None, True, [1, 1], RuntimeError("gone")))
+    said = refusal(lambda: paste(keys), checked.CheckFailed)
+    check("listeners that could not be taken off after a paste went in fail the step, saying the text was pasted and "
+          "to reload the tab", "the text was pasted" in said and "reload the tab" in said and "gone" in said, said)
+    keys = Keys()
+    said = refusal(lambda: paste(keys, ({"refused": "button"},)), checked.CheckFailed)
+    check("paste refuses when nothing that takes text has the focus, handing the page nothing and pressing no key",
+          "(button has it), so nothing was pasted" in said and keys.calls == [], said)
+    said = refusal(lambda: paste(keys, ({"refused": "readonly"},), {"tool": "paste", "uid": "1_1", "text": "x"}),
+                   checked.CheckFailed)
+    check("paste with a uid refuses what type refuses, saying so",
+          "is a read-only text box, so nothing was pasted" in said and keys.calls == [], said)
+    said = paste(Keys(), ({"focused": "textarea"}, {"kind": "value", "value": "a\nb"}), {"tool": "paste", "uid": "1_1", "text": "a\nb"})
+    check("paste with a uid reads the text box back", said == 'pasted 3 characters; the field holds "a\\nb"', said)
 
 
 def limits_offline():
@@ -1384,6 +1398,7 @@ WIDGETS = r"""<title>checked scratch</title>
 <label for=mask>Phone</label><input id=mask oninput="const d = this.value.replace(/\D/g, ''); this.value = d.length > 6 ? '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6) : d">
 <div id=bio contenteditable role=textbox aria-multiline=true aria-label=Bio></div>
 <div id=quoted contenteditable role=textbox aria-label=Quoted></div>
+<div id=stopper contenteditable role=textbox aria-label=Stopper></div>
 <button onclick="document.getElementById('warned').textContent = confirm('Sure?') ? 'confirmed' : 'cancelled'">Warn me</button><p id=warned></p>
 <button onclick="setTimeout(() => { document.getElementById('warned').textContent = confirm('Later?') ? 'confirmed' : 'cancelled' }, 1500)">Warn later</button>
 <label for=off>Off</label><input id=off disabled value=off>
@@ -1431,6 +1446,12 @@ letter.addEventListener('input', (e) => { if (e.isTrusted) letterKept = letter.v
 quoted.addEventListener('keydown', (e) => {
   if (e.key === '"' || e.key === "'") { e.preventDefault(); document.execCommand('insertText', false, e.key === '"' ? '\u201c' : '\u2019'); }
 });
+// Like Slides, puts a paste's text in itself and stops the paste there, without cancelling Chrome's own insert.
+stopper.addEventListener('paste', (e) => { e.stopPropagation(); document.execCommand('insertText', false, e.clipboardData.getData('text/plain')); });
+// Heard before paste's own listeners, and read once the event is done: was Chrome's insert cancelled?
+window.addEventListener('beforeinput', (e) => {
+  if (e.inputType === 'insertFromPaste' && e.target === stopper) setTimeout(() => { stopper.dataset.chrome = e.defaultPrevented ? 'cancelled' : 'went ahead'; });
+}, true);
 </script>"""
 
 
@@ -1536,7 +1557,10 @@ def checked_live(httpd, tabs, opened):
     text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
     check("type into a contenteditable element takes a line break and reads the text back", not is_error, text)
 
-    held_before = clipboard._script(clipboard.SAVE, "save the clipboard")
+    changes = lambda: int(subprocess.run(["osascript", "-l", "JavaScript", "-e", "ObjC.import('AppKit'); "
+                                          "$.NSPasteboard.generalPasteboard.changeCount"], capture_output=True, text=True,
+                                         check=True).stdout)
+    changed_before = changes()
     said = 'It\'s "exact"'
     quoted = field("textbox", "Quoted")
     text, _ = call(httpd, "queue", tab=tab, steps=[
@@ -1554,7 +1578,14 @@ def checked_live(httpd, tabs, opened):
     text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "click", "uid": field("button", "Yes")}, {"tool": "paste", "text": "x"}])
     check("paste without a uid refuses when nothing that takes text has the focus", is_error
           and "nothing that takes text has the focus" in text and "so nothing was pasted" in text, text)
-    check("and the Mac's clipboard holds what it held before the pastes", clipboard._script(clipboard.SAVE, "save the clipboard") == held_before)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
+        {"tool": "click", "uid": field("textbox", "Stopper")}, {"tool": "paste", "text": said},
+        {"tool": "evaluate_script", "function": "() => [stopper.textContent, stopper.dataset.chrome]"}])
+    check("an editor that puts a paste in itself, and stops it without cancelling Chrome's own insert, gets the text, "
+          "and Chrome's insert of the real clipboard is cancelled",
+          not is_error and returned(text.split("--- 3")[-1]) == [said, "cancelled"], text)
+    check("and the Mac's clipboard was never written: its change count is what it was before the pastes",
+          changes() == changed_before, str(changed_before))
 
     warned = {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}
     text, is_error = call(httpd, "queue", tab=tab, steps=[

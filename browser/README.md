@@ -27,7 +27,6 @@ chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
       worker.py    one tab's process, paired with its page; Workers registry
       steps.py     the queue: load, check, run, report; snapshot views
       checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused
-      clipboard.py lends the Mac's clipboard to a paste, then puts it back whole
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       record.py    one queue call's numbered files in a folder
     ../start, ../stop           launchers
@@ -248,20 +247,29 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     send as Enter and so submit the form. It passes on exactly the text, or on the text with only its
     spacing and punctuation changed (a masked phone), saying what the field shows; a field that cut the
     text short (a `maxlength`) fails, saying so.
-  - **`paste`** exists because editors change text as it is typed (Slides curls quotes; a code editor
-    closes brackets and indents lines), and a real paste is taken as it is. `clipboard.lent` saves every
-    item and type on the Mac's clipboard (JavaScript for Automation, since `pbpaste` reads text only),
-    puts the text on as one UTF-8 item, and puts the clipboard back after, one paste at a time; a
-    clipboard manager still records the text. The paste is Meta+V sent over the server's own
-    connection to the tab with Chrome's `paste` command, since on a Mac a key press alone, as
-    `press_key` sends it, pastes nothing. Two other ways were measured to fail: Monaco takes a synthetic
-    `paste` event and inserts nothing, and `Input.insertText` gets closed brackets as typing does. With a
-    uid, it focuses and selects as `type` does, refusing what `type` refuses but a line break in a
-    one-line box (a paste presses no Enter), and reads back as `type` reads;
-    without, it pastes where the focus is, followed into same-origin frames (where Google Docs and
-    Slides take typing) and shadow roots, refusing unless that is a text box or contenteditable element
-    (a frame from another site passes), and nothing reads it back. A clipboard that could not be put
-    back fails the step, saying whether the paste key was pressed.
+  - **`paste`** exists because editors change text as it is typed (Slides curls quotes and capitalizes a
+    new line; a code editor closes brackets and indents lines), and a real paste is taken as it is. It
+    presses Meta+V over the server's own connection to the tab with Chrome's `paste` command, since on a
+    Mac a key press alone, as `press_key` sends it, pastes nothing. Chrome reads the Mac's clipboard into
+    that paste, and nothing writes the clipboard: first `checked.HAND_JS` puts listeners in every
+    same-origin frame, and they hand the paste event the text as its `clipboardData`, insert the text
+    themselves when no page script cancelled or stopped the paste, cancel and stop Chrome's own insert of
+    the real clipboard, which follows a paste an editor stopped without cancelling (Slides does), and
+    block any paste after the first; the step takes the text back after, removing them all, or fails
+    saying to reload the tab. A page script that reads the paste, or Chrome's insert, before them can
+    still read the real clipboard. The focus in a frame from another site, where they cannot go, is
+    refused before the first press, and the focus moving where they are not stops the presses. Chrome
+    drops key presses unseen, reporting success, until a page that just loaded draws a frame (paint
+    holding), which a hidden tab never does by itself, so each press follows a 1-pixel screenshot that
+    makes it draw one. A press the page did not see is pressed again, `checked.PRESSES` (3) in all; one
+    it took whose paste a page script had first is not, and the step fails saying the field may hold the
+    Mac's clipboard. Three other ways were measured to fail: `Input.insertText` gets closed brackets and
+    curled quotes as typing does, a synthetic `paste` event puts nothing in a box with no paste handler,
+    and dragging and dropping the text puts nothing in CodeMirror or Quill. With a uid, it focuses and
+    selects as `type` does, refusing what `type` refuses but a line break in a one-line box (a paste
+    presses no Enter), and reads back as `type` reads; without, it pastes where the focus is, followed
+    into same-origin frames (where Google Docs and Slides take typing) and shadow roots, refusing unless
+    that is a text box or contenteditable element, and nothing reads it back.
   - **`wait`** takes one condition: `gone` (the text, once seen, is in no snapshot line's page text,
     the title included; uids, roles and urls are left out), `uid` and `value` (the field holds it, read
     as `expect` reads), or `still` (ms without a change). `timeout` is ms, like `wait_for`'s; `pick`'s
@@ -298,17 +306,18 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for `lsof`,
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
     `tabs_offline` stands in for Chrome and `osascript`; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
-    `dialogs_offline` for the answerer's connection; `paste_offline` for chrome-devtools-mcp, the
-    clipboard and the connection that presses the paste key; `limits_offline` for a slow tool;
+    `dialogs_offline` for the answerer's connection; `paste_offline` for chrome-devtools-mcp and
+    the connection that hands the page its text and presses the paste key; `limits_offline` for a slow tool;
     `recording_offline` for Chrome, recording into a temporary folder;
     `service_offline` for the spawned server, with real `ps`.
   - **Live:** the live groups need the School Chrome up. Nothing listening on 9223 skips them;
     anything else wrong with the port is a failure. `queue_live` also needs `npm ci` done, and skips
     without it, and records into a temporary folder; its checked steps run on a local page whose
     dropdowns and one textarea take only trusted input, whose Parse resume button runs a stand-in resume parser,
-    whose Quoted editor curls quotes as they are typed, and whose Warn me confirm, clicked with no handle_dialog
-    step after it, makes one click take about 30s. Its paste checks lend the Mac's clipboard, and check it is
-    put back.
+    whose Quoted editor curls quotes as they are typed, whose Stopper editor puts a paste in itself and stops
+    it without cancelling Chrome's own insert, as Slides does, and whose Warn me confirm, clicked with no
+    handle_dialog step after it, makes one click take about 30s. Its paste checks read the Mac's clipboard's
+    change count, never its contents, and check nothing wrote it.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; a tab already open is never touched. No live check moves the Mac's focus:
     `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
