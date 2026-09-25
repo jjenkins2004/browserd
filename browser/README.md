@@ -26,7 +26,8 @@ chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
       worker.py    one tab's process, paired with its page; Workers registry
       steps.py     the queue: load, check, run, report; snapshot views
-      checked.py   the queue's checked steps: pick, expect, type, wait
+      checked.py   the queue's checked steps: pick, expect, type, wait; fill_refused
+      dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       record.py    one queue call's numbered files in a folder
     ../start, ../stop           launchers
     ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/
@@ -66,10 +67,12 @@ alone.
 **`steps.place_screenshots`** first gives each `take_screenshot` without a `filePath` one among the
 call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added (and
 without take_snapshot's own `under` and `full`), hands each checked step to `checked.run`, passes
-every reply's text, less chrome-devtools-mcp's `## Pages` list of every tab in Chrome, through
-**`steps.view`**, and returns a whole MCP result: a text report, any images, and `isError` when a
-step failed. A reply longer than `steps.REPLY_MOST` (40,000 characters) is cut there, the whole of it
-saved as `<n>-step<k>-reply.txt` (`<n>-page-now-reply.txt` for the failed queue's).
+every reply's text, less chrome-devtools-mcp's `## Pages` list of every tab in Chrome and its note on
+which page it now selects, through **`steps.view`**, and returns a whole MCP result: a text report,
+any images, and `isError` when a step failed or the queue stopped at `steps.QUEUE_MOST`. A reply
+longer than `steps.REPLY_MOST` (40,000 characters) is cut after its last whole line within that (mid-line
+when that line would leave less than half), the
+whole of it saved as `<n>-step<k>-reply.txt` (`<n>-page-now-reply.txt` for the failed queue's).
 
 **Server lifecycle**, in `server.serve()`: ask a chrome-devtools-mcp process for its tool list (no
 browser needed), bind 9230, install SIGTERM/SIGINT handlers, write `.run/server.pid`, then
@@ -151,9 +154,26 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
 - **Claude Code cuts a tool's description at about 2,000 characters.** `server.QUEUE_HELP` stays
   under it; `server.STEPS_HELP` and the step catalog, `steps.describe`, make up the `steps` argument's
   description, which Claude Code passes whole.
-- **A step that opens an alert, confirm or prompt counts as done.** chrome-devtools-mcp fails such a
-  step after about 30s, with an `# Open dialog` section in its reply; `steps.run` counts it as done,
-  so a `handle_dialog` step after it runs. A reply that also holds `A dialog is open (`,
+- **Claude Code drops a tool's reply after about 60s** (measured: a 55s queue came back, a 65s one did
+  not, though the server ran it to the end). So a queue starts no step once it has run
+  `steps.QUEUE_MOST` (50s), naming the steps not run; `checked.run` cuts a `wait`'s timeout or a
+  `pick`'s wait to the time left, and `steps.run` a chrome-devtools-mcp tool's `timeout`; and a
+  `timeout` over `checked.WAIT_MOST` (45,000 ms), a `wait`'s or a chrome-devtools-mcp tool's, or a
+  `pick` `wait` over 45s, is refused.
+- **A dialog a `handle_dialog` step waits on is answered the moment it opens.** chrome-devtools-mcp
+  blocks about 30s on a step whose dialog it was not told to answer. So when a `handle_dialog` step
+  follows a step, `steps.run` first starts a `dialogs.Answerer` on a connection of its own to the tab
+  (`Page.enable`, then `Page.javascriptDialogOpening`), which answers the dialog as that step asks,
+  and the `handle_dialog` step waits up to `dialogs.LATE` (5s) after the step before for one that
+  opens late. puppeteer marks a dialog closed by another connection handled, so chrome-devtools-mcp
+  goes on. An answerer that heard no dialog, or could not reach the tab, leaves the `handle_dialog`
+  step to chrome-devtools-mcp. None starts for a step in `steps.OWN_DIALOGS` (`evaluate_script`'s
+  `dialogAction`, `navigate_page`'s `handleBeforeUnload`, and `handle_dialog`), which answer their own.
+  When a queue stops before its `handle_dialog` step runs, the report still says what the answerer
+  answered.
+- **A step that opens a dialog nothing waits on counts as done.** chrome-devtools-mcp fails it after
+  about 30s, with an `# Open dialog` section in its reply; `steps.run` counts it as done, so a
+  `handle_dialog` step in the next queue answers it. A reply that also holds `A dialog is open (`,
   chrome-devtools-mcp's refusal of a step begun while a dialog was open, still fails, as does a
   checked step, whose read-back never ran, and a tool in `steps.UNBLOCKED`, which runs with a dialog
   open.
@@ -197,9 +217,9 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     with each run of whitespace made one space. It types nothing into a box that is disabled,
     read-only or did not take focus, an input that is not text-like (a checkbox, a submit, a date), a
     combobox input (that takes `pick`), or a one-line box given a line break, which `type_text` would
-    send as Enter and so submit the form. When the read-back fails, it says whether the field cut the
-    text short (a `maxlength`) or reformatted it (a masked phone), and still fails: it passes only on
-    exactly the text.
+    send as Enter and so submit the form. It passes on exactly the text, or on the text with only its
+    spacing and punctuation changed (a masked phone), saying what the field shows; a field that cut the
+    text short (a `maxlength`) fails, saying so.
   - **`wait`** takes one condition: `gone` (the text, once seen, is in no snapshot line's page text,
     the title included; uids, roles and urls are left out), `uid` and `value` (the field holds it, read
     as `expect` reads), or `still` (ms without a change). `timeout` is ms, like `wait_for`'s; `pick`'s
@@ -213,6 +233,12 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     text changes more often than every `still` ms (a clock, a carousel) never counts as still, and a
     change a snapshot does not carry (a CSS spinner) is no change.
   - **Each is checked for its keys and types before any step of the queue runs.**
+  - **`fill` and `fill_form` read each element first** (`checked.fill_refused`), and fail without
+    filling any element that is disabled, read-only, a checkbox, radio or switch given anything but
+    "true" or "false", or a dropdown select given text none of its options' labels is exactly (a
+    `<select multiple>` takes an option's value, so is not checked). chrome-devtools-mcp's own `fill`
+    empties a read-only box and reports success, fails a disabled box after 5s, and fails the other two
+    at once, each with a message that names none of them.
 - **Element uids come from `take_snapshot` and live in that tab's process.** They stay valid
   across queue calls until the page navigates or the element goes away. When the process died and
   was restarted, the next report opens with a note that they are gone. A step failing with
@@ -230,13 +256,14 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for `lsof`,
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
     `tabs_offline` stands in for Chrome and `osascript`; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
+    `dialogs_offline` for the answerer's connection; `limits_offline` for a slow tool;
     `recording_offline` for Chrome, recording into a temporary folder;
     `service_offline` for the spawned server, with real `ps`.
   - **Live:** the live groups need the School Chrome up. Nothing listening on 9223 skips them;
     anything else wrong with the port is a failure. `queue_live` also needs `npm ci` done, and skips
     without it, and records into a temporary folder; its checked steps run on a local page whose
     dropdowns and one textarea take only trusted input, whose Parse resume button runs a stand-in resume parser,
-    and whose confirm makes one click take about 30s.
+    and whose Warn me confirm, clicked with no handle_dialog step after it, makes one click take about 30s.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; a tab already open is never touched. No live check moves the Mac's focus:
     `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.

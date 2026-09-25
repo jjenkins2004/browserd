@@ -1,4 +1,5 @@
-"""The queue's checked steps, pick, expect, type and wait: they read the page, not a tool's "Successfully".
+"""The queue's checked steps, pick, expect, type and wait: they read the page, not a tool's "Successfully"; and
+fill_refused, which reads each element before a fill.
 
 server.STEPS_HELP says when to use which.
 """
@@ -15,7 +16,7 @@ POLL = 0.4
 SETTLE = 2.0
 APPEAR_WAIT = 3.0  # seconds a wait's gone gives its text to show, since a page can start its work after the step before
 WAIT_TIMEOUT = 30000  # ms a wait step gives its condition by default
-WAIT_MOST = 60000  # ms, the longest timeout a wait step may give
+WAIT_MOST = 45000  # ms, the longest a step may wait (a wait's or chrome-devtools-mcp tool's timeout, pick's wait)
 SHOWN_OPTIONS = 12
 # An option line ends with value="<its name>" (chrome-devtools-mcp sets it), which is what bounds a name that
 # holds quotes; a line without one falls back to the first quote followed by an attribute-like word.
@@ -86,6 +87,16 @@ SELECT_JS = r"""(el) => {
   selection.addRange(range);
   return el.contains(el.getRootNode().activeElement) ? {focused: 'editable'} : {refused: 'focus'};
 }"""
+# What fill_refused reads first; README.md, "Agent Gotchas & Invariants", says why. A dropdown's option labels are
+# its options' accessible names, which chrome-devtools-mcp matches exactly; a <select multiple> matches by value.
+FILL_JS = r"""(el) => {
+  if (el.tagName === 'SELECT' && !el.multiple && el.size <= 1) {
+    return {kind: 'select', disabled: el.disabled, options: [...el.options].map(o => o.label)};
+  }
+  const toggle = ['checkbox', 'radio'].includes((el.type || '').toLowerCase())
+    || ['checkbox', 'radio', 'switch'].includes(el.getAttribute('role'));
+  return {kind: toggle ? 'toggle' : 'box', disabled: !!el.disabled, readonly: !toggle && !!el.readOnly};
+}"""
 # Why type_ typed nothing, by what SELECT_JS refused; any other input type is not text-like.
 TYPE_REFUSED = {
     "combobox": "is a dropdown you type into, which takes pick",
@@ -154,8 +165,8 @@ def problem(step):
         if "search" in step and (not isinstance(step["search"], str) or not step["search"]):
             return "pick's search must be a non-empty string"
         wait = step.get("wait", PICK_WAIT)
-        if isinstance(wait, bool) or not isinstance(wait, (int, float)) or not 0 < wait <= 60:
-            return "pick's wait must be a number of seconds above 0, up to 60"
+        if isinstance(wait, bool) or not isinstance(wait, (int, float)) or not 0 < wait <= WAIT_MOST / 1000:
+            return "pick's wait must be a number of seconds above 0, up to %g" % (WAIT_MOST / 1000)
     return None
 
 
@@ -299,7 +310,8 @@ def _until_holds(devtools, page_id, uid, value, seconds):
 
 
 def type_(devtools, page_id, step):
-    """Type text over a field's text with real keys, and confirm the field holds exactly text.
+    """Type text over a field's text with real keys, and confirm the field holds text, exactly or with only its
+    spacing and punctuation changed.
 
     Args:
         devtools (Devtools): the tab's process.
@@ -325,19 +337,49 @@ def type_(devtools, page_id, step):
     try:
         held = expect(devtools, page_id, {"uid": step["uid"], "value": value})
     except CheckFailed as exc:
-        raise CheckFailed("%s%s" % (exc, _typed_hint(devtools, page_id, step["uid"], value)))
+        shown = _read(devtools, page_id, step["uid"]).get("value") or ""
+        if shown and re.sub(r"[^\w.]", "", shown) == re.sub(r"[^\w.]", "", value):  # a dropped decimal point fails
+            # A masked field, like a phone number, adds its own spacing and punctuation; every letter and digit is in.
+            return "typed %d characters; the field shows them as %s, only its spacing and punctuation changed" % (
+                len(step["text"]), json.dumps(shown))
+        if shown and value.startswith(shown):
+            raise CheckFailed("%s; the field keeps only its first %d characters" % (exc, len(shown)))
+        raise
     return "typed %d characters; %s" % (len(step["text"]), held)
 
 
-def _typed_hint(devtools, page_id, uid, text):
-    """Why a field holds something other than the text typed into it, when what it holds shows why."""
-    held = _read(devtools, page_id, uid).get("value") or ""
-    if held and text.startswith(held):
-        return "; the field keeps only its first %d characters" % len(held)
-    if held and re.sub(r"\W", "", held) == re.sub(r"\W", "", text):
-        return ("; the field reformatted it as %s; if that is right, the field is done, and expect with that value "
-                "confirms it" % json.dumps(held))
-    return ""
+def fill_refused(devtools, page_id, step):
+    """Why a fill or fill_form step must not run, from a read of each of its elements first; None when it may.
+
+    Args:
+        devtools (Devtools): the tab's process.
+        page_id (int): the tab's page id in it.
+        step (dict): a fill or fill_form step that the queue's check has passed.
+    """
+    for element in step["elements"] if step["tool"] == "fill_form" else [step]:
+        try:
+            found = returned(_script(devtools, page_id, FILL_JS, element["uid"]))
+        except cdp.CdpError:
+            return None  # fill itself says what is wrong, like an unknown uid or an open dialog
+        why = _unfillable(found, element["uid"], element["value"])
+        if why:
+            return "%s, so nothing was filled" % why
+    return None
+
+
+def _unfillable(found, uid, value):
+    if not isinstance(found, dict):
+        return None
+    if found.get("disabled"):
+        return "element %s is disabled" % uid
+    if found.get("readonly"):
+        return "element %s is read-only, and fill would empty it" % uid
+    if found.get("kind") == "toggle" and value not in ("true", "false"):
+        return 'element %s is a checkbox, radio or switch, which fill sets with "true" or "false"' % uid
+    if found.get("kind") == "select" and value not in found.get("options", []):
+        return "no option of the select %s is exactly %s (take_snapshot under %s lists them)" % (
+            uid, json.dumps(value), uid)
+    return None
 
 
 def wait(devtools, page_id, step):
@@ -410,8 +452,8 @@ def describe():
         "  expect(uid: string, value: string) - Fail unless the field holds value: \"true\"/\"false\" for a "
         "checkbox, radio, or aria-pressed/aria-checked element; option text for a select; the choice a dropdown shows",
         "  type(uid: string, text: string) - Select the text box's text and type text over it with real keys, then fail "
-        "unless the field holds exactly text; use it instead of fill for a value of 100 characters or more, which fill "
-        "sets by script",
+        "unless the field holds text, exactly or with only its spacing and punctuation changed (a masked phone); use it "
+        "instead of fill for a value of 100 characters or more, which fill sets by script",
         "  wait(gone?: string, uid?: string, value?: string, still?: number, timeout?: number) - Wait for one "
         "condition: until the text in gone, seen on the page within %gs, is off it, or the page has not changed for "
         "still ms (both read from snapshots), or the field at uid holds value, read as expect reads; still and timeout "
@@ -420,15 +462,28 @@ def describe():
     ])
 
 
-def run(devtools, page_id, step):
+def run(devtools, page_id, step, left=None):
     """(report text, failed) for one checked step. A tool error inside it fails the step with that error.
 
     Args:
         devtools (Devtools): the tab's process.
         page_id (int): the tab's page id in it.
         step (dict): a checked step that problem has passed.
+        left (float | None): seconds the queue has left; a wait's timeout or a pick's wait longer than that is cut to it.
     """
+    asked, cut = _waits(step), None
+    if left is not None and asked is not None and asked > left:
+        cut = left
+        step = dict(step, timeout=cut * 1000) if step["tool"] == "wait" else dict(step, wait=cut)
     try:
         return STEPS[step["tool"]](devtools, page_id, step), False
     except (CheckFailed, cdp.CdpError) as exc:
-        return str(exc), True
+        return "%s%s" % (exc, "" if cut is None else "; its %s was cut to the %.1fs the queue had left, so give it a "
+                         "queue of its own" % ("timeout" if step["tool"] == "wait" else "wait", cut)), True
+
+
+def _waits(step):
+    """The seconds a wait or pick step may wait, or None for a step that never waits long."""
+    if step["tool"] == "wait":
+        return step.get("timeout", WAIT_TIMEOUT) / 1000
+    return step.get("wait", PICK_WAIT) if step["tool"] == "pick" else None

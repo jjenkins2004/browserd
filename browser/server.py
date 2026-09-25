@@ -10,7 +10,7 @@ import time
 
 from . import cdp, focus, launch, mcp, record, steps
 from .devtools import Devtools
-from .tabs import Tabs, is_id
+from .tabs import NOT_AN_ID, Tabs, is_id
 from .worker import Workers
 from .ws import WebSocketError
 
@@ -120,8 +120,8 @@ The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A fa
 names the steps not run, and ends with a view of the page now. A step's reply over %d characters is cut, the
 whole of it saved. Each call is recorded in the tab's record folder, %s/<tab>/: 001-queue.json the steps,
 001-queue.txt the report. A take_screenshot with no filePath is saved there too; the report gives its path. A
-step's file paths (filePath, filePaths) must be absolute and sit inside ~/Desktop, /tmp or $TMPDIR. Each
-chrome-devtools-mcp call gets 120s.
+step's file paths (filePath, filePaths) must be absolute and sit inside ~/Desktop, /tmp, $TMPDIR or browserd's
+folder. After %gs a queue starts no more steps and names them, as Claude Code drops a reply after about 60s.
 """
 
 STEPS_HELP = """The steps, in order: each {"tool": <name>, ...its arguments}, checked against the tool before any
@@ -133,9 +133,16 @@ more. expect after a fill or click whose result matters. wait for a
 page still at work, like a resume parser after an upload: uid and value for a field it fills (passing at once if
 the field holds it already), or gone with its status text; never a setTimeout in evaluate_script.
 
-A step that opens an alert, confirm or prompt (a click, a key press) takes about 30s, since the dialog blocks the
-page, and counts as done; answer the dialog with a handle_dialog step. A native select's value in a view may be its
-first option, shown though no one chose it; fill it anyway.
+Dialogs: put a handle_dialog step right after the step that opens an alert, confirm or prompt (a click, a key
+press), and the dialog is answered the moment it opens, or up to 5s after that step for a late one; evaluate_script
+answers its own with dialogAction (default accept), so takes none. A dialog no handle_dialog step waits on blocks
+the page: its step takes about 30s and counts as done, and a handle_dialog step in the next queue answers it.
+
+A step that loads a new page (navigate_page, a link or submit click) makes every uid new: end the queue with
+take_snapshot and use its uids in the next queue. navigate_page leaves a page even when the page asks to stay
+(unsaved changes); give it handleBeforeUnload "dismiss" to stay. A view shows names and values as the page has them, quotes
+and all; a spinbutton's value= is its aria-valuenow, which some pages never update, while expect reads what it holds.
+A native select's value in a view may be its first option, shown though no one chose it; fill it anyway.
 
 """
 
@@ -181,7 +188,7 @@ def queue_tool(tabs, workers, allowed, calls=CALLS):
             raise mcp.ToolError("queue takes tab, and steps or file; not %s" % ", ".join(sorted(unknown)))
         tab = _text(arguments, "tab")
         if not is_id(tab):  # it names a folder, so "../x" must not reach os.path.join
-            raise mcp.ToolError("no tab has the id %r; tab_list gives the open tabs their ids" % tab)
+            raise mcp.ToolError(NOT_AN_ID % tab)
         folder = os.path.join(calls, tab)
         try:
             planned = steps.load(arguments, folder)
@@ -196,7 +203,7 @@ def queue_tool(tabs, workers, allowed, calls=CALLS):
             worker = _worker(tabs, workers, tab)
             with worker.lock:
                 devtools, page_id, restarted = worker.ensure()
-                result = steps.run(devtools, page_id, planned, call.path, restarted)
+                result = steps.run(devtools, page_id, planned, call.path, restarted, worker.target_id)
                 if result["isError"] and "No page found" in result["content"][0]["text"]:
                     # It renumbered its pages after reconnecting; the next queue pairs a new process and notes the
                     # restart.
@@ -207,7 +214,7 @@ def queue_tool(tabs, workers, allowed, calls=CALLS):
 
     return {
         "name": "queue", "run": _refusing(queue),
-        "description": QUEUE_HELP % (steps.REPLY_MOST, calls),
+        "description": QUEUE_HELP % (steps.REPLY_MOST, calls, steps.QUEUE_MOST),
         "inputSchema": {
             "type": "object", "required": ["tab"], "additionalProperties": False,
             "properties": {

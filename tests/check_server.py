@@ -19,7 +19,7 @@ import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from browser import cdp, checked, focus, mcp, record, server, service, steps
+from browser import cdp, checked, dialogs, focus, mcp, record, server, service, steps
 from browser.devtools import PACKAGE, Devtools
 from browser.tabs import LETTERS, Tabs
 from browser.worker import Workers, returned
@@ -270,8 +270,8 @@ def tabs_offline():
     chrome.navigate_raises, chrome.loads = cdp.CdpError("Page.navigate: Cannot navigate to invalid URL"), True
     count = len(chrome.targets)
     said = refusal(lambda: tabs.open("not a url"))
-    check("a URL Chrome will not navigate to is refused naming it, and its tab closed",
-          said.startswith("could not open not a url: ") and len(chrome.targets) == count, said)
+    check("a URL Chrome will not navigate to is refused naming it and why, and its tab closed",
+          said == "could not open not a url: Cannot navigate to invalid URL" and len(chrome.targets) == count, said)
     chrome.navigate_raises = None
 
     count = len(chrome.targets)
@@ -286,6 +286,7 @@ def tabs_offline():
           chrome.activated == [tabs.target(tab)] and brought == [FakeConnection.pid]
           and shown["url"] == "https://jobs.ashbyhq.com/new", repr((chrome.activated, brought)))
     check("show refuses an unknown id", "no tab has the id" in refusal(lambda: tabs.show("zzzz")))
+    check("an id of the wrong shape is refused as no tab id at all", "'../..' is not a tab id" in refusal(lambda: tabs.show("../..")))
     focus.bring = lambda pid: False
     check("show fails when macOS does not bring the School Chrome to the front",
           "did not bring the School Chrome" in refusal(lambda: tabs.show(tab)))
@@ -344,7 +345,7 @@ class FakeEvents:
         return self.events.pop(0)
 
 
-def created(target, opener: str | None = "T1", kind="page"):
+def created(target, opener: "str | None" = "T1", kind="page"):
     info = {"targetId": target, "type": kind, "url": "https://example.com/%s" % target}
     if opener:
         info["openerId"] = opener
@@ -464,8 +465,9 @@ def queue_offline():
         with open(path, "w") as handle:
             handle.write("[{")
         check("a file that is not JSON is refused", "could not read" in load(file=path))
-        check("steps that are not a list are refused", "non-empty list" in load(steps={"tool": "click"}))
-        check("an empty queue is refused", "non-empty list" in load(steps=[]))
+        check("steps that are not a list are refused, saying what they are", "a list of" in load(steps={"tool": "click"})
+              and "not dict" in load(steps={"tool": "click"}), load(steps={"tool": "click"}))
+        check("an empty queue is refused", "the steps list is empty" in load(steps=[]))
         check("a step with no tool name is refused, by number", "step 2" in load(steps=[{"tool": "click"}, {"uid": "1_1"}]))
         check("a step that gives pageId is refused", "pageId" in load(steps=[{"tool": "click", "pageId": 3}]))
         bare = steps.load({"steps": [{"tool": "click", "uid": "uid=1_2"}, {"tool": "take_snapshot", "under": "uid=1_3"},
@@ -581,8 +583,11 @@ def queue_offline():
         report = text_of(content)
         check("a queue that stopped at a failure is an error result", result["isError"] is True)
         check("every step is sent with the tab's page id", all(args.get("pageId") == 7 for _, args in fake.calls))
-        check("a step's own arguments are passed through", fake.calls[0] == ("fill", {"uid": "1_2", "value": "x", "pageId": 7}))
-        check("the queue stops at the first failure", [tool for tool, _ in fake.calls] == ["fill", "take_screenshot", "click", "take_snapshot"])
+        check("a fill reads its element before it runs", fake.calls[0][0] == "evaluate_script"
+              and fake.calls[0][1]["args"] == ["1_2"], repr(fake.calls[0]))
+        check("a step's own arguments are passed through", fake.calls[1] == ("fill", {"uid": "1_2", "value": "x", "pageId": 7}))
+        check("the queue stops at the first failure", [tool for tool, _ in fake.calls] == [
+            "evaluate_script", "fill", "take_screenshot", "click", "take_snapshot"], repr(fake.calls))
         check("the report heads each step with its number, tool and outcome",
               "--- 1 fill ok" in report and "--- 3 click FAILED" in report, report)
         check("the report names the steps not run", "--- not run: 4 fill" in report, report)
@@ -591,12 +596,14 @@ def queue_offline():
         check("an image a step returned comes back as an image", content[1:] == [image])
         dialog = "# Open dialog\nalert: Heads up.\nCall handle_dialog to handle it before continuing."
         fake = FakeDevtools([([{"type": "text", "text": "Error: Failed to interact with the element with uid 1_1.\n" + dialog}], True),
-                             ([{"type": "text", "text": "Successfully accepted the dialog\n## Pages\n1: Other tab (https://example.com) [selected]\n2: Mine"}], False)])
+                             ([{"type": "text", "text": "Successfully accepted the dialog\n## Pages\n1: Other tab (https://example.com) [selected]\n2: Mine\n"
+                                                        "Note: the previously selected page was closed. Page 3 is now selected."}], False)])
         result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "handle_dialog", "action": "accept"}], called)
         report = text_of(result["content"])
         check("a click that opened a dialog counts as done, so the handle_dialog after it runs",
               not result["isError"] and "--- 1 click ok" in report and "--- 2 handle_dialog ok" in report, report)
-        check("and chrome-devtools-mcp's list of every page is left out of a report", "Other tab" not in report, report)
+        check("and chrome-devtools-mcp's list of every page, and its note on which it selected, are left out of a report",
+              "Other tab" not in report and "previously selected" not in report, report)
         fake = FakeDevtools([([{"type": "text", "text": "Error: A dialog is open (alert: Heads up.).\n" + dialog}], True)])
         report = text_of(steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}], called)["content"])
         check("a step refused because a dialog was already open still fails", "--- 1 click FAILED" in report, report)
@@ -739,6 +746,11 @@ def views(workdir):
     saved = os.path.join(workdir, "005-step1-reply.txt")
     check("a step's reply longer than REPLY_MOST is cut, and the whole of it saved",
           "(10 characters more; the whole reply is saved to %s)" % saved in report and open(saved).read() == long + "\n", report[-200:])
+    lines = "\n".join("line %05d %s" % (n, "y" * 80) for n in range(1000))
+    report = text_of(steps.run(FakeDevtools([([{"type": "text", "text": lines}], False)]), 3, [{"tool": "evaluate_script"}],
+                               lambda name: os.path.join(workdir, "006-" + name))["content"])
+    kept = report.split("\n--- (")[0].split("\n")[-1]
+    check("a reply of many lines is cut after a whole line", re.fullmatch(r"line \d{5} y{80}", kept) is not None, kept)
     for label, step, words in (("an under that is not a string", {"tool": "take_snapshot", "under": 3}, "under"),
                                ("a full that is not true or false", {"tool": "take_snapshot", "full": "yes"}, "full")):
         said = refusal(lambda: steps.check([step], {"take_snapshot": {}}), steps.StepError)
@@ -779,6 +791,153 @@ def waits():
           not failed and "not changed for 500ms" in said and time.monotonic() - began >= 0.5, said)
     said, failed = checked.run(Page(lambda n: 'uid=1_0 RootWebArea "Tick %d"' % n), 1, {"tool": "wait", "still": 500, "timeout": 1500})
     check("a wait for a page that keeps changing fails at its timeout", failed and "did not stay unchanged" in said, said)
+    began = time.monotonic()
+    said, failed = checked.run(Page(lambda n: 'uid=1_0 RootWebArea "Tick %d"' % n), 1,
+                               {"tool": "wait", "still": 500, "timeout": 20000}, left=1.0)
+    check("a wait longer than the queue has left is cut to it, and says so when it fails",
+          failed and "its timeout was cut to the 1.0s the queue had left" in said and time.monotonic() - began < 5, said)
+
+
+class FakeDialogs:
+    """The connection a dialogs.Answerer holds: a dialog opens at its nth wait, or never."""
+
+    def __init__(self, opens=None):
+        self.opens, self.waits, self.calls = opens, 0, []
+
+    def call(self, method, session=None, **params):
+        self.calls.append((method, params))
+        return {"sessionId": "S1"} if method == "Target.attachToTarget" else {}
+
+    def wait_for(self, event, session=None, timeout=20.0):
+        self.waits += 1
+        if self.opens is not None and self.waits >= self.opens:
+            return {"type": "prompt", "message": "Your name?"}
+        time.sleep(0.01)
+        raise cdp.CdpError("%s never arrived" % event)
+
+    def close(self):
+        pass
+
+
+def dialogs_offline():
+    """dialogs.Answerer against a stand-in connection, and steps.run handing it a handle_dialog step."""
+    connection = FakeDialogs(opens=3)
+    answerer = dialogs.Answerer("T1", {"tool": "handle_dialog", "action": "accept", "promptText": "Joshua"}, lambda: connection)
+    answerer.start_listening()
+    said = answerer.answered(2)
+    check("a dialog that opens while the answerer listens is answered as the handle_dialog step asks",
+          said == 'the prompt "Your name?" was accepted with "Joshua" as it opened'
+          and ("Page.handleJavaScriptDialog", {"accept": True, "promptText": "Joshua"}) in connection.calls, repr((said, connection.calls)))
+    connection = FakeDialogs()
+    answerer = dialogs.Answerer("T1", {"tool": "handle_dialog", "action": "dismiss"}, lambda: connection)
+    answerer.start_listening()
+    check("no dialog within the late wait leaves nothing answered", answerer.answered(0.2) is None
+          and all(method != "Page.handleJavaScriptDialog" for method, _ in connection.calls), repr(connection.calls))
+
+    def unreachable():
+        raise cdp.CdpError("nothing is listening")
+
+    answerer = dialogs.Answerer("T1", {"tool": "handle_dialog", "action": "accept"}, unreachable)
+    answerer.start_listening()
+    check("an answerer that cannot reach the tab answers nothing", answerer.answered(0.2) is None)
+
+    saved = dialogs.Answerer
+    workdir = tempfile.mkdtemp(prefix="browser-dialogs-")
+    try:
+        called = lambda name: os.path.join(workdir, "001-" + name)
+        dialogs.Answerer = lambda target, handle: saved(target, handle, lambda: FakeDialogs(opens=1))
+        fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False)])
+        result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "handle_dialog", "action": "accept"}],
+                           called, target="T1")
+        report = text_of(result["content"])
+        check("the dialog a handle_dialog step waits on is answered by the queue's own answerer, not chrome-devtools-mcp",
+              not result["isError"] and "--- 2 handle_dialog ok" in report and "was accepted as it opened" in report
+              and [tool for tool, _ in fake.calls] == ["click"], report)
+        dialogs.Answerer = lambda target, handle: saved(target, handle, lambda: FakeDialogs())
+        saved_late, dialogs.LATE = dialogs.LATE, 0.2
+        fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False),
+                             ([{"type": "text", "text": "Error: No open dialog found"}], True)])
+        result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "handle_dialog", "action": "accept"}],
+                           called, target="T1")
+        dialogs.LATE = saved_late
+        check("when no dialog opens, the handle_dialog step goes to chrome-devtools-mcp and fails as it says",
+              result["isError"] and "No open dialog found" in text_of(result["content"])
+              and [tool for tool, _ in fake.calls][:2] == ["click", "handle_dialog"], text_of(result["content"]))
+        made = []
+        dialogs.Answerer = lambda target, handle: made.append(handle) or saved(target, handle, lambda: FakeDialogs())
+        fake = FakeDevtools([([{"type": "text", "text": "ran"}], False),
+                             ([{"type": "text", "text": "Successfully accepted the dialog"}], False)])
+        result = steps.run(fake, 7, [{"tool": "evaluate_script", "function": "() => confirm('x')"},
+                                     {"tool": "handle_dialog", "action": "accept"}], called, target="T1")
+        check("no answerer races a tool that answers its own dialogs",
+              made == [] and not result["isError"] and [tool for tool, _ in fake.calls] == ["evaluate_script", "handle_dialog"],
+              text_of(result["content"]))
+    finally:
+        dialogs.Answerer = saved
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def limits_offline():
+    """What a queue refuses or stops for: its time, a fill that would do harm, a chrome-devtools-mcp timeout too long."""
+    workdir = tempfile.mkdtemp(prefix="browser-limits-")
+    saved = steps.QUEUE_MOST
+    try:
+        called = lambda name: os.path.join(workdir, "001-" + name)
+
+        class Slow(FakeDevtools):
+            def call(self, tool, arguments, wait=None):
+                time.sleep(0.3)
+                return super().call(tool, arguments, wait)
+
+        steps.QUEUE_MOST = 0.2
+        fake = Slow([([{"type": "text", "text": "Successfully clicked on the element"}], False)] * 3)
+        result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "click", "uid": "1_2"},
+                                     {"tool": "click", "uid": "1_3"}], called)
+        report = text_of(result["content"])
+        check("a queue past QUEUE_MOST starts no more steps, names them, and is an error",
+              result["isError"] and "--- stopped before step 2" in report and "--- not run: 2 click, 3 click" in report
+              and [tool for tool, _ in fake.calls] == ["click", "take_snapshot"], report)
+        steps.QUEUE_MOST = saved
+
+        for label, found, value, words in (
+                ("a disabled box", {"kind": "box", "disabled": True}, "x", "is disabled"),
+                ("a read-only box", {"kind": "box", "readonly": True}, "x", "is read-only, and fill would empty it"),
+                ("a checkbox given words", {"kind": "toggle"}, "yes", 'with "true" or "false"'),
+                ("a select given text none of its options has", {"kind": "select", "options": ["Canada"]}, "Atlantis",
+                 'no option of the select 1_4 is exactly "Atlantis"')):
+            said = checked._unfillable(found, "1_4", value)
+            check("fill refuses %s" % label, said is not None and words in said, repr(said))
+        check("fill takes a select's option exactly as labelled, a checkbox's true, and a plain box",
+              checked._unfillable({"kind": "select", "options": ["United States"]}, "1_4", "United States") is None
+              and checked._unfillable({"kind": "toggle"}, "1_4", "true") is None
+              and checked._unfillable({"kind": "box"}, "1_4", "x") is None)
+        check("fill refuses a select's option with spacing its label lacks, which chrome-devtools-mcp would not match",
+              checked._unfillable({"kind": "select", "options": ["United States"]}, "1_4", " United  States ") is not None)
+        said = refusal(lambda: steps.check([{"tool": "wait_for", "text": "x", "timeout": 60000}], SCHEMAS), steps.StepError)
+        check("a chrome-devtools-mcp timeout longer than a queue can report within is refused",
+              "timeout must be milliseconds, up to %d" % checked.WAIT_MOST in said, said)
+        fake = FakeDevtools([([{"type": "text", "text": "Found"}], False)])
+        steps.run(fake, 7, [{"tool": "wait_for", "text": ["x"], "timeout": 40000}], called)
+        check("a chrome-devtools-mcp timeout is cut to the time the queue has left",
+              fake.calls[0][1]["timeout"] <= steps.QUEUE_MOST * 1000, repr(fake.calls[0]))
+        long_json = "Script ran on page and returned:\n```json\n" + "x" * (steps.REPLY_MOST + 10) + "\n```"
+        report = text_of(steps.run(FakeDevtools([([{"type": "text", "text": long_json}], False)]), 3,
+                                   [{"tool": "evaluate_script"}], lambda name: os.path.join(workdir, "007-" + name))["content"])
+        check("a long one-line script result is cut mid-line, not dropped", report.count("x") >= steps.REPLY_MOST - 100,
+              repr(len(report)))
+        saved_answerer = dialogs.Answerer
+        dialogs.Answerer = lambda target, handle: saved_answerer(target, handle, lambda: FakeDialogs(opens=1))
+        try:
+            fake = FakeDevtools([([{"type": "text", "text": "Error: Element uid 1_1 not found"}], True)])
+            report = text_of(steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "handle_dialog", "action": "accept"},
+                                                 {"tool": "handle_dialog", "action": "dismiss"}], called, target="T1")["content"])
+        finally:
+            dialogs.Answerer = saved_answerer
+        check("a dialog answered for a step that then failed is still reported",
+              "was accepted as it opened, though its handle_dialog step did not run" in report, report)
+    finally:
+        steps.QUEUE_MOST = saved
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def records_offline():
@@ -830,7 +989,7 @@ def recording_offline():
         folder = os.path.join(root, "zzzz")
         text, is_error = call(httpd, "queue", tab="zzzz/..", steps=[{"tool": "take_snapshot"}])
         check("a tab that is not shaped like a tab id is refused before anything is written",
-              is_error and "no tab has the id" in text and os.listdir(root) == [], text)
+              is_error and "is not a tab id" in text and os.listdir(root) == [], text)
         text, is_error = call(httpd, "queue", tab="zzzz", workspace=root, steps=[{"tool": "take_snapshot"}])
         check("a queue given a workspace is refused, naming it", is_error and "workspace" in text, text)
         text, is_error = call(httpd, "queue", tab="zzzz", steps=[{"tool": "new_page"}])
@@ -1019,6 +1178,8 @@ WIDGETS = r"""<title>checked scratch</title>
 <label for=mask>Phone</label><input id=mask oninput="const d = this.value.replace(/\D/g, ''); this.value = d.length > 6 ? '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6) : d">
 <div id=bio contenteditable role=textbox aria-multiline=true aria-label=Bio></div>
 <button onclick="document.getElementById('warned').textContent = confirm('Sure?') ? 'confirmed' : 'cancelled'">Warn me</button><p id=warned></p>
+<button onclick="setTimeout(() => { document.getElementById('warned').textContent = confirm('Later?') ? 'confirmed' : 'cancelled' }, 1500)">Warn later</button>
+<label for=off>Off</label><input id=off disabled value=off>
 <button id=parse onclick="parseResume(0)">Parse resume</button><button onclick="parseResume(1000)">Parse later</button><p id=parsing></p><label for=city>City</label><input id=city>
 <div class=field><label id=llab>Language</label>
   <div class=control><div id=lshown></div><input id=lang role=combobox aria-labelledby=llab></div><div id=llist role=listbox hidden></div></div>
@@ -1142,8 +1303,8 @@ def checked_live(httpd, tabs, opened):
           is_error and "expected \"902101234\", but the field holds \"90210\"" in text
           and "keeps only its first 5 characters" in text, text)
     text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Phone"), "text": "3105550100"}])
-    check("type into a field that reformats what is typed fails, naming what it shows",
-          is_error and "reformatted it as \"(310) 555-0100\"; if that is right" in text, text)
+    check("type into a masked field passes, naming what it shows, when only spacing and punctuation changed",
+          not is_error and "the field shows them as \"(310) 555-0100\"" in text, text)
     text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Locked"), "text": "x"}])
     check("type into a read-only box fails without typing", is_error and "is a read-only text box" in text, text)
     text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "pick", "uid": field("textbox", "Zip"), "text": "90210", "wait": 1}])
@@ -1164,12 +1325,38 @@ def checked_live(httpd, tabs, opened):
     text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
     check("type into a contenteditable element takes a line break and reads the text back", not is_error, text)
 
+    warned = {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}
     text, is_error = call(httpd, "queue", tab=tab, steps=[
-        {"tool": "click", "uid": field("button", "Warn me")}, {"tool": "handle_dialog", "action": "accept"},
-        {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}])
-    check("a click that opens a confirm counts as done, and handle_dialog in the same queue answers it",
-          not is_error and "--- 2 handle_dialog ok" in text and returned(text.split("--- 3")[-1]) == "confirmed"
+        {"tool": "click", "uid": field("button", "Warn me")}, {"tool": "handle_dialog", "action": "accept"}, warned])
+    took = re.search(r"^--- 1 click ok ([\d.]+)s$", text, re.M)
+    check("a confirm a handle_dialog step waits on is answered as it opens, so its click takes no 30s",
+          not is_error and took is not None and float(took.group(1)) < 10
+          and 'the confirm "Sure?" was accepted as it opened' in text and returned(text.split("--- 3")[-1]) == "confirmed"
           and "## Pages" not in text, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
+        {"tool": "click", "uid": field("button", "Warn later")}, {"tool": "handle_dialog", "action": "dismiss"}, warned])
+    check("a confirm that opens after its click is still answered by the handle_dialog step after it",
+          not is_error and "was dismissed as it opened" in text and returned(text.split("--- 3")[-1]) == "cancelled", text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "click", "uid": field("button", "Warn me")}])
+    answered, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "handle_dialog", "action": "accept"}, warned])
+    check("a confirm no handle_dialog step waits on counts its click done, and the next queue answers it",
+          not is_error and "counts as done" in text and "--- 1 handle_dialog ok" in answered
+          and returned(answered.split("--- 2")[-1]) == "confirmed", text + answered)
+
+    locked, auth = field("textbox", "Locked"), field("combobox", "Auth")
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "fill", "uid": locked, "value": "x"}])
+    held, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": locked, "value": "fixed"}])
+    check("fill refuses a read-only box, which it would empty, and the box keeps its value",
+          is_error and "is read-only, and fill would empty it, so nothing was filled" in text and "--- 1 expect ok" in held,
+          text + held)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "fill", "uid": field("textbox", "Off"), "value": "x"}])
+    check("fill refuses a disabled box at once, naming why", is_error and "is disabled, so nothing was filled" in text, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "fill_form", "elements": [
+        {"uid": field("textbox", "Name"), "value": "Changed Name"}, {"uid": auth, "value": "Atlantis"}]}])
+    held, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": field("textbox", "Name"), "value": "Changed Name"}])
+    check("fill_form refuses a select given text none of its options has, before filling any element",
+          is_error and 'no option of the select %s is exactly "Atlantis"' % auth in text and "--- 1 expect FAILED" in held,
+          text + held)
     parse, city = field("button", "Parse resume"), field("textbox", "City")
     text, is_error = call(httpd, "queue", tab=tab, steps=[
         {"tool": "click", "uid": parse}, {"tool": "wait", "gone": "Parsing your resume", "timeout": 10000},
@@ -1361,6 +1548,10 @@ if __name__ == "__main__":
     focus_offline()
     print()
     queue_offline()
+    print()
+    dialogs_offline()
+    print()
+    limits_offline()
     print()
     records_offline()
     print()

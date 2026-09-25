@@ -9,7 +9,7 @@ import os
 import re
 import time
 
-from . import cdp, checked
+from . import cdp, checked, dialogs
 from .devtools import may_touch
 
 # Tab tools own opening, closing and choosing tabs, and the rest have no place in filling a form.
@@ -18,6 +18,7 @@ LEFT_OUT = PAGE_TOOLS | {"lighthouse_audit", "take_heapsnapshot"}
 RESTARTED = ("note: this tab's chrome-devtools-mcp had stopped and was started again, so element uids from before "
              "are gone; take a new snapshot")
 GAP = 0.1  # seconds between steps, so the page can react to one step before the next
+QUEUE_MOST = 50.0  # seconds a queue starts steps for; README.md, "Agent Gotchas & Invariants", says why
 REPLY_MOST = 40000  # characters of one step's reply a report holds; the whole reply is saved when longer
 # chrome-devtools-mcp's reply sections: a dialog a step left open, its refusal when one was open before the step,
 # and the list of every page in Chrome, which names other tabs and is no use inside one tab's queue.
@@ -26,6 +27,11 @@ DIALOG_BEFORE = "A dialog is open ("
 PAGES = "## Pages"
 # Tools chrome-devtools-mcp runs with a dialog open, so their failure beside one says nothing of who opened it.
 UNBLOCKED = {"handle_dialog", "list_console_messages", "get_console_message"}
+# Tools that answer a dialog themselves (dialogAction, handleBeforeUnload, handle_dialog), so no dialogs.Answerer
+# races them.
+OWN_DIALOGS = {"evaluate_script", "navigate_page", "handle_dialog"}
+# chrome-devtools-mcp's note on which page it now selects, whose numbers mean nothing in a queue.
+SELECTION_NOTE = re.compile(r"^Note: the previously selected page .*\n?", re.M)
 # How a chrome-devtools-mcp schema's types are held once its JSON is read.
 TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool, "array": list, "object": dict}
 
@@ -114,8 +120,10 @@ def load(arguments, base):
                 steps = json.load(handle)
         except (OSError, ValueError) as exc:
             raise StepError("could not read steps from %s: %s" % (path, exc))
-    if not isinstance(steps, list) or not steps:
-        raise StepError("the steps must be a non-empty list")
+    if not isinstance(steps, list):
+        raise StepError("the steps must be a list of {\"tool\": ...} objects, not %s" % type(steps).__name__)
+    if not steps:
+        raise StepError("the steps list is empty")
     for number, step in enumerate(steps, 1):
         if not isinstance(step, dict) or not isinstance(step.get("tool"), str) or not step["tool"]:
             raise StepError("step %d is not an object with a tool name" % number)
@@ -212,6 +220,9 @@ def _arguments_problem(step, tool):
     missing = [key for key in schema.get("required", []) if key in properties and key not in given]
     if missing:
         return "%s needs %s" % (name, ", ".join(missing))
+    if isinstance(given.get("timeout"), (int, float)) and given["timeout"] > checked.WAIT_MOST:
+        return "%s's timeout must be milliseconds, up to %d, since a queue starts no step after %gs" % (
+            name, checked.WAIT_MOST, QUEUE_MOST)
     for key, value in list(given.items()):
         if isinstance(value, str) and properties[key].get("type") == "array" \
                 and properties[key].get("items", {}).get("type") == "string":
@@ -221,8 +232,8 @@ def _arguments_problem(step, tool):
     for path in [given["filePath"]] if "filePath" in given else given.get("filePaths", []):
         # The server's own folder is browserd's, so a relative or ~ path would land there, not where it reads.
         if "\0" in path or not os.path.isabs(path) or not may_touch(path):
-            return "%s cannot use %s: file paths must be absolute, without ~, and inside ~/Desktop, /tmp or $TMPDIR" \
-                % (name, path)
+            return ("%s cannot use %s: file paths must be absolute, without ~, and inside ~/Desktop, /tmp, $TMPDIR or "
+                    "browserd's folder" % (name, path))
     return None
 
 
@@ -384,22 +395,25 @@ def _without_pages(text):
 
 
 def _capped(text, path):
-    """text, or its first REPLY_MOST characters once the whole of it is saved to path."""
+    """text, or its whole lines within REPLY_MOST characters once the whole of it is saved to path."""
     if len(text) <= REPLY_MOST:
         return text
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(text + "\n")
-    return "%s\n--- (%d characters more; the whole reply is saved to %s)" % (text[:REPLY_MOST], len(text) - REPLY_MOST, path)
+    cut = text.rfind("\n", REPLY_MOST // 2, REPLY_MOST)  # a long one-line JSON result is cut mid-line, not dropped
+    cut = cut if cut > 0 else REPLY_MOST
+    return "%s\n--- (%d characters more; the whole reply is saved to %s)" % (text[:cut], len(text) - cut, path)
 
 
 def _text(content):
     return "\n".join(item.get("text", "") for item in content if item.get("type") == "text").strip()
 
 
-def run(devtools, page_id, steps, path, restarted=False):
+def run(devtools, page_id, steps, path, restarted=False, target=None):
     """Run the steps in order and return an MCP result: one text report, then any images the steps returned.
 
-    The result is an error when a step failed, so the agent cannot mistake a stopped queue for a finished one.
+    The result is an error when a step failed, or the queue stopped at QUEUE_MOST, so the agent cannot mistake a
+    stopped queue for a finished one.
 
     Args:
         devtools (Devtools): the tab's own process, already paired.
@@ -407,46 +421,89 @@ def run(devtools, page_id, steps, path, restarted=False):
         steps (list[dict]): checked by load and check.
         path (callable): the full path for a file name, like record.Call.path; it names where each whole snapshot goes.
         restarted (bool): the process was started again after dying, so the report says old uids are gone.
+        target (str | None): the tab's target id, for answering a dialog the moment it opens; None leaves every
+            dialog to chrome-devtools-mcp.
     """
     report, images, failed = [], [], False
     if restarted:
         report.append(RESTARTED)
-    for number, step in enumerate(steps, 1):
-        view_options = {key: step[key] for key in VIEW_OPTIONS if key in step and step["tool"] == "take_snapshot"}
-        arguments = {key: value for key, value in step.items() if key != "tool" and key not in view_options}
-        arguments["pageId"] = page_id
-        began = time.monotonic()
-        if step["tool"] in checked.STEPS:
-            text, failed = checked.run(devtools, page_id, step)
-            content = [{"type": "text", "text": text}]
-        else:
-            try:
-                content, failed = devtools.call(step["tool"], arguments)
-            except cdp.CdpError as exc:
-                content, failed = [{"type": "text", "text": str(exc)}], True
-        took = time.monotonic() - began
-        text = _without_pages(_text(content))
-        dialog = OPEN_DIALOG in text and DIALOG_BEFORE not in text
-        if failed and dialog and step["tool"] not in checked.STEPS and step["tool"] not in UNBLOCKED:
-            # The action opened a dialog, which blocks the page, so the action itself ran out its 30s timeout.
-            failed = False
-            text += ("\n(a dialog opened during this step and blocked the page, so the step counts as done; answer "
-                     "the dialog with a handle_dialog step)")
-        text, missing = view(text, path("step%d-snapshot.txt" % number), **view_options)
-        failed = failed or missing
-        report.append("--- %d %s %s %.1fs" % (number, step["tool"], "FAILED" if failed else "ok", took))
-        report.append(_capped(text, path("step%d-reply.txt" % number)))
-        images.extend(item for item in content if item.get("type") == "image")
-        if failed:
-            left = ["%d %s" % (later, steps[later - 1]["tool"]) for later in range(number + 1, len(steps) + 1)]
-            report.append("--- not run: %s" % (", ".join(left) or "nothing, this was the last step"))
-            report.append("--- the page now")
-            try:
-                now = devtools.text("take_snapshot", {"pageId": page_id})
-                report.append(_capped(view(now, path("page-now-snapshot.txt"))[0], path("page-now-reply.txt")))
-            except cdp.CdpError as exc:
-                report.append("(no snapshot: %s)" % exc)
-            break
-        if number < len(steps):
-            time.sleep(GAP)
+    started, answerer = time.monotonic(), None
+    try:
+        for number, step in enumerate(steps, 1):
+            left = QUEUE_MOST - (time.monotonic() - started)
+            if left <= 0:
+                report.append("--- stopped before step %d: the queue has run %.0fs, and Claude Code drops a reply "
+                              "after about 60s; run the rest in a new queue" % (number, QUEUE_MOST - left))
+                report.extend(_after_stop(devtools, page_id, steps, number - 1, path))
+                failed = True
+                break
+            began = time.monotonic()
+            following = steps[number] if number < len(steps) else None
+            if target and following and following["tool"] == "handle_dialog" and step["tool"] not in OWN_DIALOGS:
+                answerer = dialogs.Answerer(target, following)
+                answerer.start_listening()
+            content, failed = _step(devtools, page_id, step, left, answerer)
+            if step["tool"] == "handle_dialog":
+                answerer = None
+            took = time.monotonic() - began
+            text = SELECTION_NOTE.sub("", _without_pages(_text(content)))
+            dialog = OPEN_DIALOG in text and DIALOG_BEFORE not in text
+            if failed and dialog and step["tool"] not in checked.STEPS and step["tool"] not in UNBLOCKED:
+                # The action opened a dialog, which blocks the page, so the action itself ran out its 30s timeout.
+                failed = False
+                text += ("\n(a dialog opened during this step and blocked the page, so the step counts as done; answer "
+                         "it with a handle_dialog step, and put one right after such a step to skip this 30s)")
+            view_options = {key: step[key] for key in VIEW_OPTIONS if key in step and step["tool"] == "take_snapshot"}
+            text, missing = view(text, path("step%d-snapshot.txt" % number), **view_options)
+            failed = failed or missing
+            report.append("--- %d %s %s %.1fs" % (number, step["tool"], "FAILED" if failed else "ok", took))
+            report.append(_capped(text, path("step%d-reply.txt" % number)))
+            images.extend(item for item in content if item.get("type") == "image")
+            if failed:
+                report.extend(_after_stop(devtools, page_id, steps, number, path))
+                break
+            if number < len(steps):
+                time.sleep(GAP)
+    finally:
+        if answerer is not None:
+            # Its step failed or the queue stopped, but it may have answered a dialog all the same.
+            answered = answerer.answered(0)
+            if answered is not None:
+                report.append("--- %s, though its handle_dialog step did not run" % answered)
     return {"content": [{"type": "text", "text": "\n".join(report)}] + images, "isError": failed}
+
+
+def _step(devtools, page_id, step, left, answerer):
+    """(content, failed) for one step: a checked step, a dialog the answerer answered, a refused fill, or the tool's own."""
+    if step["tool"] in checked.STEPS:
+        text, failed = checked.run(devtools, page_id, step, left)
+        return [{"type": "text", "text": text}], failed
+    if step["tool"] == "handle_dialog" and answerer is not None:
+        answered = answerer.answered(min(dialogs.LATE, left))
+        if answered is not None:
+            return [{"type": "text", "text": answered}], False
+    if step["tool"] in ("fill", "fill_form"):
+        refused = checked.fill_refused(devtools, page_id, step)
+        if refused:
+            return [{"type": "text", "text": refused}], True
+    arguments = {key: value for key, value in step.items()
+                 if key != "tool" and not (step["tool"] == "take_snapshot" and key in VIEW_OPTIONS)}
+    arguments["pageId"] = page_id
+    if isinstance(arguments.get("timeout"), (int, float)) and arguments["timeout"] > left * 1000:
+        arguments["timeout"] = max(1, int(left * 1000))  # a chrome-devtools-mcp wait, cut as checked.run cuts its own
+    try:
+        return devtools.call(step["tool"], arguments)
+    except cdp.CdpError as exc:
+        return [{"type": "text", "text": str(exc)}], True
+
+
+def _after_stop(devtools, page_id, steps, done, path):
+    """The report's closing lines once a queue stops after step `done`: the steps not run, and a view of the page."""
+    left = ["%d %s" % (later, steps[later - 1]["tool"]) for later in range(done + 1, len(steps) + 1)]
+    lines = ["--- not run: %s" % (", ".join(left) or "nothing, this was the last step"), "--- the page now"]
+    try:
+        now = devtools.text("take_snapshot", {"pageId": page_id})
+        lines.append(_capped(view(now, path("page-now-snapshot.txt"))[0], path("page-now-reply.txt")))
+    except cdp.CdpError as exc:
+        lines.append("(no snapshot: %s)" % exc)
+    return lines

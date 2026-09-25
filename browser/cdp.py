@@ -22,6 +22,9 @@ DATA_DIR = os.path.expanduser("~/Library/Application Support/Google/Chrome-Schoo
 PROFILE = "Default"
 
 
+CALL_WAIT = 20.0  # seconds a command waits for its answer
+
+
 class CdpError(Exception):
     pass
 
@@ -116,7 +119,7 @@ class Browser:
     """The browser-wide connection. Commands carry a session id to reach a tab."""
 
     def __init__(self):
-        self._ws = WebSocket(require()["webSocketDebuggerUrl"])
+        self._ws = WebSocket(require()["webSocketDebuggerUrl"], CALL_WAIT)
         self._last = 0
         self._events = []
         # lsof sees only this user's processes, so the browser that answered says which process it is.
@@ -133,6 +136,7 @@ class Browser:
         message = {"id": message_id, "method": method, "params": params}
         if session:
             message["sessionId"] = session
+        self._ws.settimeout(CALL_WAIT)  # whatever a wait_for or next_event before it left
         self._ws.send(json.dumps(message))
         while True:
             try:

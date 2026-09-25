@@ -10,6 +10,7 @@ from . import cdp, focus
 
 LETTERS = "abcdefghjkmnpqrstuvwxyz23456789"
 LOAD_WAIT = 10.0
+NOT_AN_ID = "%r is not a tab id (four characters, like k3f9); tab_open and tab_list give tab ids"
 
 
 def is_id(tab):
@@ -72,6 +73,8 @@ class Tabs:
         Args:
             tab (str): a tab id from list or open.
         """
+        if not is_id(tab):
+            raise cdp.CdpError(NOT_AN_ID % tab)
         with self._lock:
             target = self._targets.get(tab)
         if target is None:
@@ -102,7 +105,7 @@ class Tabs:
                 except cdp.Late:
                     failed = None  # the site has not answered yet; the tab is open and still loading
                 except cdp.CdpError as exc:
-                    failed = str(exc)  # a URL Chrome will not navigate to at all
+                    failed = str(exc).removeprefix("Page.navigate: ")  # a URL Chrome will not navigate to at all
                 if failed:
                     raise cdp.CdpError("could not open %s: %s" % (url, failed))
                 try:
