@@ -111,9 +111,9 @@ wait read the page back.
 
 Element uids (1_13) come from a snapshot and stay valid on this tab until the page navigates or the element goes
 away. Every snapshot in a report is a view: each line that carries words, in page order with its uid, and every
-control, with a native select on one line, like combobox "Country" = "United States" (249 options). The view's
-header names where the whole snapshot is saved; grep it for anything the view leaves out. take_snapshot also takes
-under, a uid, for that element and what sits under it (a native select's options), and full: true, for its lines
+control, with a native select on one line, like combobox "Country" = "United States" (249 options). A view's header
+names where the whole snapshot is saved. take_snapshot also takes under, a uid, for that element and what sits
+under it (a native select's options); find, a regex, for only the lines it matches; and full: true, for its lines
 as chrome-devtools-mcp wrote them.
 
 The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A failure makes the result an error,
@@ -142,7 +142,9 @@ A step that loads a new page (navigate_page, a link or submit click) makes every
 take_snapshot and use its uids in the next queue. navigate_page leaves a page even when the page asks to stay
 (unsaved changes); give it handleBeforeUnload "dismiss" to stay. A view shows names and values as the page has them, quotes
 and all; a spinbutton's value= is its aria-valuenow, which some pages never update, while expect reads what it holds.
-A native select's value in a view may be its first option, shown though no one chose it; fill it anyway.
+A native select's value in a view may be its first option, shown though no one chose it; fill it anyway. Three or
+more one-word text lines whose uids count up, as a canvas app like Slides draws its words, are one view line,
+uid=5_1..25 StaticText "<words>": word k has uid 5_(1+k), and a step given 5_1..25 acts on 5_1.
 
 """
 
@@ -185,7 +187,9 @@ def queue_tool(tabs, workers, allowed, calls=CALLS):
     def queue(arguments):
         unknown = set(arguments) - {"tab", "steps", "file"}
         if unknown:
-            raise mcp.ToolError("queue takes tab, and steps or file; not %s" % ", ".join(sorted(unknown)))
+            raise mcp.ToolError("queue takes tab, and steps or file; not %s. A tool list that shows other arguments is "
+                                "older than this server: ask the user to reconnect browserd with /mcp"
+                                % ", ".join(sorted(unknown)))
         tab = _text(arguments, "tab")
         if not is_id(tab):  # it names a folder, so "../x" must not reach os.path.join
             raise mcp.ToolError(NOT_AN_ID % tab)

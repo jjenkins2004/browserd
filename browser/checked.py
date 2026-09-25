@@ -422,8 +422,8 @@ def _gone(devtools, page_id, text, timeout):
             return "%s is off the page, after %.1fs" % (json.dumps(text), took)
         elif took >= min(APPEAR_WAIT, timeout / 1000):
             raise CheckFailed("%s did not show on the page in the wait's first %gs, so its going proves nothing; text "
-                              "that runs across elements (a word in bold) sits on separate snapshot lines and never "
-                              "matches" % (json.dumps(text), min(APPEAR_WAIT, timeout / 1000)))
+                              "that runs across elements (a word in bold, or a view's uid=5_1..25 run of words) sits on "
+                              "separate snapshot lines and never matches" % (json.dumps(text), min(APPEAR_WAIT, timeout / 1000)))
     raise CheckFailed("%s is still on the page after %gms" % (json.dumps(text), timeout))
 
 

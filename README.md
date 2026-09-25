@@ -1,7 +1,7 @@
 # browserd
 
 The browser MCP server and everything it needs: it owns Joshua's School Chrome and serves the tools a
-Claude session drives an application form with. Nothing here knows what a job is; it is handed a tab, and
+Claude session reads and drives pages with. Nothing here knows what a job is; it is handed a tab, and
 records each `queue` call in that tab's record folder, `.run/calls/<tab>/`.
 
     ./start    the server and the School Chrome together, in the background
@@ -20,6 +20,9 @@ queue's checked steps, and what each tool refuses. Agents connect over HTTP at `
 registered once at user scope so every Claude Code session has it:
 
     claude mcp add -s user --transport http browserd http://127.0.0.1:9230/mcp
+
+A session reads the tool list when it connects, so after a restart that changed the tools, reconnect
+browserd from `/mcp` in each session already open.
 
 ## Tests
 

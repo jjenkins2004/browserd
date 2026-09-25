@@ -12,7 +12,7 @@ import time
 from . import cdp, checked, dialogs
 from .devtools import may_touch
 
-# Tab tools own opening, closing and choosing tabs, and the rest have no place in filling a form.
+# Tab tools own opening, closing and choosing tabs, and the rest profile a page, which a queue only reads and drives.
 PAGE_TOOLS = {"new_page", "close_page", "select_page", "list_pages"}
 LEFT_OUT = PAGE_TOOLS | {"lighthouse_audit", "take_heapsnapshot"}
 RESTARTED = ("note: this tab's chrome-devtools-mcp had stopped and was started again, so element uids from before "
@@ -20,6 +20,10 @@ RESTARTED = ("note: this tab's chrome-devtools-mcp had stopped and was started a
 GAP = 0.1  # seconds between steps, so the page can react to one step before the next
 QUEUE_MOST = 50.0  # seconds a queue starts steps for; README.md, "Agent Gotchas & Invariants", says why
 REPLY_MOST = 40000  # characters of one step's reply a report holds; the whole reply is saved when longer
+ERROR_MOST = 9000  # characters a failed queue's report keeps under, its view of the page now cut to fit; README.md
+PAGE_NOW_LEAST = 2000  # characters of the view of the page now a failed report keeps, however much its steps took
+POINTER = 300  # characters left for the line _capped adds, naming where the whole reply is saved
+WORD_RUN_LEAST = 3  # one-word lines a run needs before a view joins it; two neighbours are often two labels
 # chrome-devtools-mcp's reply sections: a dialog a step left open, its refusal when one was open before the step,
 # and the list of every page in Chrome, which names other tabs and is no use inside one tab's queue.
 OPEN_DIALOG = "# Open dialog"
@@ -36,7 +40,12 @@ SELECTION_NOTE = re.compile(r"^Note: the previously selected page .*\n?", re.M)
 TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool, "array": list, "object": dict}
 
 SNAPSHOT = "## Latest page snapshot"  # the header chrome-devtools-mcp puts over a snapshot in its reply
-VIEW_OPTIONS = ("under", "full")  # take_snapshot's own options here, never sent on to chrome-devtools-mcp
+VIEW_OPTIONS = ("under", "full", "find")  # take_snapshot's own options here, never sent on to chrome-devtools-mcp
+UID_NUMBER = re.compile(r"(\d+)_(\d+)")  # a uid: its snapshot's number, then its own
+UID_RANGE = re.compile(r"(\d+_\d+)\.\.\d+")  # a view's run of words, uid=5_1..25; a step given it acts on the first
+WAIT_FOR_MISSED = ("\n(wait_for finds page text holding one of its strings, or an element whose accessible name is "
+                   "exactly one of them: a button with no text of its own needs all of its name, as a view shows it)")
+WAIT_FOR_TIMEOUT = re.compile(r"Timed out after waiting|ms exceeded")
 # A snapshot line: two spaces of indent a level, uid, role, then an optional quoted name and the attributes.
 NODE = re.compile(r"( *)uid=(\S+) (\S+)(.*)")
 # Every attribute a snapshot line can carry: puppeteer's accessibility properties, and chrome-devtools-mcp's
@@ -95,7 +104,7 @@ def describe(tools):
         arguments = ", ".join(
             "%s%s: %s" % (key, "" if key in required else "?", _shape(spec))
             for key, spec in schema.get("properties", {}).items() if key in _takes(name, schema)
-        ) + (", under?: string, full?: boolean" if name == "take_snapshot" else "")
+        ) + (", under?: string, full?: boolean, find?: string" if name == "take_snapshot" else "")
         summary = (tool.get("description") or "").strip().split("\n")[0].split(". ")[0].rstrip(".")
         lines.append("  %s(%s) - %s" % (name, arguments, summary))
     return "\n".join(lines)
@@ -134,11 +143,15 @@ def load(arguments, base):
 
 
 def _bare(value):
-    return value[len("uid="):] if isinstance(value, str) and value.startswith("uid=") else value
+    if not isinstance(value, str):
+        return value
+    value = value[len("uid="):] if value.startswith("uid=") else value
+    run = UID_RANGE.fullmatch(value)
+    return run.group(1) if run else value
 
 
 def _bare_uids(step):
-    """Strip "uid=" from a uid copied whole from a view line, wherever a step names one."""
+    """Strip "uid=", and a run's "..<last>", from a uid copied whole from a view line, wherever a step names one."""
     for key in ("uid", "under", "from_uid", "to_uid"):
         if key in step:
             step[key] = _bare(step[key])
@@ -165,9 +178,11 @@ def check(steps, allowed):
         elif tool in LEFT_OUT:
             wrong = "%s is left out of a queue: %s" % (tool, (
                 "tab_open, tab_list, tab_show and tab_close manage tabs, and the tab argument chooses the page"
-                if tool in PAGE_TOOLS else "it has no place in filling a form"))
+                if tool in PAGE_TOOLS else "it profiles the page, and a queue only reads and drives one"))
         elif tool not in allowed:
-            wrong = "%r is not a tool a queue can run; the steps argument's description lists them" % tool
+            wrong = "%r is not a tool a queue can run; it runs %s (the steps argument's description gives their " \
+                    "arguments; if it lacks one, ask the user to reconnect browserd with /mcp)" \
+                    % (tool, ", ".join(list(checked.STEPS) + sorted(allowed)))
         else:
             wrong = _arguments_problem(step, allowed[tool])
         if wrong:
@@ -209,6 +224,13 @@ def _arguments_problem(step, tool):
             return "take_snapshot's full must be true or false"
         if "filePath" in step:
             return "take_snapshot takes no filePath: the whole snapshot is always saved in the tab's record folder"
+        if "find" in step:
+            if not isinstance(step["find"], str) or not step["find"]:
+                return "take_snapshot's find must be a regex"
+            try:
+                re.compile(step["find"])
+            except re.error as exc:
+                return "take_snapshot's find is not a regex: %s" % exc
     schema = tool.get("inputSchema", {})
     properties = {key: spec for key, spec in schema.get("properties", {}).items() if key != "pageId"}
     given = {key: value for key, value in step.items()
@@ -316,12 +338,39 @@ def _collapsed(node, options):
     return " ".join(parts + (['= "%s"' % value.group(1)] if value else []) + attributes + ["(%d options)" % options])
 
 
+def _plain_text(node):
+    """The one word a StaticText line names, with nothing else on it and nothing under it, or None."""
+    if node["role"] != "StaticText" or node["children"]:
+        return None
+    name = NAME.match(node["rest"])
+    return name.group(1) if name and name.end() == len(node["rest"]) and re.fullmatch(r"\S+", name.group(1)) else None
+
+
+def _word_run(nodes, at):
+    """The one-word StaticText siblings from nodes[at] whose uids count up by one, as a canvas app draws its words."""
+    run = [nodes[at]]
+    while _plain_text(run[-1]) is not None and at + len(run) < len(nodes):
+        uid, following = UID_NUMBER.fullmatch(run[-1]["uid"]), nodes[at + len(run)]
+        if not uid or following["uid"] != "%s_%d" % (uid.group(1), int(uid.group(2)) + 1) \
+                or _plain_text(following) is None:
+            break
+        run.append(following)
+    return run if len(run) >= WORD_RUN_LEAST else [nodes[at]]
+
+
 def _view(nodes, depth, under, out):
     """Append the lines that carry words, and every control, indented one level per kept line they sit under.
 
-    A native select collapses to one line, unless the view is under its uid.
+    A native select collapses to one line, unless the view is under its uid; so does a run of words.
     """
-    for node in nodes:
+    at = 0
+    while at < len(nodes):
+        node, run = nodes[at], _word_run(nodes, at)
+        at += len(run)
+        if len(run) > 1:
+            words = " ".join(_plain_text(word) or "" for word in run)
+            out.append('%suid=%s..%s StaticText "%s"' % ("  " * depth, node["uid"], run[-1]["uid"].split("_")[1], words))
+            continue
         options = _own_options(node) if node["role"] == "combobox" and node["uid"] != under else 0
         if node["role"] == "InlineTextBox":
             continue  # a verbose snapshot's copy of the text line above it, under a uid it shares with others
@@ -343,7 +392,7 @@ def _full(nodes, out):
     return out
 
 
-def view(text, path, under=None, full=False):
+def view(text, path, under=None, full=False, find=None):
     """A tool's reply with its snapshot, when it has one, cut to a view or kept full, and the whole snapshot saved.
 
     Args:
@@ -351,6 +400,7 @@ def view(text, path, under=None, full=False):
         path (str): where the whole snapshot is saved.
         under (str | None): a uid; only that element and what sits under it is kept.
         full (bool): give the snapshot's lines as they are instead of as a view.
+        find (str | None): a regex; only the lines it matches, ignoring case, are kept.
 
     Returns (text, missing): missing is True when under names no element in the snapshot.
     """
@@ -373,10 +423,12 @@ def view(text, path, under=None, full=False):
                      "no element has uid=%s in this snapshot" % under]
             return "\n".join(before + shown + after), True
         nodes, loose, scope = [found], [], " under %s" % under
-    if full:
-        shown = ["%s (full%s; saved whole to %s)" % (SNAPSHOT, scope, path)] + loose + _full(nodes, [])
-    else:
-        shown = ["%s (view%s; saved whole to %s)" % (SNAPSHOT, scope, path)] + loose + _view(nodes, 0, under, [])
+    kept = loose + (_full(nodes, []) if full else _view(nodes, 0, under, []))
+    if find is not None:
+        matched = [line for line in kept if re.search(find, line, re.I)]
+        scope += ", lines matching %s: %d of %d" % (json.dumps(find), len(matched), len(kept))
+        kept = matched
+    shown = ["%s (%s%s; saved whole to %s)" % (SNAPSHOT, "full" if full else "view", scope, path)] + kept
     return "\n".join(before + shown + after), False
 
 
@@ -394,14 +446,14 @@ def _without_pages(text):
     return "\n".join(lines[:start] + lines[end:])
 
 
-def _capped(text, path):
-    """text, or its whole lines within REPLY_MOST characters once the whole of it is saved to path."""
-    if len(text) <= REPLY_MOST:
+def _capped(text, path, most=REPLY_MOST):
+    """text, or its whole lines within `most` characters once the whole of it is saved to path."""
+    if len(text) <= most:
         return text
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(text + "\n")
-    cut = text.rfind("\n", REPLY_MOST // 2, REPLY_MOST)  # a long one-line JSON result is cut mid-line, not dropped
-    cut = cut if cut > 0 else REPLY_MOST
+    cut = text.rfind("\n", most // 2, most)  # a long one-line JSON result is cut mid-line, not dropped
+    cut = cut if cut > 0 else most
     return "%s\n--- (%d characters more; the whole reply is saved to %s)" % (text[:cut], len(text) - cut, path)
 
 
@@ -434,7 +486,7 @@ def run(devtools, page_id, steps, path, restarted=False, target=None):
             if left <= 0:
                 report.append("--- stopped before step %d: the queue has run %.0fs, and Claude Code drops a reply "
                               "after about 60s; run the rest in a new queue" % (number, QUEUE_MOST - left))
-                report.extend(_after_stop(devtools, page_id, steps, number - 1, path))
+                report.extend(_after_stop(devtools, page_id, steps, number - 1, path, len("\n".join(report))))
                 failed = True
                 break
             began = time.monotonic()
@@ -453,14 +505,17 @@ def run(devtools, page_id, steps, path, restarted=False, target=None):
                 failed = False
                 text += ("\n(a dialog opened during this step and blocked the page, so the step counts as done; answer "
                          "it with a handle_dialog step, and put one right after such a step to skip this 30s)")
+            if failed and step["tool"] == "wait_for" and WAIT_FOR_TIMEOUT.search(text):
+                text += WAIT_FOR_MISSED
             view_options = {key: step[key] for key in VIEW_OPTIONS if key in step and step["tool"] == "take_snapshot"}
             text, missing = view(text, path("step%d-snapshot.txt" % number), **view_options)
             failed = failed or missing
             report.append("--- %d %s %s %.1fs" % (number, step["tool"], "FAILED" if failed else "ok", took))
-            report.append(_capped(text, path("step%d-reply.txt" % number)))
+            # A failed step's own reply is cut to half a failed report, so the view of the page now still fits.
+            report.append(_capped(text, path("step%d-reply.txt" % number), ERROR_MOST // 2 if failed else REPLY_MOST))
             images.extend(item for item in content if item.get("type") == "image")
             if failed:
-                report.extend(_after_stop(devtools, page_id, steps, number, path))
+                report.extend(_after_stop(devtools, page_id, steps, number, path, len("\n".join(report))))
                 break
             if number < len(steps):
                 time.sleep(GAP)
@@ -497,13 +552,15 @@ def _step(devtools, page_id, step, left, answerer):
         return [{"type": "text", "text": str(exc)}], True
 
 
-def _after_stop(devtools, page_id, steps, done, path):
-    """The report's closing lines once a queue stops after step `done`: the steps not run, and a view of the page."""
+def _after_stop(devtools, page_id, steps, done, path, used):
+    """The report's closing lines once a queue stops after step `done`: the steps not run, and a view of the page
+    now, cut so the report, `used` characters so far, stays under ERROR_MOST, but to no fewer than PAGE_NOW_LEAST."""
     left = ["%d %s" % (later, steps[later - 1]["tool"]) for later in range(done + 1, len(steps) + 1)]
     lines = ["--- not run: %s" % (", ".join(left) or "nothing, this was the last step"), "--- the page now"]
     try:
         now = devtools.text("take_snapshot", {"pageId": page_id})
-        lines.append(_capped(view(now, path("page-now-snapshot.txt"))[0], path("page-now-reply.txt")))
+        lines.append(_capped(view(now, path("page-now-snapshot.txt"))[0], path("page-now-reply.txt"),
+                             max(ERROR_MOST - used - sum(len(line) + 1 for line in lines) - POINTER, PAGE_NOW_LEAST)))
     except cdp.CdpError as exc:
         lines.append("(no snapshot: %s)" % exc)
     return lines

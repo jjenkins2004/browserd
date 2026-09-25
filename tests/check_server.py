@@ -5,8 +5,11 @@ browser/README.md, "Agent Gotchas & Invariants", "Checks", says what each group 
     python3 tests/check_server.py
 """
 
+import contextlib
 import http.client
+import io
 import json
+import socket
 import os
 import re
 import shutil
@@ -94,6 +97,18 @@ def protocol():
         check("initialize answers with the client's protocol version and a tools capability",
               status == 200 and result.get("protocolVersion") == "2025-03-26" and "tools" in result.get("capabilities", {}))
         check("initialize names the server", result.get("serverInfo", {}).get("name") == "check")
+        logged, errors, saved_log = [], io.StringIO(), mcp.log
+        mcp.log = logged.append
+        try:
+            raise ConnectionResetError(54, "Connection reset by peer")
+        except ConnectionResetError:
+            with contextlib.redirect_stderr(errors), socket.socket() as dropped:
+                httpd.handle_error(dropped, ("127.0.0.1", 1))
+        finally:
+            mcp.log = saved_log
+        check("a client dropping its connection is logged in one line, not a traceback",
+              logged == ["a client dropped its connection (ConnectionResetError)"] and not errors.getvalue(),
+              repr((logged, errors.getvalue())))
         status, answer = rpc(httpd, "initialize", {"protocolVersion": "2099-01-01", "capabilities": {}})
         check("a protocol version the server does not know is answered with one it does",
               (answer or {}).get("result", {}).get("protocolVersion") == mcp.FALLBACK_VERSION)
@@ -443,7 +458,7 @@ class FakeDevtools:
             raise answer
         return answer
 
-    def text(self, tool, arguments, wait=None):
+    def text(self, tool, arguments, wait=None) -> str:
         self.calls.append((tool, arguments))
         return '## Latest page snapshot\nuid=1_0 RootWebArea "Form"\n  uid=1_1 generic'
 
@@ -484,7 +499,8 @@ def queue_offline():
         said = refusal(lambda: steps.check([{"tool": "click"}, {"tool": "new_page"}], {"click": {}}), steps.StepError)
         check("a step naming a tool the queue leaves out is refused, by number, saying why", "step 2" in said and "left out" in said, said)
         said = refusal(lambda: steps.check([{"tool": "click"}, {"tool": "frobnicate"}], {"click": {}}), steps.StepError)
-        check("a step naming a tool that does not exist is refused, by number", "step 2" in said and "not a tool" in said, said)
+        check("a step naming a tool that does not exist is refused, by number, naming the tools a queue runs",
+              "step 2" in said and "not a tool" in said and "it runs pick, expect, type, wait, click" in said, said)
         check("a step whose tool name is empty is refused", "not an object with a tool name" in load(steps=[{"tool": ""}]))
         inside = os.path.join(workdir, "resume.pdf")
         for label, step, words in (
@@ -752,9 +768,43 @@ def views(workdir):
     kept = report.split("\n--- (")[0].split("\n")[-1]
     check("a reply of many lines is cut after a whole line", re.fullmatch(r"line \d{5} y{80}", kept) is not None, kept)
     for label, step, words in (("an under that is not a string", {"tool": "take_snapshot", "under": 3}, "under"),
-                               ("a full that is not true or false", {"tool": "take_snapshot", "full": "yes"}, "full")):
+                               ("a full that is not true or false", {"tool": "take_snapshot", "full": "yes"}, "full"),
+                               ("a find that is not a regex", {"tool": "take_snapshot", "find": "(x"}, "find")):
         said = refusal(lambda: steps.check([step], {"take_snapshot": {}}), steps.StepError)
         check("%s is refused before any step runs" % label, "step 1" in said and words in said, said)
+
+    text, _ = steps.view(reply, path, find="country|WHY")
+    check("find keeps only the view lines its regex matches, ignoring case, and says how many",
+          text.split("\n")[1:6] == ['## Latest page snapshot (view, lines matching "country|WHY": 3 of 14; saved whole to %s)' % path,
+                                     '  uid=1_4 StaticText "Country"',
+                                     '  uid=1_5 combobox "Country" = "United States" invalid="true" (2 options)',
+                                     '  uid=1_8 textbox "Why us?" multiline value="Line one', 'Line two"'], text)
+    words = "\n".join(['uid=5_0 RootWebArea "Deck"', '  uid=5_1 StaticText "Project"', '  uid=5_2 StaticText "objective"',
+                       '  uid=5_3 StaticText "Lorem"', '  uid=5_4 StaticText " "', '  uid=5_5 StaticText "ipsum"',
+                       '  uid=5_9 StaticText "Size"', '  uid=5_10 StaticText "Width"', '  uid=5_11 StaticText "bold" description="b"',
+                       '  uid=5_12 button "Next"', '  uid=5_13 StaticText "Two words"', '  uid=5_14 StaticText "a"',
+                       '  uid=5_15 StaticText "b"', '  uid=5_16 StaticText "c"'])
+    text, _ = steps.view("## Latest page snapshot\n" + words, path)
+    check("three or more one-word lines whose uids count up are one line; a blank, a gap, two words, an attribute end one",
+          text.split("\n")[2:] == ['  uid=5_1..3 StaticText "Project objective Lorem"', '  uid=5_5 StaticText "ipsum"',
+                                    '  uid=5_9 StaticText "Size"', '  uid=5_10 StaticText "Width"',
+                                    '  uid=5_11 StaticText "bold" description="b"', '  uid=5_12 button "Next"',
+                                    '  uid=5_13 StaticText "Two words"', '  uid=5_14..16 StaticText "a b c"'], text)
+    step = {"tool": "click", "uid": "uid=5_1..3"}
+    steps._bare_uids(step)
+    check("a uid copied from a run's line acts on the run's first word", step["uid"] == "5_1", step["uid"])
+
+    class LongPage(FakeDevtools):
+        def text(self, tool, arguments, wait=None):
+            return "## Latest page snapshot\n" + "\n".join('uid=1_%d button "Button %d"' % (n, n) for n in range(2000))
+
+    report = text_of(steps.run(LongPage([([{"type": "text", "text": "Error: Element uid 9_9 not found"}], True)]), 3,
+                               [{"tool": "click", "uid": "9_9"}], lambda name: os.path.join(workdir, "008-" + name))["content"])
+    check("a failed queue's report stays under ERROR_MOST, its view of the page now cut and saved whole",
+          len(report) <= steps.ERROR_MOST and "008-page-now-reply.txt)" in report, "%d: %s" % (len(report), report[-200:]))
+    report = text_of(steps.run(FakeDevtools([([{"type": "text", "text": "Timed out after waiting 5000ms"}], True)]), 3,
+                               [{"tool": "wait_for", "text": ["Slideshow"]}], lambda name: os.path.join(workdir, "009-" + name))["content"])
+    check("a failed wait_for says what it matches", "accessible name is exactly one" in report, report)
 
 
 class Page:
@@ -991,7 +1041,8 @@ def recording_offline():
         check("a tab that is not shaped like a tab id is refused before anything is written",
               is_error and "is not a tab id" in text and os.listdir(root) == [], text)
         text, is_error = call(httpd, "queue", tab="zzzz", workspace=root, steps=[{"tool": "take_snapshot"}])
-        check("a queue given a workspace is refused, naming it", is_error and "workspace" in text, text)
+        check("a queue given a workspace is refused, naming it and asking for a /mcp reconnect",
+              is_error and "workspace" in text and "reconnect browserd with /mcp" in text, text)
         text, is_error = call(httpd, "queue", tab="zzzz", steps=[{"tool": "new_page"}])
         check("a call refused before it runs records nothing", is_error and os.listdir(root) == [], repr(os.listdir(root)))
 

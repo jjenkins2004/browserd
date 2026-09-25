@@ -3,8 +3,8 @@
 ## Module TL;DR
 
 The browser MCP server: it starts and owns Joshua's School Chrome and serves tools to Claude
-sessions over HTTP on `127.0.0.1:9230`, so application forms are read and filled inside his
-logged-in session. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage tabs by short tab ids;
+sessions over HTTP on `127.0.0.1:9230`, so pages are read and driven inside his logged-in
+session. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage tabs by short tab ids;
 `queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
 records every call in that tab's record folder, `../.run/calls/<tab>/`. Python standard library, plus Node for
 chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
@@ -51,7 +51,8 @@ process only.
 **`mcp.Server`** takes tools as dicts (`name`, `description`, `inputSchema`, `run(arguments)`).
 `run` returns a string, a list of MCP content items, or a whole result dict, which is passed through
 as is. Raising `mcp.ToolError` sends the agent a readable error result; any other exception becomes
-an error result naming it, with the traceback in the log. `server.tab_tools(tabs, workers)` builds
+an error result naming it, with the traceback in the log; a client dropping its connection is one
+log line. `server.tab_tools(tabs, workers)` builds
 the four tab tools, `server.queue_tool` the queue; all turn `cdp.CdpError` into `ToolError`. The queue
 records into `server.CALLS/<tab>/`, so it refuses a tab argument not shaped like a tab id (`tabs.is_id`)
 before that reaches a path, and once its arguments pass, makes a `record.Call`, writes what was asked,
@@ -66,13 +67,15 @@ alone.
 
 **`steps.place_screenshots`** first gives each `take_screenshot` without a `filePath` one among the
 call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added (and
-without take_snapshot's own `under` and `full`), hands each checked step to `checked.run`, passes
+without take_snapshot's own `under`, `full` and `find`), hands each checked step to `checked.run`, passes
 every reply's text, less chrome-devtools-mcp's `## Pages` list of every tab in Chrome and its note on
 which page it now selects, through **`steps.view`**, and returns a whole MCP result: a text report,
 any images, and `isError` when a step failed or the queue stopped at `steps.QUEUE_MOST`. A reply
 longer than `steps.REPLY_MOST` (40,000 characters) is cut after its last whole line within that (mid-line
 when that line would leave less than half), the
-whole of it saved as `<n>-step<k>-reply.txt` (`<n>-page-now-reply.txt` for the failed queue's).
+whole of it saved as `<n>-step<k>-reply.txt`. A failed queue's view of the page now, and its failed
+step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view saved as
+`<n>-page-now-reply.txt`.
 
 **Server lifecycle**, in `server.serve()`: ask a chrome-devtools-mcp process for its tool list (no
 browser needed), bind 9230, install SIGTERM/SIGINT handlers, write `.run/server.pid`, then
@@ -145,15 +148,23 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   `dialogAction` and no DOM wait, so it never answers a dialog raised in another tab.
 - **A queue's step is `{"tool": name, ...arguments}`, never with `pageId`.** `steps.check` refuses
   the whole queue before anything runs for a tool in `steps.LEFT_OUT` (opening, listing, choosing
-  and closing tabs; lighthouse; heap snapshots), an unknown tool, or arguments its tool's own schema
-  would refuse (unknown, missing, of the wrong type or value), so a typo at step 40 does not run
-  steps 1 to 39 first. One string where a tool asks for a list of strings (`wait_for`'s `text`) is
-  made that list, and a uid written `uid=1_13`, as a view line shows it, is taken as `1_13`. The
+  and closing tabs; lighthouse; heap snapshots), an unknown tool (the refusal names every tool a
+  queue runs), or arguments its tool's own schema would refuse (unknown, missing, of the wrong type
+  or value), so a typo at step 40 does not run steps 1 to 39 first. One string where a tool asks for
+  a list of strings (`wait_for`'s `text`) is made that list, and a uid written `uid=1_13`, or a run's
+  `uid=5_1..25`, as a view line shows it, is taken as `1_13`, or the run's first uid, `5_1`. The
   queue stops at the first failed step; the report names the steps not run and ends with a view of
   the page now. A relative `file` is read from the tab's record folder.
 - **Claude Code cuts a tool's description at about 2,000 characters.** `server.QUEUE_HELP` stays
   under it; `server.STEPS_HELP` and the step catalog, `steps.describe`, make up the `steps` argument's
   description, which Claude Code passes whole.
+- **Claude Code reads the tool list once, when a session connects.** A session connected before a
+  restart that changed the tools keeps the old list until `/mcp` reconnects it, and the queue's refusal
+  of an argument it does not take says so.
+- **Claude Code cuts an error result over about 10,000 characters out of its middle** (seen in a
+  trace; a success of 17,593 came whole). So a failed queue's view of the page now is cut to keep the report
+  under `steps.ERROR_MOST` (9,000), but never below `steps.PAGE_NOW_LEAST` (2,000), the whole of it
+  saved as `<n>-page-now-reply.txt`.
 - **Claude Code drops a tool's reply after about 60s** (measured: a 55s queue came back, a 65s one did
   not, though the server ran it to the end). So a queue starts no step once it has run
   `steps.QUEUE_MOST` (50s), naming the steps not run; `checked.run` cuts a `wait`'s timeout or a
@@ -190,11 +201,16 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   snapshot's `InlineTextBox` lines, which copy the text above them under shared uids. A native select, a
   combobox with options and no other control under it, becomes
   `combobox "<name>" = "<value>" <attributes> (<n> options)`; a custom multi-select, with a search box
-  or remove buttons among its options, stays whole. The whole snapshot is saved in the tab's record
+  or remove buttons among its options, stays whole. A run of `steps.WORD_RUN_LEAST` (3) or more
+  `StaticText` siblings, each one word and nothing else, whose uids count up by one, as a canvas app
+  like Slides draws its words, becomes one line, `uid=5_1..25 StaticText "<the words, joined by
+  spaces>"`, and word k keeps its uid, `5_(1+k)`. A gap in the numbering, a line of more than one
+  word, or any attribute ends a run; two one-word neighbours are more often two labels. The whole snapshot is saved in the tab's record
   folder as `<n>-step<k>-snapshot.txt`, or `<n>-page-now-snapshot.txt` for the failed queue's, and the
   view's header names it. take_snapshot's own `under: uid` keeps only that element and what sits under
   it, a native select there not collapsed, and fails its step when the snapshot lacks the uid;
-  `full: true` gives the lines as chrome-devtools-mcp wrote them instead of a view. take_snapshot's
+  `full: true` gives the lines as chrome-devtools-mcp wrote them instead of a view; `find: <regex>`
+  keeps only the lines it matches, ignoring case, and its header counts them. take_snapshot's
   `filePath` is refused, since it would skip the view and the record folder. A name ends at the first
   quote followed by one of the attribute names a snapshot line can carry (`steps.ATTRIBUTES`), and a
   native select's value, its last attribute, runs to the line's end, so quotes inside either are kept.

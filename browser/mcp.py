@@ -6,6 +6,7 @@ Gotchas", says why a request carrying an Origin header is refused.
 """
 
 import json
+import sys
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +36,14 @@ def _content(result):
 
 class Server(ThreadingHTTPServer):
     daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        dropped = sys.exc_info()[0]
+        if dropped is not None and issubclass(dropped, ConnectionError):
+            # A client closing a kept-alive connection, or giving up before its reply, is no fault of the server.
+            log("a client dropped its connection (%s)" % dropped.__name__)
+            return
+        super().handle_error(request, client_address)
 
     def __init__(self, host, port, tools, name, version="1"):
         """
