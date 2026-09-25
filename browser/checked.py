@@ -8,7 +8,7 @@ import json
 import re
 import time
 
-from . import cdp, clipboard
+from . import cdp
 from .worker import returned
 from .ws import WebSocketError
 
@@ -107,6 +107,55 @@ FOCUS_JS = r"""() => {
   return text && !el.disabled && !el.readOnly ? {focused: el.type} : {refused: el.tagName.toLowerCase()};
 }"""
 META = 4  # CDP's modifier bit for Meta, the Mac's Command key
+# paste's text, handed to the page in place of the Mac's clipboard by listeners in every same-origin frame; README.md,
+# "Agent Gotchas & Invariants", says what they do. It returns why the text cannot reach where the focus is, or null
+# once window.__browserdPaste holds how many pastes (seen) and paste key presses (pressed) arrived, ready(), whether
+# the focus is still where the listeners are, and undo().
+HAND_JS = r"""(text) => {
+  const frames = ['IFRAME', 'FRAME', 'OBJECT', 'EMBED', 'FENCEDFRAME'];
+  const focused = () => {  // the window the focus is in, or null when that is a frame from another site
+    let w = window, el = document.activeElement;
+    for (;;) {
+      if (el && el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; }
+      if (!el || !frames.includes(el.tagName)) return w;
+      try { w = el.contentWindow; el = w.document.activeElement; } catch (e) { return null; }
+    }
+  };
+  if (!focused()) return 'the focus is in a frame from another site';
+  if (window.__browserdPaste) window.__browserdPaste.undo();
+  const state = {seen: 0, pressed: 0, undos: []}, handed = new Set();
+  const hand = (w) => {
+    handed.add(w);
+    const swap = (e) => {
+      if (state.seen++) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+      const data = new w.DataTransfer();
+      data.setData('text/plain', text);
+      Object.defineProperty(e, 'clipboardData', {value: data});
+    };
+    const unhandled = (e) => {
+      if (!e.defaultPrevented) { e.preventDefault(); w.document.execCommand('insertText', false, text); }
+    };
+    const real = (e) => {
+      if (e.inputType === 'insertFromPaste') { e.preventDefault(); e.stopImmediatePropagation(); }
+    };
+    const key = (e) => { if (e.metaKey && e.code === 'KeyV') state.pressed++; };
+    const listeners = [['paste', swap, true], ['paste', unhandled, false], ['beforeinput', real, true],
+                       ['keydown', key, true]];
+    listeners.forEach(([type, listener, capture]) => w.addEventListener(type, listener, capture));
+    state.undos.push(() => listeners.forEach(([type, listener, capture]) =>
+      w.removeEventListener(type, listener, capture)));
+    for (let i = 0; i < w.frames.length; i++) {
+      let same = false;
+      try { same = !!w.frames[i].document; } catch (e) {}
+      if (same) hand(w.frames[i]);
+    }
+  };
+  hand(window);
+  state.ready = () => handed.has(focused());
+  state.undo = () => { state.undos.forEach((undo) => undo()); delete window.__browserdPaste; };
+  window.__browserdPaste = state;
+  return null;
+}"""
 # What fill_refused reads first; README.md, "Agent Gotchas & Invariants", says why. A dropdown's option labels are
 # its options' accessible names, which chrome-devtools-mcp matches exactly; a <select multiple> matches by value.
 FILL_JS = r"""(el) => {
@@ -384,8 +433,8 @@ def _holds_text(devtools, page_id, uid, text, focused):
 
 
 def paste(devtools, page_id, step, target, connect):
-    """Put text in with a real paste, Meta+V from the Mac's clipboard, which an editor takes as it is: no quotes
-    curled, brackets closed or lines indented, as typing gets.
+    """Put text in with a real paste, Meta+V, which an editor takes as it is: no quotes curled, brackets closed or
+    lines indented, as typing gets.
 
     Args:
         devtools (Devtools): the tab's process.
@@ -404,13 +453,8 @@ def paste(devtools, page_id, step, target, connect):
             raise CheckFailed("nothing that takes text has the focus (%s has it), so nothing was pasted; click the "
                               "field or editor first, or give paste its uid"
                               % (where.get("refused") if isinstance(where, dict) else "no element"))
-    pressed = False
     try:
-        with clipboard.lent(step["text"]):
-            _press_paste(target, connect)
-            pressed = True
-    except clipboard.ClipboardError as exc:
-        raise CheckFailed("%s%s" % (exc, "; the paste key was pressed, so the text went in all the same" if pressed else ""))
+        _press_paste(target, step["text"], connect)
     except (WebSocketError, OSError) as exc:
         raise CheckFailed("could not press the paste key: %s" % exc)
     if "uid" not in step:
@@ -420,15 +464,54 @@ def paste(devtools, page_id, step, target, connect):
     return "pasted %d characters; %s" % (len(step["text"]), held)
 
 
-def _press_paste(target, connect):
-    """Press Meta+V on the tab with Chrome's own paste command: on a Mac a key press alone, as press_key sends it,
-    pastes nothing."""
+def _press_paste(target, text, connect):
+    """Hand the tab's page the text in place of the Mac's clipboard (HAND_JS), press Meta+V once, check the page saw
+    the paste, and take the text back. The key press carries Chrome's own paste command; README.md, "Agent Gotchas &
+    Invariants", says why."""
     browser = connect()
     try:
         session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
-        key = {"key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": META}
-        browser.call("Input.dispatchKeyEvent", session, type="rawKeyDown", commands=["paste"], **key)
-        browser.call("Input.dispatchKeyEvent", session, type="keyUp", **key)
+
+        def evaluate(expression, failed):
+            answer = browser.call("Runtime.evaluate", session, expression=expression, returnByValue=True)
+            if "exceptionDetails" in answer:
+                details = answer["exceptionDetails"]
+                raise CheckFailed("%s: %s" % (failed, details.get("exception", {}).get("description")
+                                              or details.get("text", "a script error")))
+            return answer.get("result", {}).get("value")
+
+        pasted = False
+        try:
+            # Inside the try, so listeners a late or failed install left on the page still come off.
+            refused = evaluate("(%s)(%s)" % (HAND_JS, json.dumps(text)),
+                               "the page could not be handed the text, so nothing was pasted")
+            if refused:
+                raise CheckFailed("%s, which paste cannot hand the text to, so nothing was pasted; click a field "
+                                  "outside that frame, or type there instead" % refused)
+            if not evaluate("window.__browserdPaste.ready()", "the page changed before the paste key was pressed, so "
+                            "nothing was pasted"):
+                raise CheckFailed("the focus moved where the text was not handed, so the paste key was not pressed")
+            key = {"key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": META}
+            browser.call("Input.dispatchKeyEvent", session, type="rawKeyDown", commands=["paste"], **key)
+            browser.call("Input.dispatchKeyEvent", session, type="keyUp", **key)
+            # A press the page takes has run its listeners by now.
+            seen, pressed = evaluate("[window.__browserdPaste.seen, window.__browserdPaste.pressed]",
+                                     "the paste key was pressed, but whether the page took it could not be read; "
+                                     "check the field before pasting again")
+            if seen:
+                pasted = True
+                return
+            if pressed:
+                raise CheckFailed("the page took the paste key, but a script of its own had the paste before the text "
+                                  "handed to it, so the field may hold the Mac's clipboard; check it")
+            raise CheckFailed("the page took no paste key press, so nothing was pasted")
+        finally:
+            try:
+                evaluate("window.__browserdPaste && window.__browserdPaste.undo()", "the script failed")
+            except (cdp.CdpError, CheckFailed, WebSocketError, OSError) as exc:
+                raise CheckFailed("%s, but paste's listeners could not be taken off the page (%s); reload the tab "
+                                  "before pasting there by hand"
+                                  % ("the text was pasted" if pasted else "the paste failed", exc))
     finally:
         browser.close()
 
@@ -541,8 +624,8 @@ def describe():
         "unless the field holds text, exactly or with only its spacing and punctuation changed (a masked phone); use it "
         "instead of fill for a value of 100 characters or more, which fill sets by script",
         "  paste(text: string, uid?: string) - Paste text with Meta+V, so an editor takes it as it is, with no quotes "
-        "curled or brackets closed as typing gets (the Mac's clipboard is lent for it and put back after); with uid, "
-        "over a text box's text, read back as type reads; without, where the focus is, read back by nothing",
+        "curled or brackets closed as typing gets (the page is handed the text; the Mac's clipboard is never written); "
+        "with uid, over a text box's text, read back as type reads; without, where the focus is, read back by nothing",
         "  wait(gone?: string, uid?: string, value?: string, still?: number, timeout?: number) - Wait for one "
         "condition: until the text in gone, seen on the page within %gs, is off it, or the page has not changed for "
         "still ms (both read from snapshots), or the field at uid holds value, read as expect reads; still and timeout "

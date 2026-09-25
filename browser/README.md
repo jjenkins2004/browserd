@@ -32,7 +32,6 @@ run `npm ci`).
       worker.py    one tab's process, paired with its page; Workers registry
       steps.py     the queue: load, check, run, report; snapshot views
       checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused
-      clipboard.py lends the Mac's clipboard to a paste, then puts it back whole
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       record.py    one queue call's numbered files in a folder
       profiles.py  Profile (name, folder, port); what a new profile is given
@@ -41,7 +40,7 @@ run `npm ci`).
       page.py      the browserd page on 9231: GET /state, and a POST per button
       page.html    the page itself: one file, plain JavaScript, polls /state
     ../start, ../stop, ../restart  launchers
-    ../.run/                    gitignored: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/; a tab's log and a closed session's folder go at start once 7 days unused
+    ../.run/                    gitignored: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
     ../tests/check_server.py    protocol, tab ids, sessions, focus, queue, recording, profiles, page, service; live tabs, queue
     ../tests/check_browser.py   framing, a profile's Chrome proof, launch; live proof, tab load
@@ -105,13 +104,16 @@ tab whose page is gone, and gives each new page a tab: the session of the page t
 `run` returns a string, a list of MCP content items, or a whole result dict, which is passed through
 as is. Raising `mcp.ToolError` sends the agent a readable error result; any other exception becomes
 an error result naming it, with the traceback in the log; a client dropping its connection is one
-log line. `server.tab_tools(state, tabs, workers)` builds `session_start` and the four tab tools,
-`server.queue_tool` the queue; all turn `cdp.CdpError` into `ToolError`, and all but `session_start` run
-through `_in_session`, which refuses a missing, malformed, unknown or closed session and moves its last call to now as the
-call starts and as it ends. The queue records into `server.CALLS/<profile>/<session>-<label>/<tab>/`, so it
-refuses a tab argument not shaped like a tab id (`tabs.is_id`) before that reaches a path, and a tab not the
-session's before anything is written; once its arguments pass, it makes a `record.Call`, writes what was
-asked, and writes what came back through `_recorded`, a raised error included.
+log line. Every tool call is one log line; one a tool refuses (`ToolError`), one naming no such tool, and
+one whose params or arguments are not an object also name what they were given. `server.tab_tools(state, tabs,
+workers)` builds `session_start` and the four tab tools, `server.queue_tool` the queue; all turn `cdp.CdpError`
+into `ToolError`, and all but `session_start` run through `_in_session`, which refuses a missing, malformed,
+unknown or closed session and moves its last call to now as the call starts and as it ends. The queue records
+into `server.CALLS/<profile>/<session>-<label>/<tab>/`, so it refuses a tab argument not shaped like a tab id
+(`tabs.is_id`) before that reaches a path, and a tab not the session's before anything is written. It then
+makes a `record.Call` and writes what was asked as sent, so a queue refused for its other arguments or its
+steps is recorded too, with a `file`'s steps added once read; once they pass, what was asked is rewritten as
+the steps it runs, and what came back is written through `_recorded`, a refusal or raised error included.
 
 **`worker.Worker`** is one tab's `devtools.Devtools` process and its page id there, behind a lock,
 so one tab's queues run in turn and different tabs run at once. The process is pointed at the tab's
@@ -142,17 +144,15 @@ step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view s
 
 **Server lifecycle**, in `server.serve()`: open `.run/state.db`, ask a chrome-devtools-mcp process for its
 tool list (no browser needed), bind 9230 and the page's 9231, install SIGTERM/SIGINT/SIGHUP handlers, write
-`.run/server.pid`, remove each closed session's record folder and each `devtools-<tab>.log` unused for
-`server.KEEP_DAYS` (7; `server.prune`, which touches only names shaped like a session's folder, a tab's log or
-a tab's folder from before sessions, `calls/<tab>/`, and counts a call in a tab's folder as use of its
-session's), `chromes.adopt` every profile's Chrome already
-running, then serve the page on a thread and the tools. Another thread looks every `server.PAUSE_POLL` (60s)
-for sessions paused, and `Workers.pause`s their tabs. No Chrome starts with the server, and one quitting
+`.run/server.pid`, `chromes.adopt` every profile's Chrome already running, then serve the page on a thread and
+the tools. Record folders and devtools logs are never removed. Another thread looks every `server.PAUSE_POLL`
+(60s) for sessions paused, and `Workers.pause`s their tabs. No Chrome starts with the server, and one quitting
 leaves the server up. When the server stops, every tab's process is stopped, `chromes.quit_all` sends each
 running Chrome `Browser.close` and waits for it to exit (one not exited 15s later is logged, and the server
 stops anyway), and every open session and tab is marked closed. On SIGHUP alone, which `../restart` sends, only
-the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits everything): every Chrome keeps running and every session stays open for the server that
-`../restart` starts next, whose listings find the same tabs under the same ids. A crash leaves the same.
+the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits everything): every Chrome keeps
+running and every session stays open for the server that `../restart` starts next, whose listings find the
+same tabs under the same ids. A crash leaves the same.
 
 ## Agent Gotchas & Invariants (⚠️)
 
@@ -164,6 +164,7 @@ the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits ev
   - the profile's Chrome runs without its port (Chrome reads the port only at startup);
   - more than one process listens, since `127.0.0.1` may reach the unchecked one;
   - the listener is not the profile's Chrome;
+  - the profile's Chrome was started without `cdp.INPUT_FLAG`;
   - no DevTools answer comes back;
   - `lsof` or `ps` cannot run, hangs past 10s, or prints an error, since a blocked `lsof` reads
     like an empty port.
@@ -192,6 +193,13 @@ the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits ev
   `focus.TAKE_WAIT` (Chrome was measured taking it 50 to 90ms after the click), gives the focus back
   to the app that had it. With that Chrome in front when the event comes, as after Joshua's own
   click, it leaves the focus there; it logs a line for each such tab.
+- **Every profile's Chrome starts with `--allow-pre-commit-input` (`cdp.INPUT_FLAG`).** Once a page
+  loads, Chrome holds its input until it first draws (paint holding), dropping every key press and
+  click while `Input.dispatchKeyEvent` and `Input.dispatchMouseEvent`, and so chrome-devtools-mcp, report success. The hold ends
+  only when Chrome draws the page, and it never draws a background tab by itself, so without the flag
+  such a tab drops input indefinitely (measured: 40 of 40 first key presses on fresh background tabs dropped). `launch`
+  `cdp.require` refuses a profile's Chrome whose command line lacks the flag, naming its pid to quit, so no tool,
+  listing or window uses one, a Chrome kept through `../restart` from before the flag included.
 - **Tabs open in the background.** `Tabs.open` creates the tab with `background: true`, so the
   Mac's focus never moves; without it, `Target.createTarget` brings Chrome to the front. Opening
   goes `about:blank`, attach, `Page.enable`, then navigate: Chrome can finish a load before a later
@@ -326,20 +334,27 @@ the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits ev
     send as Enter and so submit the form. It passes on exactly the text, or on the text with only its
     spacing and punctuation changed (a masked phone), saying what the field shows; a field that cut the
     text short (a `maxlength`) fails, saying so.
-  - **`paste`** exists because editors change text as it is typed (Slides curls quotes; a code editor
-    closes brackets and indents lines), and a real paste is taken as it is. `clipboard.lent` saves every
-    item and type on the Mac's clipboard (JavaScript for Automation, since `pbpaste` reads text only),
-    puts the text on as one UTF-8 item, and puts the clipboard back after, one paste at a time; a
-    clipboard manager still records the text. The paste is Meta+V sent over the server's own
-    connection to the tab with Chrome's `paste` command, since on a Mac a key press alone, as
-    `press_key` sends it, pastes nothing. Two other ways were measured to fail: Monaco takes a synthetic
-    `paste` event and inserts nothing, and `Input.insertText` gets closed brackets as typing does. With a
-    uid, it focuses and selects as `type` does, refusing what `type` refuses but a line break in a
-    one-line box (a paste presses no Enter), and reads back as `type` reads;
-    without, it pastes where the focus is, followed into same-origin frames (where Google Docs and
-    Slides take typing) and shadow roots, refusing unless that is a text box or contenteditable element
-    (a frame from another site passes), and nothing reads it back. A clipboard that could not be put
-    back fails the step, saying whether the paste key was pressed.
+  - **`paste`** exists because editors change text as it is typed (Slides curls quotes and capitalizes a
+    new line; a code editor closes brackets and indents lines), and a real paste is taken as it is. It
+    presses Meta+V over the server's own connection to the tab with Chrome's `paste` command, since on a
+    Mac a key press alone, as `press_key` sends it, pastes nothing. Chrome reads the Mac's clipboard into
+    that paste, and nothing writes the clipboard: first `checked.HAND_JS` puts listeners in every
+    same-origin frame, and they hand the paste event the text as its `clipboardData`, insert the text
+    themselves when no page script cancelled or stopped the paste, cancel and stop Chrome's own insert of
+    the real clipboard, which follows a paste an editor stopped without cancelling (Slides does), and
+    block any paste after the first; the step takes the text back after, removing them all, or fails
+    saying to reload the tab. A page script that reads the paste, or Chrome's insert, before them can
+    still read the real clipboard. The focus in a frame from another site, where they cannot go, is
+    refused, and so is the focus moving where they are not before the key is pressed. The key is
+    pressed once, since `cdp.INPUT_FLAG` (above) keeps Chrome from dropping
+    it: a press the page did not take fails the step, and one it took whose paste a page script had first
+    fails it saying the field may hold the Mac's clipboard. Three other ways were measured to fail: `Input.insertText` gets closed brackets and
+    curled quotes as typing does, a synthetic `paste` event puts nothing in a box with no paste handler,
+    and dragging and dropping the text puts nothing in CodeMirror or Quill. With a uid, it focuses and
+    selects as `type` does, refusing what `type` refuses but a line break in a one-line box (a paste
+    presses no Enter), and reads back as `type` reads; without, it pastes where the focus is, followed
+    into same-origin frames (where Google Docs and Slides take typing) and shadow roots, refusing unless
+    that is a text box or contenteditable element, and nothing reads it back.
   - **`wait`** takes one condition: `gone` (the text, once seen, is in no snapshot line's page text,
     the title included; uids, roles and urls are left out), `uid` and `value` (the field holds it, read
     as `expect` reads), or `still` (ms without a change). `timeout` is ms, like `wait_for`'s; `pick`'s
@@ -371,14 +386,14 @@ the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits ev
   project's, so a relative or `~` path would land inside it. Usage statistics and CrUX are off, and the performance, network and
   emulation tools are not loaded.
 - **No tool types a password safely.** A queue's chrome-devtools-mcp steps refuse nothing, and every
-  step's arguments are recorded in the tab's record folder.
+  step's arguments are recorded in the tab's record folder, and a refused call's in `../.run/server.log` too.
 - **Checks.**
   - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for `lsof`,
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
     `tabs_offline` and `session_tools_offline` stand in for Chrome and `osascript`, with `state.db` in a
     temporary folder; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
-    `dialogs_offline` for the answerer's connection; `paste_offline` for chrome-devtools-mcp, the
-    clipboard and the connection that presses the paste key; `limits_offline` for a slow tool;
+    `dialogs_offline` for the answerer's connection; `paste_offline` for chrome-devtools-mcp and
+    the connection that hands the page its text and presses the paste key; `limits_offline` for a slow tool;
     `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
     and a folder's running Chrome, and `page_offline` for Chrome, `focus.bring` and each tab's Worker, with `.run/state.db` and the Google
     folder each in a temporary folder;
@@ -389,9 +404,10 @@ the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits ev
     Chrome installed they skip. `queue_live` also needs `npm ci` done, and skips
     without it, and records into a temporary folder; its checked steps run on a local page whose
     dropdowns and one textarea take only trusted input, whose Parse resume button runs a stand-in resume parser,
-    whose Quoted editor curls quotes as they are typed, and whose Warn me confirm, clicked with no handle_dialog
-    step after it, makes one click take about 30s. Its paste checks lend the Mac's clipboard, and check it is
-    put back.
+    whose Quoted editor curls quotes as they are typed, whose Stopper editor puts a paste in itself and stops
+    it without cancelling Chrome's own insert, as Slides does, and whose Warn me confirm, clicked with no
+    handle_dialog step after it, makes one click take about 30s. Its paste checks read the Mac's clipboard's
+    change count, never its contents, and check nothing wrote it.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; a tab already open is never touched. No live check moves the Mac's focus:
     `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.

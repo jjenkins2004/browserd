@@ -17,7 +17,7 @@ def _open(profile):
             "--remote-debugging-port=%d" % profile.port,
             "--user-data-dir=%s" % profile.folder,
             "--profile-directory=%s" % cdp.PROFILE,
-            "--no-first-run", "--no-default-browser-check", "--no-startup-window",
+            "--no-first-run", "--no-default-browser-check", "--no-startup-window", cdp.INPUT_FLAG,
         ],
         capture_output=True,
         text=True,
@@ -41,7 +41,7 @@ def launch(profile, wait=15.0):
         cdp.check_folder(profile.folder)
     if cdp.listener(profile.port) is not None or cdp.owner(profile.folder) is not None:
         # Something is already up, so starting another would help nothing: it is the
-        # profile's Chrome with its port, or require says what it is instead.
+        # profile's Chrome with its port and cdp.INPUT_FLAG, or require says what it is instead.
         cdp.require(profile)
         return "already running: %s" % profile.endpoint
     _open(profile)

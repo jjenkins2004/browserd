@@ -187,7 +187,8 @@ def connecting():
         require = lambda: cdp.require(profile)
         os.makedirs(folder)
         profile_list(folder, ["Default"])
-        school = "%s --remote-debugging-port=9223 --user-data-dir=%s --profile-directory=Default" % (cdp.CHROME, folder)
+        school = "%s --remote-debugging-port=9223 --user-data-dir=%s --profile-directory=Default %s" % (
+            cdp.CHROME, folder, cdp.INPUT_FLAG)
         portless = school.replace(" --remote-debugging-port=9223", "")
 
         def machine(owner=None, **state):
@@ -283,6 +284,14 @@ def connecting():
         starting(machine(owner=501, listening=[501], processes={501: school}, answer=VERSION))
         said = refusal(lambda: launch.launch(profile))
         check("launch leaves a running School Chrome alone", not said and not started, said)
+        starting(machine(owner=501, listening=[501], processes={501: school.replace(" " + cdp.INPUT_FLAG, "")},
+                         answer=VERSION))
+        said = refusal(lambda: launch.launch(profile))
+        check("launch refuses a running School Chrome started without %s, and starts nothing" % cdp.INPUT_FLAG,
+              cdp.INPUT_FLAG in said and "Cmd+Q" in said and not started, said)
+        said = refusal(require)
+        check("and require refuses it, so no tool, listing or window uses it, naming its pid to quit",
+              cdp.INPUT_FLAG in said and "kill 501" in said, said)
         starting(machine(answer=VERSION))
         said = refusal(lambda: launch.launch(profile, wait=5))
         check("launch starts Chrome once when nothing is up, and waits for its port", not said and started == [True], said)
@@ -324,11 +333,11 @@ def connecting():
         ran = []
         subprocess.run = lambda args, **kw: (ran.append(args), subprocess.CompletedProcess(args, 0, "", ""))[1]
         said = refusal(lambda: launch._open(profile))
-        check("Chrome is started as a new copy of the app, in the background, with no window, the port, the folder "
-              "and the profile",
+        check("Chrome is started as a new copy of the app, in the background, with no window, the port, the folder, "
+              "the profile, and input let through before a page draws",
               not said and bool(ran) and ran[0][:4] == ["/usr/bin/open", "-gna", cdp.APP, "--args"] and {
                   "--remote-debugging-port=9223", "--user-data-dir=%s" % folder, "--profile-directory=Default",
-                  "--no-startup-window"
+                  "--no-startup-window", cdp.INPUT_FLAG
               } <= set(ran[0][4:]), repr(ran))
         subprocess.run = lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "Unable to find application")
         check("a Chrome that will not start says so", "Unable to find application" in refusal(lambda: launch._open(profile)))

@@ -5,7 +5,6 @@ Run in the background by service.py (../start). README.md covers the lifecycle a
 """
 
 import os
-import shutil
 import signal
 import sqlite3
 import threading
@@ -29,7 +28,6 @@ CALLS = os.path.join(RUN, "calls")
 PID_FILE = os.path.join(RUN, "server.pid")
 LOG_FILE = os.path.join(RUN, "server.log")
 STATE_FILE = os.path.join(RUN, "state.db")
-KEEP_DAYS = 7  # a closed session's record folder, and a tab's devtools log, once unused this long, are removed at start
 PAUSE_POLL = 60.0  # seconds between looks for sessions newly paused
 
 
@@ -176,9 +174,7 @@ def tab_tools(state, tabs, workers):
                          "properties": {"session": session_argument}}},
         {"name": "tab_show", "run": _refusing(_in_session(state, tab_show)),
          "description": "Bring a tab of your session to the front of its Chrome and that Chrome to the front of the "
-                        "Mac; return its "
-                        "tab id, title and URL. Call it before handing a tab to Joshua, and name the tab by that title "
-                        "and URL: tab ids show nowhere in Chrome.",
+                        "Mac; return its tab id, title and URL.",
          "inputSchema": by_tab},
         {"name": "tab_close", "run": _refusing(_in_session(state, tab_close)),
          "description": "Close a tab of your session by its tab id.",
@@ -222,9 +218,6 @@ indents): click into the editor and select what it replaces (Meta+A) first, or g
 editor's text with evaluate_script. expect after a fill or click whose result matters. wait for a
 page still at work, like a resume parser after an upload: uid and value for a field it fills (passing at once if
 the field holds it already), or gone with its status text; never a setTimeout in evaluate_script.
-
-A login, a consent or permission screen, or a captcha is Joshua's to pass: stop there, tab_show the tab, and hand
-it over by its title and URL.
 
 Dialogs: put a handle_dialog step right after the step that opens an alert, confirm or prompt (a click, a key
 press), and the dialog is answered the moment it opens, or up to 5s after that step for a late one; evaluate_script
@@ -277,12 +270,6 @@ def queue_tool(state, tabs, workers, allowed, calls=CALLS):
             of their own.
     """
     def queue(session, arguments):
-        unknown = set(arguments) - {"session", "tab", "steps", "file"}
-        if unknown:
-            raise mcp.ToolError("queue takes session and tab, and steps or file; not %s. A tool list that shows other arguments is "
-                                "older than this server, and is listed again from your next turn; if it still shows "
-                                "them, ask the user to reconnect browserd with /mcp"
-                                % ", ".join(sorted(unknown)))
         tab = _text(arguments, "tab")
         if not is_id(tab):  # it names a folder, so "../x" must not reach os.path.join
             raise mcp.ToolError(NOT_AN_ID % tab)
@@ -290,16 +277,25 @@ def queue_tool(state, tabs, workers, allowed, calls=CALLS):
         if row is None or row.session != session.id:
             raise mcp.ToolError(NOT_YOURS % tab)  # before recording, so no record folder is made for a tab not this session's
         folder = os.path.join(calls, session.profile, sessions.folder(session), tab)
-        try:
-            planned = steps.load(arguments, folder)
-            steps.check(planned, allowed)
-        except steps.StepError as exc:
-            raise mcp.ToolError(str(exc))
         call = record.Call(folder, "queue")
-        planned = steps.place_screenshots(planned, call.path)
-        call.asked({"tab": tab, "steps": planned})
+        call.asked(arguments)  # as sent, so a queue refused for its other arguments or its steps is recorded too
 
         def run():
+            unknown = set(arguments) - {"session", "tab", "steps", "file"}
+            if unknown:
+                raise mcp.ToolError("queue takes session and tab, and steps or file; not %s. A tool list that shows "
+                                    "other arguments is older than this server, and is listed again from your next "
+                                    "turn; if it still shows them, ask the user to reconnect browserd with /mcp"
+                                    % ", ".join(sorted(unknown)))
+            try:
+                planned = steps.load(arguments, folder)
+                if "file" in arguments:
+                    call.asked(dict(arguments, steps=planned))  # the file's steps, which the agent may rewrite
+                steps.check(planned, allowed)
+            except steps.StepError as exc:
+                raise mcp.ToolError(str(exc))
+            planned = steps.place_screenshots(planned, call.path)
+            call.asked({"session": session.id, "tab": tab, "steps": planned})
             worker = _worker(state, tabs, workers, session, tab)
             with worker.lock:
                 devtools, page_id, restarted = worker.ensure()
@@ -346,43 +342,6 @@ def _remove_pid():
         pass
 
 
-def prune(run, keep):
-    """Remove each closed session's record folder, <run>/calls/<profile>/<session>-<label>/, each tab's record folder
-    from before sessions, <run>/calls/<tab>/, and each tab's devtools log, <run>/devtools-<tab>.log, unused for
-    KEEP_DAYS, and return how many folders and logs went. Only names shaped like those are touched.
-
-    Args:
-        run (str): the folder holding them, .run/.
-        keep (set[str]): the ids of the sessions still open, whose folders stay however old.
-    """
-    now = time.time()
-    calls = os.path.join(run, "calls")
-    folders = []
-    for profile in (os.listdir(calls) if os.path.isdir(calls) else []):
-        under = os.path.join(calls, profile)
-        if not os.path.isdir(under):
-            continue
-        inside = os.listdir(under)
-        if is_id(profile) and not any(os.path.isdir(os.path.join(under, name)) for name in inside):
-            folders.append(under)  # a tab's folder from before sessions, calls/<tab>/; a profile's holds folders
-            continue
-        folders += [os.path.join(under, name) for name in inside if sessions.folder_id(name) not in keep | {None}]
-    logs = [os.path.join(run, name) for name in os.listdir(run)
-            if name.startswith("devtools-") and name.endswith(".log") and is_id(name[len("devtools-"):-len(".log")])]
-
-    def unused(path):
-        # A call touches only its tab's folder, one level down from a session's.
-        inside = [os.path.join(path, name) for name in os.listdir(path)] if os.path.isdir(path) else []
-        return now - max(os.path.getmtime(each) for each in [path] + inside) > KEEP_DAYS * 86400
-
-    old_folders, old_logs = [path for path in folders if unused(path)], [path for path in logs if unused(path)]
-    for path in old_folders:
-        shutil.rmtree(path)
-    for path in old_logs:
-        os.remove(path)
-    return len(old_folders), len(old_logs)
-
-
 def _allowed_tools():
     """The tools a queue's steps may name, asked of chrome-devtools-mcp itself, which needs no browser to list them."""
     os.makedirs(RUN, exist_ok=True)
@@ -427,12 +386,6 @@ def serve():
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGHUP, on_signal)
     _write_pid()
-    try:
-        folders, logs = prune(RUN, {session.id for session in state.open_sessions()})
-        if folders or logs:
-            mcp.log("removed %d record folders and %d devtools logs unused for %d days" % (folders, logs, KEEP_DAYS))
-    except OSError as exc:
-        mcp.log("could not remove old record folders and devtools logs: %s" % exc)
     chromes.adopt(state.profiles())
     threading.Thread(target=page_server.serve_forever, daemon=True).start()
     threading.Thread(target=pause_idle, daemon=True).start()

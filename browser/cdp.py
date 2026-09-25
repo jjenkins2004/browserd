@@ -19,6 +19,8 @@ from .ws import Timeout, WebSocket
 APP = "/Applications/Google Chrome.app"
 CHROME = APP + "/Contents/MacOS/Google Chrome"
 PROFILE = "Default"  # the one Chrome profile in every profile's folder
+# Lets key presses and clicks reach a page before it first draws; README.md, "Agent Gotchas", says why.
+INPUT_FLAG = "--allow-pre-commit-input"
 
 
 CALL_WAIT = 20.0  # seconds a command waits for its answer
@@ -56,7 +58,8 @@ def _get(profile, path):
                        % (profile.name, profile.port, path, exc))
 
 
-def _command(pid):
+def command(pid):
+    """The command line pid was started with, or "" once it has exited."""
     return _run("/bin/ps", "-ww", "-o", "command=", "-p", str(pid)).strip()
 
 
@@ -80,7 +83,7 @@ def owner(folder):
     except (OSError, ValueError):
         return None
     # A lock left by a crash can name a pid since reused by something else.
-    return pid if (_command(pid) + " ").startswith(CHROME + " ") else None
+    return pid if (command(pid) + " ").startswith(CHROME + " ") else None
 
 
 def port_of(pid):
@@ -89,7 +92,7 @@ def port_of(pid):
     Args:
         pid (int): the Chrome's pid, as owner gives it.
     """
-    found = re.search(r" --remote-debugging-port=(\d+) ", " %s " % _command(pid))
+    found = re.search(r" --remote-debugging-port=(\d+) ", " %s " % command(pid))
     return int(found.group(1)) if found else None
 
 
@@ -128,15 +131,22 @@ def require(profile):
     if pid is None:
         raise CdpError(
             "the %s Chrome is running (pid %d) without DevTools on port %d. If it was started seconds ago, wait "
-            "and try again; otherwise Chrome only reads the port at startup, so quit it fully (Cmd+Q), and the "
-            "next tab_open or Open Chrome starts it with its port" % (profile.name, running, profile.port)
+            "and try again; otherwise Chrome only reads the port at startup, so quit it with kill %d (Cmd+Q quits "
+            "whichever Chrome is in front), and the next tab_open or Open Chrome starts it with its port"
+            % (profile.name, running, profile.port, running)
         )
     if pid != running:
         raise CdpError(
             "port %d is held by pid %d, which is not the %s Chrome (%s):\n  %s\n"
             "Quit that; the next tab_open or Open Chrome starts the %s Chrome"
             % (profile.port, pid, profile.name, "that is pid %d" % running if running else "it is not running",
-               _command(pid)[:200] or "(it has exited)", profile.name)
+               command(pid)[:200] or "(it has exited)", profile.name)
+        )
+    if INPUT_FLAG not in command(running).split():
+        raise CdpError(
+            "the %s Chrome running now (pid %d) was started without %s, so a tab that loads in the background drops "
+            "every key press and click. Quit it with kill %d (Cmd+Q quits whichever Chrome is in front); the next "
+            "tab_open or Open Chrome starts it with the flag" % (profile.name, running, INPUT_FLAG, running)
         )
     try:
         check_folder(profile.folder)

@@ -24,7 +24,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import cdp, checked, chromes, clipboard, dialogs, focus, mcp, page, profiles, record, server, service, sessions, steps
+from browser import cdp, checked, chromes, dialogs, focus, mcp, page, profiles, record, server, service, sessions, steps
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
 from browser.state import Session, State, Tab
@@ -176,8 +176,21 @@ def protocol():
 
         check("a tool's text comes back", call(httpd, "echo", say="hi") == ("echo hi", False))
         check("a tool can return a whole result, error flag included", call(httpd, "whole") == ("partly", True))
-        check("a ToolError comes back as an error result the agent can read",
-              call(httpd, "refuse") == ("no, and here is why", True))
+        logged, saved_log = [], mcp.log
+        mcp.log = logged.append
+        try:
+            refused = call(httpd, "refuse", why="test")
+            rpc(httpd, "tools/call", {"name": "nope", "arguments": {"a": 1}})
+            post(httpd, {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": "x"})
+        finally:
+            mcp.log = saved_log
+        check("a ToolError comes back as an error result the agent can read", refused == ("no, and here is why", True))
+        check("a refused call, a call to no such tool, and params that are not an object are each one log line naming "
+              "what they were given",
+              len(logged) == 3 and logged[0].startswith("refuse failed ")
+              and logged[0].endswith('s; refused: no, and here is why; given {"why": "test"}')
+              and logged[1:] == ["'nope' refused: no such tool; given {\"a\": 1}",
+                                 'tools/call refused: params are not an object; given "x"'], repr(logged))
         text, is_error = call(httpd, "crash")
         check("a tool that crashes is an error result, not a dropped connection", is_error and "boom" in text, text)
         check("the server still answers after a crash", call(httpd, "echo", say="again") == ("echo again", False))
@@ -779,7 +792,7 @@ def queue_offline():
               "before)." in report and "Page navigated to %s." % navigations[2] in report
               and "Page navigated to %s." % navigations[4] in report, report)
         report = text_of(steps.run(FakeDevtools([]), 7, [{"tool": "paste", "text": "x"}], called)["content"])
-        check("a paste in a queue not given the tab's target fails before it touches the clipboard",
+        check("a paste in a queue not given the tab's target fails before it presses a key",
               "--- 1 paste FAILED" in report and "not given" in report, report)
 
         views(workdir)
@@ -1104,27 +1117,24 @@ def dialogs_offline():
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-class Lent:
-    """Stands in for clipboard.lent: records each text lent, and touches no clipboard."""
-
-    def __init__(self):
-        self.texts = []
-
-    @contextlib.contextmanager
-    def lend(self, text):
-        self.texts.append(text)
-        yield
-
-
 class Keys:
-    """A connection to a profile's Chrome that records what it is asked."""
+    """A connection to a profile's Chrome that records what it is asked. Each Runtime.evaluate answers the next of
+    values, an exception as a script error: by default the page handed the text, ready, one paste seen, and the text
+    taken back."""
 
-    def __init__(self):
-        self.calls = []
+    def __init__(self, values=(None, True, [1, 1], None)):
+        self.calls, self.values = [], list(values)
 
     def call(self, method, session=None, **params):
         self.calls.append((method, params))
-        return {"sessionId": "S1"} if method == "Target.attachToTarget" else {}
+        if method == "Target.attachToTarget":
+            return {"sessionId": "S1"}
+        if method != "Runtime.evaluate":
+            return {}
+        value = self.values.pop(0)
+        if isinstance(value, Exception):
+            return {"exceptionDetails": {"text": "Uncaught", "exception": {"description": str(value)}}}
+        return {"result": {"value": value}}
 
     def close(self):
         pass
@@ -1141,42 +1151,54 @@ class Answers:
 
 
 def paste_offline():
-    """checked.paste with stand-ins for the tab, the connection that presses its key, and the clipboard."""
-    lent, saved = Lent(), clipboard.lent
-    setattr(clipboard, "lent", lent.lend)
-    try:
-        keys = Keys()
-        said = checked.paste(Answers([{"focused": "editable"}]), 7, {"tool": "paste", "text": 'It\'s "a"'}, "T1", lambda: keys)
-        check("paste lends the clipboard its text and presses Meta+V on the tab with Chrome's own paste command",
-              lent.texts == ['It\'s "a"'] and keys.calls[0] == ("Target.attachToTarget", {"targetId": "T1", "flatten": True})
-              and keys.calls[1][1].get("commands") == ["paste"] and keys.calls[1][1].get("modifiers") == checked.META
-              and keys.calls[2][1].get("type") == "keyUp", repr(keys.calls))
-        check("and without a uid, says nothing reads the text back", "where the focus is; nothing reads them back" in said, said)
-        keys, lent.texts = Keys(), []
-        said = refusal(lambda: checked.paste(Answers([{"refused": "button"}]), 7, {"tool": "paste", "text": "x"}, "T1",
-                                             lambda: keys), checked.CheckFailed)
-        check("paste refuses when nothing that takes text has the focus, lending no clipboard and pressing no key",
-              "(button has it), so nothing was pasted" in said and lent.texts == [] and keys.calls == [], said)
-        said = refusal(lambda: checked.paste(Answers([{"refused": "readonly"}]), 7, {"tool": "paste", "uid": "1_1", "text": "x"},
-                                             "T1", lambda: keys), checked.CheckFailed)
-        check("paste with a uid refuses what type refuses, saying so", "is a read-only text box, so nothing was pasted" in said
-              and lent.texts == [], said)
-        said = checked.paste(Answers([{"focused": "textarea"}, {"kind": "value", "value": "a\nb"}]), 7,
-                             {"tool": "paste", "uid": "1_1", "text": "a\nb"}, "T1", lambda: Keys())
-        check("paste with a uid reads the text box back", said == 'pasted 3 characters; the field holds "a\\nb"', said)
-
-        @contextlib.contextmanager
-        def unreturned(text):
-            yield
-            raise clipboard.ClipboardError("could not put the Mac's clipboard back as it was: boom")
-
-        setattr(clipboard, "lent", unreturned)
-        said = refusal(lambda: checked.paste(Answers([{"focused": "editable"}]), 7, {"tool": "paste", "text": "x"}, "T1",
-                                             lambda: Keys()), checked.CheckFailed)
-        check("a clipboard that could not be put back fails the paste, saying so, and that the paste key was pressed",
-              "could not put the Mac's clipboard back" in said and "the paste key was pressed" in said, said)
-    finally:
-        setattr(clipboard, "lent", saved)
+    """checked.paste with stand-ins for the tab, and the connection that hands the page its text and presses the key."""
+    paste = lambda keys, answers=({"focused": "editable"},), step=None: checked.paste(
+        Answers(list(answers)), 7, step or {"tool": "paste", "text": "x"}, "T1", lambda: keys)
+    methods = lambda keys: [method for method, _ in keys.calls]
+    keys = Keys()
+    said = paste(keys, step={"tool": "paste", "text": 'It\'s "a"'})
+    check("paste hands the page its text, checks the focus is where it was handed, presses Meta+V once with Chrome's "
+          "own paste command, sees the paste, and takes the text back",
+          methods(keys) == ["Target.attachToTarget", "Runtime.evaluate", "Runtime.evaluate", "Input.dispatchKeyEvent",
+                            "Input.dispatchKeyEvent", "Runtime.evaluate", "Runtime.evaluate"]
+          and keys.calls[0][1] == {"targetId": "T1", "flatten": True}
+          and json.dumps('It\'s "a"') in keys.calls[1][1]["expression"]
+          and keys.calls[3][1].get("commands") == ["paste"] and keys.calls[3][1].get("modifiers") == checked.META
+          and keys.calls[4][1].get("type") == "keyUp" and "undo()" in keys.calls[6][1]["expression"], repr(keys.calls))
+    check("and without a uid, says nothing reads the text back", "where the focus is; nothing reads them back" in said, said)
+    keys = Keys((None, True, [0, 0], None))
+    said = refusal(lambda: paste(keys), checked.CheckFailed)
+    check("a page that takes no paste key press fails the paste after its one press, and still has the text taken back",
+          "took no paste key press" in said and methods(keys).count("Input.dispatchKeyEvent") == 2
+          and "undo()" in keys.calls[-1][1].get("expression", ""), said)
+    keys = Keys((None, True, [0, 1], None))
+    said = refusal(lambda: paste(keys), checked.CheckFailed)
+    check("a press the page took whose paste a script of its own had first fails the paste, saying the field "
+          "may hold the Mac's clipboard", "may hold the Mac's clipboard" in said
+          and methods(keys).count("Input.dispatchKeyEvent") == 2, said)
+    keys = Keys((None, False, None))
+    said = refusal(lambda: paste(keys), checked.CheckFailed)
+    check("the focus moved where the text was not handed stops the paste before its key is pressed",
+          "focus moved" in said and "Input.dispatchKeyEvent" not in methods(keys), said)
+    keys = Keys(("the focus is in a frame from another site", None))
+    said = refusal(lambda: paste(keys, ({"focused": "a frame from another site"},)), checked.CheckFailed)
+    check("paste refuses the focus in a frame from another site, pressing no key, and still takes the text back",
+          "frame from another site" in said and "so nothing was pasted" in said
+          and "Input.dispatchKeyEvent" not in methods(keys) and "undo()" in keys.calls[-1][1].get("expression", ""), said)
+    keys = Keys((None, True, [1, 1], RuntimeError("gone")))
+    said = refusal(lambda: paste(keys), checked.CheckFailed)
+    check("listeners that could not be taken off after a paste went in fail the step, saying the text was pasted and "
+          "to reload the tab", "the text was pasted" in said and "reload the tab" in said and "gone" in said, said)
+    keys = Keys()
+    said = refusal(lambda: paste(keys, ({"refused": "button"},)), checked.CheckFailed)
+    check("paste refuses when nothing that takes text has the focus, handing the page nothing and pressing no key",
+          "(button has it), so nothing was pasted" in said and keys.calls == [], said)
+    said = refusal(lambda: paste(keys, ({"refused": "readonly"},), {"tool": "paste", "uid": "1_1", "text": "x"}),
+                   checked.CheckFailed)
+    check("paste with a uid refuses what type refuses, saying so",
+          "is a read-only text box, so nothing was pasted" in said and keys.calls == [], said)
+    said = paste(Keys(), ({"focused": "textarea"}, {"kind": "value", "value": "a\nb"}), {"tool": "paste", "uid": "1_1", "text": "a\nb"})
+    check("paste with a uid reads the text box back", said == 'pasted 3 characters; the field holds "a\\nb"', said)
 
 
 def limits_offline():
@@ -1243,7 +1265,7 @@ def limits_offline():
 
 
 def records_offline():
-    """record.Call's numbering and files, server.prune, and sessions.folder and sessions.paused."""
+    """record.Call's numbering and files, and sessions.folder and sessions.paused."""
     root = tempfile.mkdtemp(prefix="browser-calls-")
     try:
         folder = os.path.join(root, "k3f9")
@@ -1272,28 +1294,6 @@ def records_offline():
         for thread in threads:
             thread.join()
         check("calls made at once each get their own number", len(set(made)) == 20, repr(sorted(made)))
-
-        run = os.path.join(root, "run")
-        for name in ("calls/Jobs/aaaaaa-old/k3f9", "calls/Jobs/bbbbbb-busy/ab2c", "calls/Jobs/cccccc-open", "calls/Jobs/notes",
-                     "calls/School/dddddd-new", "calls/m4q2", "calls/test/eeeeee-kept"):
-            os.makedirs(os.path.join(run, name))
-        for name in ("devtools-k3f9.log", "devtools-ab2c.log", "devtools-tools.log", "server.log"):
-            open(os.path.join(run, name), "w").close()
-        weeks = time.time() - 8 * 86400
-        open(os.path.join(run, "calls/m4q2/001-queue.json"), "w").close()
-        for name in ("calls/Jobs/aaaaaa-old/k3f9", "calls/Jobs/aaaaaa-old", "calls/Jobs/bbbbbb-busy", "calls/Jobs/cccccc-open",
-                     "calls/Jobs/notes", "calls/m4q2/001-queue.json", "calls/m4q2", "calls/test", "devtools-k3f9.log",
-                     "devtools-tools.log", "server.log"):
-            os.utime(os.path.join(run, name), (weeks, weeks))
-        removed = server.prune(run, {"cccccc"})
-        check("prune removes each closed session's record folder unused for 7 days, a tab's call inside counting as use, "
-              "a tab's folder from before sessions, and each tab's devtools log unused as long, touching only names "
-              "shaped like those",
-              removed == (2, 1) and sorted(os.listdir(os.path.join(run, "calls", "Jobs"))) == ["bbbbbb-busy", "cccccc-open", "notes"]
-              and sorted(os.listdir(os.path.join(run, "calls"))) == ["Jobs", "School", "test"]
-              and os.listdir(os.path.join(run, "calls", "School")) == ["dddddd-new"]
-              and sorted(os.listdir(run)) == ["calls", "devtools-ab2c.log", "devtools-tools.log", "server.log"],
-              repr((removed, os.listdir(run), os.listdir(os.path.join(run, "calls", "Jobs")))))
 
         session = Session("k3f9x2", "Jobs", "  Apply: Acme / Backend!! ", 0, 0, None)
         check("a session's record folder is its id and its label's words", sessions.folder(session) == "k3f9x2-apply-acme-backend")
@@ -1336,20 +1336,35 @@ def recording_offline():
         check("a queue given a workspace is refused, naming it and asking for a /mcp reconnect",
               is_error and "workspace" in text and "reconnect browserd with /mcp" in text, text)
         text, is_error = call(httpd, "queue", session=session.id, tab="zzzz", steps=[{"tool": "new_page"}])
-        check("a call refused before it runs records nothing", is_error and os.listdir(root) == [], repr(os.listdir(root)))
+        with open(os.path.join(folder, "002-queue.json")) as handle:
+            asked = json.load(handle)
+        check("a queue refused for its arguments or its steps is recorded as sent, with the refusal as what came back",
+              is_error and sorted(os.listdir(folder)) == ["001-queue.json", "001-queue.txt", "002-queue.json", "002-queue.txt"]
+              and json.load(open(os.path.join(folder, "001-queue.json"))) == {"session": session.id, "tab": "zzzz",
+                                                                               "workspace": root,
+                                                                               "steps": [{"tool": "take_snapshot"}]}
+              and asked == {"session": session.id, "tab": "zzzz", "steps": [{"tool": "new_page"}]}
+              and open(os.path.join(folder, "002-queue.txt")).read() == "error: %s\n" % text, repr(os.listdir(folder)))
 
-        os.makedirs(folder)
         with open(os.path.join(folder, "steps.json"), "w") as handle:
             json.dump([{"tool": "take_snapshot"}, {"tool": "take_screenshot"}], handle)
         text, is_error = call(httpd, "queue", session=session.id, tab="zzzz", file="steps.json")
         check("a queue that cannot reach its tab is still recorded in the tab's record folder, with the error as what came back",
-              is_error and sorted(os.listdir(folder)) == ["001-queue.json", "001-queue.txt", "steps.json"]
-              and "is closed" in open(os.path.join(folder, "001-queue.txt")).read(), repr(os.listdir(folder)))
-        with open(os.path.join(folder, "001-queue.json")) as handle:
+              is_error and sorted(os.listdir(folder))[4:] == ["003-queue.json", "003-queue.txt", "steps.json"]
+              and "is closed" in open(os.path.join(folder, "003-queue.txt")).read(), repr(os.listdir(folder)))
+        with open(os.path.join(folder, "003-queue.json")) as handle:
             asked = json.load(handle)
         check("the record holds the tab and the steps read from the tab's record folder, the screenshot given its path",
-              asked == {"tab": "zzzz", "steps": [{"tool": "take_snapshot"},
-                                                 {"tool": "take_screenshot", "filePath": os.path.join(folder, "001-step2-screenshot.png")}]},
+              asked == {"session": session.id, "tab": "zzzz", "steps": [{"tool": "take_snapshot"},
+                                                 {"tool": "take_screenshot", "filePath": os.path.join(folder, "003-step2-screenshot.png")}]},
+              repr(asked))
+        with open(os.path.join(folder, "bad.json"), "w") as handle:
+            json.dump([{"tool": "new_page"}], handle)
+        text, is_error = call(httpd, "queue", session=session.id, tab="zzzz", file="bad.json")
+        with open(os.path.join(folder, "004-queue.json")) as handle:
+            asked = json.load(handle)
+        check("a queue whose file holds a refused step records the file's steps with it",
+              is_error and asked == {"session": session.id, "tab": "zzzz", "file": "bad.json", "steps": [{"tool": "new_page"}]},
               repr(asked))
     finally:
         httpd.shutdown()
@@ -1751,6 +1766,7 @@ WIDGETS = r"""<title>checked scratch</title>
 <label for=mask>Phone</label><input id=mask oninput="const d = this.value.replace(/\D/g, ''); this.value = d.length > 6 ? '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6) : d">
 <div id=bio contenteditable role=textbox aria-multiline=true aria-label=Bio></div>
 <div id=quoted contenteditable role=textbox aria-label=Quoted></div>
+<div id=stopper contenteditable role=textbox aria-label=Stopper></div>
 <button onclick="document.getElementById('warned').textContent = confirm('Sure?') ? 'confirmed' : 'cancelled'">Warn me</button><p id=warned></p>
 <button onclick="setTimeout(() => { document.getElementById('warned').textContent = confirm('Later?') ? 'confirmed' : 'cancelled' }, 1500)">Warn later</button>
 <label for=off>Off</label><input id=off disabled value=off>
@@ -1798,6 +1814,12 @@ letter.addEventListener('input', (e) => { if (e.isTrusted) letterKept = letter.v
 quoted.addEventListener('keydown', (e) => {
   if (e.key === '"' || e.key === "'") { e.preventDefault(); document.execCommand('insertText', false, e.key === '"' ? '\u201c' : '\u2019'); }
 });
+// Like Slides, puts a paste's text in itself and stops the paste there, without cancelling Chrome's own insert.
+stopper.addEventListener('paste', (e) => { e.stopPropagation(); document.execCommand('insertText', false, e.clipboardData.getData('text/plain')); });
+// Heard before paste's own listeners, and read once the event is done: was Chrome's insert cancelled?
+window.addEventListener('beforeinput', (e) => {
+  if (e.inputType === 'insertFromPaste' && e.target === stopper) setTimeout(() => { stopper.dataset.chrome = e.defaultPrevented ? 'cancelled' : 'went ahead'; });
+}, true);
 </script>"""
 
 
@@ -1903,7 +1925,10 @@ def checked_live(httpd, tabs, opened, session):
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
     check("type into a contenteditable element takes a line break and reads the text back", not is_error, text)
 
-    held_before = clipboard._script(clipboard.SAVE, "save the clipboard")
+    changes = lambda: int(subprocess.run(["osascript", "-l", "JavaScript", "-e", "ObjC.import('AppKit'); "
+                                          "$.NSPasteboard.generalPasteboard.changeCount"], capture_output=True, text=True,
+                                         check=True).stdout)
+    changed_before = changes()
     said = 'It\'s "exact"'
     quoted = field("textbox", "Quoted")
     text, _ = call(httpd, "queue", session=session, tab=tab, steps=[
@@ -1921,7 +1946,14 @@ def checked_live(httpd, tabs, opened, session):
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "click", "uid": field("button", "Yes")}, {"tool": "paste", "text": "x"}])
     check("paste without a uid refuses when nothing that takes text has the focus", is_error
           and "nothing that takes text has the focus" in text and "so nothing was pasted" in text, text)
-    check("and the Mac's clipboard holds what it held before the pastes", clipboard._script(clipboard.SAVE, "save the clipboard") == held_before)
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
+        {"tool": "click", "uid": field("textbox", "Stopper")}, {"tool": "paste", "text": said},
+        {"tool": "evaluate_script", "function": "() => [stopper.textContent, stopper.dataset.chrome]"}])
+    check("an editor that puts a paste in itself, and stops it without cancelling Chrome's own insert, gets the text, "
+          "and Chrome's insert of the real clipboard is cancelled",
+          not is_error and returned(text.split("--- 3")[-1]) == [said, "cancelled"], text)
+    check("and the Mac's clipboard was never written: its change count is what it was before the pastes",
+          changes() == changed_before, str(changed_before))
 
     warned = {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
@@ -2078,8 +2110,12 @@ def queue_live(profile, state):
         text, is_error = call(httpd, "queue", session=session, tab=a, steps=[
             {"tool": "fill", "uid": uid(snap_a, "textbox", "Name"), "value": "never"},
             {"tool": "take_snapshot", "bogus": 1}])
-        check("a step's argument chrome-devtools-mcp would refuse stops the queue before any step runs, recording nothing",
-              is_error and "step 2: take_snapshot does not take bogus" in text and sorted(os.listdir(os.path.join(home, a))) == before, text)
+        added = sorted(set(os.listdir(os.path.join(home, a))) - set(before))
+        check("a step's argument chrome-devtools-mcp would refuse stops the queue before any step runs, and is recorded as sent",
+              is_error and "step 2: take_snapshot does not take bogus" in text and len(added) == 2
+              and all(name.endswith(("-queue.json", "-queue.txt")) for name in added)
+              and json.load(open(os.path.join(home, a, added[0])))["steps"][1] == {"tool": "take_snapshot", "bogus": 1},
+              repr(added))
 
         worker = workers.get(a, tabs.target(mine, a), profile)
         process = worker._devtools._process if worker._devtools else None

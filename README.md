@@ -15,7 +15,7 @@ agent starts with `session_start {profile, label}`, and sees only its session's 
     start, stop, restart    launchers for browser/service.py
     browser/                the server: tabs, the queue, and its own README
     package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
-    .run/                   gitignored: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs), devtools-*.log, calls/<profile>/<session>-<label>/<tab>/; a tab's log and a closed session's folder go at start once 7 days unused
+    .run/                   gitignored: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs), devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     tests/                  check_browser.py, check_server.py; throwaway.py, the live checks' own Chrome
 
 `browser/README.md` is the one to read before changing any of it: the Chrome proof, the tab ids, the
@@ -30,7 +30,7 @@ browserd call and has them from its next turn; one that connected to a browserd 
 
 ## Tests
 
-    python3 tests/check_browser.py    64 checks: framing, a profile's Chrome proof, launch
+    python3 tests/check_browser.py    66 checks: framing, a profile's Chrome proof, launch
     python3 tests/check_server.py     protocol, tab ids, sessions, focus, queue, recording, profiles, page, service
 
 The live groups start a Chrome of their own on a new folder and a free port, and quit it after, so

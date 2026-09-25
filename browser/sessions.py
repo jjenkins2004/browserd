@@ -43,10 +43,5 @@ def folder(session):
     return "%s-%s" % (session.id, words or "session")
 
 
-def folder_id(name):
-    """The session id a record folder's name starts with, or None when the name is not shaped like folder's."""
-    return name[:ID_LENGTH] if is_id(name[:ID_LENGTH]) and name[ID_LENGTH:ID_LENGTH + 1] == "-" else None
-
-
 def paused(session, now):
     return session.closed is None and now - session.last_call > PAUSE_AFTER
