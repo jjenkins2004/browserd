@@ -7,14 +7,15 @@ from . import cdp
 
 
 def _open():
-    # -n starts a Chrome of its own, even beside one already open on another folder.
+    # -n starts a Chrome of its own, even beside one already open on another folder. -g and no startup window keep
+    # the Mac's focus where it is; README.md, "Agent Gotchas".
     done = subprocess.run(
         [
-            "/usr/bin/open", "-na", cdp.APP, "--args",
+            "/usr/bin/open", "-gna", cdp.APP, "--args",
             "--remote-debugging-port=%d" % cdp.PORT,
             "--user-data-dir=%s" % cdp.DATA_DIR,
             "--profile-directory=%s" % cdp.PROFILE,
-            "--no-first-run", "--no-default-browser-check",
+            "--no-first-run", "--no-default-browser-check", "--no-startup-window",
         ],
         capture_output=True,
         text=True,
@@ -45,8 +46,8 @@ def launch(wait=15.0):
         except cdp.CdpError as exc:
             if time.time() > deadline:
                 raise cdp.CdpError(
-                    "Chrome was started with port %d, but it did not answer within %gs (%s). If a Chrome window "
-                    "opened, quit it fully and run ./start again" % (cdp.PORT, wait, exc)
+                    "Chrome was started with port %d, but it did not answer within %gs (%s). If a Chrome "
+                    "started (it has a Dock icon, and no window), quit it fully and run ./start again" % (cdp.PORT, wait, exc)
                 )
         time.sleep(0.25)
 

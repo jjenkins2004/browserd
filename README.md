@@ -24,7 +24,7 @@ registered once at user scope so every Claude Code session has it:
 ## Tests
 
     python3 tests/check_browser.py    59 checks: framing, the School Chrome proof, launch
-    python3 tests/check_server.py     protocol, tab ids, queue, recording, service
+    python3 tests/check_server.py     protocol, tab ids, focus, queue, recording, service
 
 The live groups need the School Chrome up, and `check_server.py`'s queue checks need `npm ci` done.
 Nothing listening on 9223 skips them.

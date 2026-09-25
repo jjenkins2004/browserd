@@ -6,7 +6,7 @@ README.md, "Core Abstractions & Shared Pieces", has the contract.
 import random
 import threading
 
-from . import cdp
+from . import cdp, focus
 
 LETTERS = "abcdefghjkmnpqrstuvwxyz23456789"
 LOAD_WAIT = 10.0
@@ -130,9 +130,13 @@ class Tabs:
         target = self.target(tab)
         browser = self._connect()
         try:
-            # Also raises the School Chrome over the app in front; README.md, "Agent Gotchas".
             browser.call("Target.activateTarget", targetId=target)
-            return browser.call("Target.getTargetInfo", targetId=target)["targetInfo"]
+            info = browser.call("Target.getTargetInfo", targetId=target)["targetInfo"]
+            # activateTarget alone does not raise a School Chrome never yet in front; README.md, "Agent Gotchas".
+            if not focus.bring(browser.pid):
+                raise cdp.CdpError("tab %s is picked in the School Chrome, but macOS did not bring the School Chrome "
+                                   "to the front" % tab)
+            return info
         finally:
             browser.close()
 

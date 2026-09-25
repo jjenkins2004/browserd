@@ -125,6 +125,7 @@ class Browser:
             self.close()
             raise CdpError("what answered on port %d is pid %s, not the School Chrome's. Quit it, then start the "
                            "School Chrome with ./start" % (PORT, ", ".join(map(str, answered)) or "unknown"))
+        self.pid = answered[0]
 
     def call(self, method, session=None, **params):
         self._last += 1
@@ -160,6 +161,16 @@ class Browser:
                 return message.get("params", {})
             self._events.append(message)
         raise CdpError("%s never arrived" % event)
+
+    def next_event(self, timeout):
+        """The next event heard on this connection, or None when none comes within timeout seconds."""
+        if self._events:
+            return self._events.pop(0)
+        self._ws.settimeout(timeout)
+        try:
+            return json.loads(self._ws.recv())
+        except Timeout:
+            return None
 
     def close(self):
         self._ws.close()

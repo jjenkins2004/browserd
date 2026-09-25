@@ -8,7 +8,7 @@ import signal
 import threading
 import time
 
-from . import cdp, launch, mcp, record, steps
+from . import cdp, focus, launch, mcp, record, steps
 from .devtools import Devtools
 from .tabs import Tabs, is_id
 from .worker import Workers
@@ -298,6 +298,13 @@ def serve():
                 chrome_quit.set()
                 server.shutdown()
 
+    def keep_focus():
+        try:
+            for line in focus.keep(cdp.Browser()):
+                mcp.log(line)
+        except (cdp.CdpError, WebSocketError, OSError) as exc:
+            mcp.log("stopped giving the Mac's focus back: %s" % exc)
+
     def on_signal(number, frame):
         mcp.log("stopping on signal %d" % number)
         # shutdown waits for serve_forever to return, and that runs on this thread, so it needs another.
@@ -318,6 +325,7 @@ def serve():
         _remove_pid()
         raise
     threading.Thread(target=watch_chrome, daemon=True).start()
+    threading.Thread(target=keep_focus, daemon=True).start()
     mcp.log("serving %s (pid %d)" % (URL, os.getpid()))
     try:
         server.serve_forever()

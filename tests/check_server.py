@@ -19,7 +19,7 @@ import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from browser import cdp, checked, mcp, record, server, service, steps
+from browser import cdp, checked, focus, mcp, record, server, service, steps
 from browser.devtools import PACKAGE, Devtools
 from browser.tabs import LETTERS, Tabs
 from browser.worker import Workers, returned
@@ -177,6 +177,8 @@ class FakeChrome:
 
 
 class FakeConnection:
+    pid = 4242
+
     def __init__(self, chrome):
         self.chrome = chrome
 
@@ -229,6 +231,8 @@ def tabs_offline():
     chrome.add("https://example.com/worker.js", kind="service_worker")
     chrome.add("https://incognito.example", context="other")
     tabs = Tabs(chrome.connect)
+    brought, saved_bring = [], focus.bring
+    focus.bring = lambda pid: brought.append(pid) or True
 
     found, outside = tabs.list()
     ids = [tab for tab, _ in found]
@@ -278,9 +282,14 @@ def tabs_offline():
     check("and the tab made for it is closed again", len(chrome.targets) == count)
 
     shown = tabs.show(tab)
-    check("show brings the tab's target to the front and answers with where it is",
-          chrome.activated == [tabs.target(tab)] and shown["url"] == "https://jobs.ashbyhq.com/new", repr(chrome.activated))
+    check("show brings the tab's target and the School Chrome to the front and answers with where it is",
+          chrome.activated == [tabs.target(tab)] and brought == [FakeConnection.pid]
+          and shown["url"] == "https://jobs.ashbyhq.com/new", repr((chrome.activated, brought)))
     check("show refuses an unknown id", "no tab has the id" in refusal(lambda: tabs.show("zzzz")))
+    focus.bring = lambda pid: False
+    check("show fails when macOS does not bring the School Chrome to the front",
+          "did not bring the School Chrome" in refusal(lambda: tabs.show(tab)))
+    focus.bring = lambda pid: brought.append(pid) or True
 
     tabs.close(tab)
     check("close closes the tab", all(t["url"] != "https://jobs.ashbyhq.com/new" for t in chrome.targets))
@@ -313,6 +322,83 @@ def tabs_offline():
     finally:
         httpd.shutdown()
         httpd.server_close()
+        focus.bring = saved_bring
+
+
+class FakeEvents:
+    """The connection focus.keep reads: one old target, then the events given, then a closed websocket."""
+
+    pid = 4242
+
+    def __init__(self, events):
+        self.events = list(events)
+        self.calls = []
+
+    def call(self, method, session=None, **params):
+        self.calls.append((method, params))
+        return {"targetInfos": [{"targetId": "OLD", "type": "page"}]} if method == "Target.getTargets" else {}
+
+    def next_event(self, timeout):
+        if not self.events:
+            raise WebSocketError("closed")
+        return self.events.pop(0)
+
+
+def created(target, opener: str | None = "T1", kind="page"):
+    info = {"targetId": target, "type": kind, "url": "https://example.com/%s" % target}
+    if opener:
+        info["openerId"] = opener
+    return {"method": "Target.targetCreated", "params": {"targetInfo": info}}
+
+
+def focus_offline():
+    saved = (focus.front, focus.bring, focus.TAKE_WAIT)
+    fronts, brought = [], []
+    focus.front = lambda: fronts.pop(0) if fronts else 77
+    focus.bring = lambda pid: brought.append(pid) or True
+    focus.TAKE_WAIT = 0.2
+
+    def kept(events, in_front):
+        fronts[:], brought[:] = in_front, []
+        browser, lines = FakeEvents(events), []
+        try:
+            for line in focus.keep(browser):
+                lines.append(line)
+        except WebSocketError:
+            pass
+        return browser, lines
+
+    try:
+        browser, lines = kept([created("P1")], [77, 77, FakeEvents.pid])
+        check("a tab a page opened that takes the Mac's focus gives it back to the app that had it",
+              brought == [77] and lines == ["gave the Mac's focus back to pid 77, after a page opened "
+                                            "https://example.com/P1"], repr((brought, lines)))
+        check("keep hears of new targets", ("Target.setDiscoverTargets", {"discover": True}) in browser.calls,
+              repr(browser.calls))
+        _, lines = kept([created("P1")], [FakeEvents.pid, FakeEvents.pid])
+        check("nothing is given back when the School Chrome was in front already, as after Joshua's own click, "
+              "and that is logged", brought == [] and lines == ["left the Mac's focus with the School Chrome, which "
+                                                               "had it when a page opened https://example.com/P1"],
+              repr((brought, lines)))
+        focus.front = lambda: None
+        _, lines = kept([created("P1")], [])
+        check("a front app lsappinfo cannot tell is logged, and nothing is given back",
+              brought == [] and lines == ["could not tell which app had the Mac's focus when a page opened "
+                                          "https://example.com/P1"], repr((brought, lines)))
+        focus.front = lambda: fronts.pop(0) if fronts else 77
+        kept([created("P1", opener=None)], [77, FakeEvents.pid])
+        check("a page nothing opened, as tab_open's, is passed over", brought == [] and fronts == [77, FakeEvents.pid],
+              repr((brought, fronts)))
+        kept([created("OLD"), created("W1", kind="iframe"), {"method": "Target.targetInfoChanged", "params": {}}, None],
+             [77, FakeEvents.pid])
+        check("a target open before keep started, a frame, other events and a quiet minute are passed over",
+              brought == [] and fronts == [77, FakeEvents.pid], repr((brought, fronts)))
+        kept([created("P1")], [77])
+        check("a tab that never takes the Mac's focus leaves it alone", brought == [], repr(brought))
+        kept([created("P1"), created("P2")], [77, FakeEvents.pid, 78, 78, FakeEvents.pid])
+        check("each tab that takes the Mac's focus has it given back", brought == [77, 78], repr(brought))
+    finally:
+        focus.front, focus.bring, focus.TAKE_WAIT = saved
 
 
 SCHEMAS = {  # the queue's tools as chrome-devtools-mcp describes them, cut to what the checks use
@@ -878,7 +964,8 @@ def live():
     browser = cdp.Browser()
     context = browser.call("Target.createBrowserContext")["browserContextId"]
     try:
-        hidden = browser.call("Target.createTarget", url="about:blank", browserContextId=context)["targetId"]
+        hidden = browser.call("Target.createTarget", url="about:blank", browserContextId=context,
+                              background=True)["targetId"]
         found, outside = tabs.list()
         check("an Incognito-like tab gets no id", hidden not in {info["targetId"] for _, info in found})
         check("and is counted as outside the School profile", outside >= 1)
@@ -892,10 +979,6 @@ def live():
         opened = text.split()[0] if text else ""
         check("tab_open works over HTTP against the School Chrome", not is_error and "over http" in text, text)
         check("tab_list over HTTP lists it", opened in call(httpd, "tab_list")[0])
-        text, is_error = call(httpd, "tab_show", tab=opened)
-        front = front_app()  # loginwindow is in front while the Mac is locked, and then nothing can come forward
-        check("tab_show over HTTP brings the School Chrome to the front", not is_error and "over http" in text
-              and front in (None, "loginwindow", "Google Chrome"), "%s; in front: %s" % (text, front))
         check("tab_close over HTTP closes it", call(httpd, "tab_close", tab=opened) == ("closed %s" % opened, False))
     finally:
         httpd.shutdown()
@@ -1274,6 +1357,8 @@ if __name__ == "__main__":
     protocol()
     print()
     tabs_offline()
+    print()
+    focus_offline()
     print()
     queue_offline()
     print()

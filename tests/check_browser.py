@@ -290,9 +290,11 @@ def connecting():
         ran = []
         subprocess.run = lambda args, **kw: (ran.append(args), subprocess.CompletedProcess(args, 0, "", ""))[1]
         said = refusal(launch._open)
-        check("Chrome is started as a new copy of the app, with the port, the folder and the profile",
-              not said and bool(ran) and ran[0][:4] == ["/usr/bin/open", "-na", cdp.APP, "--args"] and {
-                  "--remote-debugging-port=%d" % cdp.PORT, "--user-data-dir=%s" % folder, "--profile-directory=Default"
+        check("Chrome is started as a new copy of the app, in the background, with no window, the port, the folder "
+              "and the profile",
+              not said and bool(ran) and ran[0][:4] == ["/usr/bin/open", "-gna", cdp.APP, "--args"] and {
+                  "--remote-debugging-port=%d" % cdp.PORT, "--user-data-dir=%s" % folder, "--profile-directory=Default",
+                  "--no-startup-window"
               } <= set(ran[0][4:]), repr(ran))
         subprocess.run = lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "Unable to find application")
         check("a Chrome that will not start says so", "Unable to find application" in refusal(launch._open))

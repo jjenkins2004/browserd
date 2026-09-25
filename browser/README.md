@@ -19,6 +19,7 @@ chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
       cdp.py       which Chrome, port proof, one websocket to it
       launch.py    starts the School Chrome, or adopts one already up
       tabs.py      short tab ids; open, list, show, close
+      focus.py     the Mac's focus: which app has it; gives it back from tabs pages open
       mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch
       server.py    the server process: tools, Chrome lifecycle, pid file
       service.py   ../start and ../stop: background start, locked; stop by pid
@@ -30,7 +31,7 @@ chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
     ../start, ../stop           launchers
     ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
-    ../tests/check_server.py    protocol, tab ids, queue, recording, service; live tabs, queue
+    ../tests/check_server.py    protocol, tab ids, focus, queue, recording, service; live tabs, queue
     ../tests/check_browser.py   framing, School Chrome proof, launch; live proof, tab load
 
 ## Core Abstractions & Shared Pieces
@@ -40,7 +41,7 @@ through it: `cdp.Browser()` and `launch.launch()` both call it. The fixed facts 
 live at the top of `cdp.py`: port 9223, folder `~/Library/Application Support/Google/Chrome-School`
 (not Chrome's default folder, where Chrome refuses a debugging port), profile `Default` (named
 School), and Chrome's binary path. **`cdp.Browser`** is one browser-wide websocket; a command
-carries a session id to reach a tab.
+carries a session id to reach a tab, and `pid` is the School Chrome's, as `SystemInfo.getProcessInfo` gave it.
 
 **`tabs.Tabs`** maps four-character tab ids (`k3f9`) to DevTools target ids. It opens a new
 `cdp.Browser` for every operation, so every tab tool re-proves the Chrome. Ids live in the server
@@ -74,7 +75,8 @@ saved as `<n>-step<k>-reply.txt` (`<n>-page-now-reply.txt` for the failed queue'
 browser needed), bind 9230, install SIGTERM/SIGINT handlers, write `.run/server.pid`, then
 `launch.launch()` (start the School Chrome, or adopt it once `require` passes), then serve. If
 `launch` fails after this start launched Chrome, that Chrome is sent SIGTERM. A watcher polls
-`cdp.school_chrome()` every 2s, and when Chrome quits the server stops. When the server stops, every
+`cdp.school_chrome()` every 2s, and when Chrome quits the server stops. Another thread runs `focus.keep` on a connection of its own; if that
+connection fails, it logs so and gives no more focus back until the server restarts. When the server stops, every
 tab's process is stopped; unless Chrome already quit, it sends `Browser.close` and waits for Chrome
 to exit, and if Chrome has not exited 15s later the server logs it and stops anyway.
 
@@ -105,13 +107,24 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   no default context. With no page open either, `Tabs` lists no tabs rather than refusing, and
   `tab_open`'s `Target.createTarget` loads the profile again. No default context beside open pages
   is still refused, since those tabs cannot be told apart.
+- **Nothing but `tab_show` leaves the School Chrome with the Mac's focus.** Chrome raises itself over
+  the app in front each time it shows a window. macOS lets it at launch, even under `open -g`, and
+  after that only once Chrome has been in front at least once. So `launch` starts it with `open -g`
+  and `--no-startup-window`: with no window, its last session's tabs do not come back, and the first
+  `tab_open` makes one. Nothing stops Chrome raising itself for a tab a page opens (a `target=_blank`
+  link, a `window.open` popup), so `focus.keep` hears its `Target.targetCreated` (a page with an
+  `openerId`) 10 to 30ms after the click and, if the School Chrome takes the Mac's focus within
+  `focus.TAKE_WAIT` (Chrome was measured taking it 50 to 90ms after the click), gives the focus back
+  to the app that had it. With the School Chrome in front when the event comes, as after Joshua's own
+  click, it leaves the focus there; it logs a line for each such tab.
 - **Tabs open in the background.** `Tabs.open` creates the tab with `background: true`, so the
   Mac's focus never moves; without it, `Target.createTarget` brings Chrome to the front. Opening
   goes `about:blank`, attach, `Page.enable`, then navigate: Chrome can finish a load before a later
   `Page.enable` would hear it. A navigation the site has not answered by the websocket's 20s
   (`cdp.Late`) leaves the tab open and loading; a URL Chrome refuses is `could not open <url>: <why>`.
-  `tab_show` is the one tool meant to move focus: `Target.activateTarget` also raises the School
-  Chrome over the app in front; no separate macOS call is needed.
+  For `tab_show`, `Target.activateTarget` picks the tab, and `focus.bring` brings the School Chrome
+  to the front by pid, which `activateTarget` alone does not do for a Chrome never yet in front; when
+  macOS refuses, `tab_show` fails.
 - **Tabs opened by hand get an id at `tab_list`.** An id dies with the server, and a tab closed
   outside the server loses its id on the next use.
 - **The server refuses any request with an `Origin` header, a `Host` other than
@@ -216,7 +229,7 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
 - **Checks.**
   - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for `lsof`,
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
-    `tabs_offline` stands in for Chrome; `queue_offline` for chrome-devtools-mcp and a snapshot;
+    `tabs_offline` stands in for Chrome and `osascript`; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
     `recording_offline` for Chrome, recording into a temporary folder;
     `service_offline` for the spawned server, with real `ps`.
   - **Live:** the live groups need the School Chrome up. Nothing listening on 9223 skips them;
@@ -225,7 +238,7 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     dropdowns and one textarea take only trusted input, whose Parse resume button runs a stand-in resume parser,
     and whose confirm makes one click take about 30s.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
-    them, and close them; a tab already open is never touched. The live `tab_show` check brings the
-    School Chrome to the front.
+    them, and close them; a tab already open is never touched. No live check moves the Mac's focus:
+    `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
   - **Never automated:** `../start` and `../stop` are never run against the real School Chrome,
     because stopping quits it.
