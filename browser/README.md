@@ -6,8 +6,10 @@ The browser MCP server: it starts and owns Joshua's School Chrome and serves too
 sessions over HTTP on `127.0.0.1:9230`, so pages are read and driven inside his logged-in
 session. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage tabs by short tab ids;
 `queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
-records every call in that tab's record folder, `../.run/calls/<tab>/`. Python standard library, plus Node for
-chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
+records every call in that tab's record folder, `../.run/calls/<tab>/`. The browserd page, at
+`http://127.0.0.1:9231/`, lists the profiles kept in `../.run/state.db` and makes new ones; the tools drive
+only the School Chrome. Python standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`;
+run `npm ci`).
 
     ../start    start the server and the School Chrome, in the background
     ../stop     stop the server, which quits the School Chrome
@@ -30,10 +32,14 @@ chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
       clipboard.py lends the Mac's clipboard to a paste, then puts it back whole
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       record.py    one queue call's numbered files in a folder
+      profiles.py  Profile (name, folder, port); what a new profile is given
+      state.py     .run/state.db: the profiles
+      page.py      the browserd page on 9231: GET /state, POST /profiles
+      page.html    the page itself: one file, plain JavaScript, polls /state
     ../start, ../stop           launchers
-    ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/; a tab's log and calls/<tab>/ go at start once 7 days unused
+    ../.run/                    gitignored: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<tab>/; a tab's log and calls/<tab>/ go at start once 7 days unused
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
-    ../tests/check_server.py    protocol, tab ids, focus, queue, recording, service; live tabs, queue
+    ../tests/check_server.py    protocol, tab ids, focus, queue, recording, profiles, page, service; live tabs, queue
     ../tests/check_browser.py   framing, School Chrome proof, launch; live proof, tab load
 
 ## Core Abstractions & Shared Pieces
@@ -44,6 +50,20 @@ live at the top of `cdp.py`: port 9223, folder `~/Library/Application Support/Go
 (not Chrome's default folder, where Chrome refuses a debugging port), profile `Default` (named
 School), and Chrome's binary path. **`cdp.Browser`** is one browser-wide websocket; a command
 carries a session id to reach a tab, and `pid` is the School Chrome's, as `SystemInfo.getProcessInfo` gave it.
+
+**`profiles.Profile`** is one Chrome: a name, its folder (`--user-data-dir`) and its debugging port.
+**`state.State`** keeps them in `../.run/state.db`, one SQLite connection shared by the server's threads; the
+file is gitignored, so each person's profiles stay theirs, and a name is taken whatever its case. Not a Chrome
+profile: a folder taken over must hold only Chrome's `Default` one.
+**`profiles.make`**, which only the page's New profile button calls, adds one: either a new folder,
+`~/Library/Application Support/Google/Chrome-<name>`, made empty, or one of `profiles.free_folders` (a
+`Chrome-*` folder there that no profile uses) taken over with its logins, once `cdp.check_folder` passes.
+Its port is the one that folder's Chrome already runs with, when no profile has it; otherwise the lowest from 9223
+to 9299 that no profile has, the server does not hold (9230, 9231), and nothing listens on.
+
+**`page.Page`** serves the page on 9231 on a thread of the server's own: `GET /` the HTML, `GET /state` every
+profile and the folders a new one may take over, `POST /profiles` a new profile; a `ProfileError` is answered as
+`{"error": ...}` for the page to show.
 
 **`tabs.Tabs`** maps four-character tab ids (`k3f9`) to DevTools target ids. It opens a new
 `cdp.Browser` for every operation, so every tab tool re-proves the Chrome. Ids live in the server
@@ -81,7 +101,7 @@ step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view s
 `<n>-page-now-reply.txt`.
 
 **Server lifecycle**, in `server.serve()`: ask a chrome-devtools-mcp process for its tool list (no
-browser needed), bind 9230, install SIGTERM/SIGINT handlers, write `.run/server.pid`, remove each
+browser needed), bind 9230, open `.run/state.db` and bind the page's 9231, install SIGTERM/SIGINT handlers, write `.run/server.pid`, remove each
 tab's record folder and `devtools-<tab>.log` unused for `server.KEEP_DAYS` (7; `server.prune`, which
 touches only names shaped like a tab id), then `launch.launch()` (start the School Chrome, or adopt it once `require` passes), then serve. If
 `launch` fails after this start launched Chrome, that Chrome is sent SIGTERM. A watcher polls
@@ -110,8 +130,8 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
 - **`require` proves the browser, not the tab.** An Incognito, Guest or other profile's window is
   another browser context, and `Tabs` neither lists such a tab nor gives it an id, only counting
   it. Chrome's default context is its last-used profile, and `Local State` reaches disk seconds
-  after a profile is added, so for those seconds a new profile's tab would pass. No profile is ever
-  to be added to this folder.
+  after a profile is added, so for those seconds a new profile's tab would pass. No Chrome profile is
+  ever to be added to this folder.
 - **A School Chrome with no window open has no profile loaded.** macOS keeps Chrome running after
   its last window closes, and Chrome then unloads the profile, so `Target.getBrowserContexts` names
   no default context. With no page open either, `Tabs` lists no tabs rather than refusing, and
@@ -137,9 +157,15 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   macOS refuses, `tab_show` fails.
 - **Tabs opened by hand get an id at `tab_list`.** An id dies with the server, and a tab closed
   outside the server loses its id on the next use.
-- **The server refuses any request with an `Origin` header, a `Host` other than
+- **The MCP port, 9230, refuses any request with an `Origin` header, a `Host` other than
   `127.0.0.1:9230` or `localhost:9230`, or a body that is not `application/json`.** A web page
   open in the School Chrome could otherwise POST to it and drive the browser.
+- **The page has a port of its own, 9231,** so the MCP port keeps refusing every request with an `Origin`. Every
+  page request must carry a `Host` of `127.0.0.1:9231` or `localhost:9231`, and no `Origin` but the page's own;
+  a POST must carry that one. `GET /state` and every POST must also carry `X-Browserd-Token`, a random value
+  written into the page when it is served and new each start. A web page open in any Chrome
+  cannot read the token, since the page sends no CORS headers, and cannot frame the page to steer a click
+  (`frame-ancestors 'none'`).
 - **`../stop` only signals a pid whose command line runs `-m browser.server`.** A stale pid file
   can name a reused pid. `../start` holds `.run/start.lock` while it checks and spawns, and treats
   anything answering on 9230 under another server name as a refusal.
@@ -299,7 +325,9 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     `tabs_offline` stands in for Chrome and `osascript`; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
     `dialogs_offline` for the answerer's connection; `paste_offline` for chrome-devtools-mcp, the
     clipboard and the connection that presses the paste key; `limits_offline` for a slow tool;
-    `recording_offline` for Chrome, recording into a temporary folder;
+    `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
+    and a folder's running Chrome, and `page_offline` for `.run/state.db` and the Google folder, each in a
+    temporary folder;
     `service_offline` for the spawned server, with real `ps`.
   - **Live:** the live groups need the School Chrome up. Nothing listening on 9223 skips them;
     anything else wrong with the port is a failure. `queue_live` also needs `npm ci` done, and skips

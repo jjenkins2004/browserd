@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>browserd</title>
+<style>
+:root {
+  --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e2dd;
+  --accent: #2f5bd3; --accent-text: #ffffff; --bad: #b3261e; --good: #1f7a3a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --panel: #1f1f1d; --text: #ecece8; --muted: #9a9a93; --line: #34342f;
+    --accent: #7c9bf0; --accent-text: #10131c; --bad: #f2877f; --good: #6fcf8f;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, system-ui, sans-serif; }
+main { max-width: 880px; margin: 0 auto; padding: 24px 16px 48px; }
+header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 28px 0 10px; }
+.status { color: var(--muted); font-size: 13px; }
+.status.bad { color: var(--bad); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.profile { display: grid; grid-template-columns: minmax(90px, 160px) 70px 1fr; gap: 12px; align-items: baseline;
+  padding: 12px 16px; border-top: 1px solid var(--line); }
+.profile:first-child { border-top: 0; }
+.name { font-weight: 600; }
+.port, .folder { color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.empty { padding: 16px; color: var(--muted); }
+form { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 16px; align-items: center; }
+input, select, button { font: inherit; color: inherit; }
+input, select { background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; min-width: 0; }
+input { flex: 1 1 160px; }
+select { flex: 2 1 220px; }
+button { background: var(--accent); color: var(--accent-text); border: 0; border-radius: 7px; padding: 8px 14px;
+  font-weight: 600; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.said { padding: 0 16px 14px; font-size: 13px; }
+.said:empty { display: none; }
+.said.bad { color: var(--bad); }
+.said.good { color: var(--good); }
+@media (max-width: 560px) {
+  .profile { grid-template-columns: 1fr auto; }
+  .folder { grid-column: 1 / -1; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header><h1>browserd</h1><span class="status" id="status">connecting…</span></header>
+
+  <h2>Profiles</h2>
+  <div class="panel" id="profiles"><div class="empty">No profiles yet.</div></div>
+
+  <h2>New profile</h2>
+  <div class="panel">
+    <form id="new">
+      <input id="name" placeholder="Name, like Jobs" autocomplete="off" spellcheck="false" required>
+      <select id="folder"></select>
+      <button type="submit" id="make">New profile</button>
+    </form>
+    <div class="said" id="said"></div>
+  </div>
+</main>
+<script>
+const TOKEN = "__TOKEN__";
+
+async function api(path, body) {
+  const options = {headers: {"X-Browserd-Token": TOKEN}};
+  if (body !== undefined) {
+    options.method = "POST";
+    options.headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, options);
+  const answer = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(answer.error || "the server answered " + response.status);
+  return answer;
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function showProfiles(profiles) {
+  const box = document.getElementById("profiles");
+  box.replaceChildren(...(profiles.length ? profiles.map((p) => {
+    const row = el("div", "profile");
+    row.append(el("span", "name", p.name), el("span", "port", ":" + p.port), el("span", "folder", p.folder));
+    return row;
+  }) : [el("div", "empty", "No profiles yet.")]));
+}
+
+let shownFolders = null;
+function showFolders(folders) {
+  const key = JSON.stringify(folders);
+  if (key === shownFolders) return;  // rebuilt only on a change, so a dropdown held open is not closed every 2s
+  shownFolders = key;
+  const select = document.getElementById("folder");
+  const chosen = select.value;
+  const fresh = el("option", "", "in a new folder, Chrome-<name>");
+  fresh.value = "";
+  select.replaceChildren(fresh, ...folders.map((name) => {
+    const option = el("option", "", "taking over " + name + ", logins and all");
+    option.value = name;
+    return option;
+  }));
+  if (folders.includes(chosen)) select.value = chosen;
+}
+
+async function refresh() {
+  const status = document.getElementById("status");
+  try {
+    const state = await api("/state");
+    showProfiles(state.profiles);
+    showFolders(state.folders);
+    status.textContent = "";
+    status.className = "status";
+  } catch (error) {
+    status.textContent = error instanceof TypeError ? "the server is not answering" : error.message;
+    status.className = "status bad";
+  }
+}
+
+document.getElementById("new").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const said = document.getElementById("said");
+  const button = document.getElementById("make");
+  button.disabled = true;
+  try {
+    const made = await api("/profiles", {
+      name: document.getElementById("name").value.trim(),
+      folder: document.getElementById("folder").value,
+    });
+    said.textContent = "Made " + made.name + ": folder " + made.folder + ", port " + made.port + ".";
+    said.className = "said good";
+    document.getElementById("name").value = "";
+    await refresh();
+  } catch (error) {
+    said.textContent = error.message;
+    said.className = "said bad";
+  } finally {
+    button.disabled = false;
+  }
+});
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

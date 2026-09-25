@@ -77,7 +77,8 @@ def start():
             if child.poll() is not None:
                 raise SystemExit("the browser MCP server stopped while starting:\n%s" % _log_since(offset))
             if answering() == server.NAME:
-                return "running: %s (pid %d, log %s)" % (server.URL, child.pid, server.LOG_FILE)
+                return "running: %s, and the page at %s (pid %d, log %s)" % (server.URL, server.PAGE_URL, child.pid,
+                                                                             server.LOG_FILE)
             time.sleep(0.3)
         child.terminate()
         raise SystemExit("the browser MCP server did not answer within %gs, so it was sent SIGTERM:\n%s"

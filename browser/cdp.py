@@ -7,6 +7,7 @@ every connection goes through it. README.md says what it checks and why.
 import http.client
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.error
@@ -65,34 +66,60 @@ def listener():
     return int(pids[0]) if pids else None
 
 
-def school_chrome():
-    """The pid of the Chrome that has DATA_DIR open, with or without its port, or None."""
+def owner(folder):
+    """The pid of the Chrome that has a folder open, with or without its port, or None.
+
+    Args:
+        folder (str): the Chrome's --user-data-dir.
+    """
     try:
-        pid = int(os.readlink(os.path.join(DATA_DIR, "SingletonLock")).rpartition("-")[2])
+        pid = int(os.readlink(os.path.join(folder, "SingletonLock")).rpartition("-")[2])
     except (OSError, ValueError):
         return None
     # A lock left by a crash can name a pid since reused by something else.
     return pid if (_command(pid) + " ").startswith(CHROME + " ") else None
 
 
-def check_folder():
-    """Raise unless DATA_DIR holds the School profile and no other."""
-    path = os.path.join(DATA_DIR, "Local State")
+def school_chrome():
+    """The pid of the Chrome that has DATA_DIR open, with or without its port, or None."""
+    return owner(DATA_DIR)
+
+
+def port_of(pid):
+    """The --remote-debugging-port a Chrome's command line gives, or None.
+
+    Args:
+        pid (int): the Chrome's pid, as owner gives it.
+    """
+    found = re.search(r" --remote-debugging-port=(\d+) ", " %s " % _command(pid))
+    return int(found.group(1)) if found else None
+
+
+def check_folder(folder):
+    """Raise unless a Chrome folder holds the one profile PROFILE and no other.
+
+    Args:
+        folder (str): the Chrome's --user-data-dir.
+    """
+    path = os.path.join(folder, "Local State")
     try:
         with open(path) as handle:
             names = sorted(json.load(handle)["profile"]["info_cache"])
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise CdpError("cannot read which profiles the School Chrome has from %s (%s)" % (path, exc))
+        raise CdpError("cannot read which profiles the Chrome folder holds from %s (%s)" % (path, exc))
     if names != [PROFILE]:
         raise CdpError(
-            "the School Chrome's folder holds the profiles %s, and only %r is ever driven, so a tab on any other "
-            "would act as the wrong account. Stop and tell Joshua" % (", ".join(names) or "(none)", PROFILE)
+            "the Chrome folder %s holds the profiles %s, and only %r is ever driven, so a tab on any other "
+            "would act as the wrong account" % (folder, ", ".join(names) or "(none)", PROFILE)
         )
 
 
 def require():
     """The School Chrome's /json/version, or a CdpError that says what is wrong and what to do."""
-    check_folder()
+    try:
+        check_folder(DATA_DIR)
+    except CdpError as exc:
+        raise CdpError("%s. Stop and tell Joshua" % exc)
     pid = listener()
     school = school_chrome()
     if pid is None:

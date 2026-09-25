@@ -23,8 +23,9 @@ from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from browser import cdp, checked, clipboard, dialogs, focus, mcp, record, server, service, steps
+from browser import cdp, checked, clipboard, dialogs, focus, mcp, page, profiles, record, server, service, steps
 from browser.devtools import PACKAGE, Devtools
+from browser.state import State
 from browser.tabs import LETTERS, Tabs
 from browser.worker import Workers, returned
 from browser.ws import WebSocketError
@@ -1279,6 +1280,136 @@ def service_offline():
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def chrome_folder(parent, name, names=("Default",)):
+    """A stand-in Chrome folder in parent whose Local State lists names."""
+    folder = os.path.join(parent, name)
+    os.makedirs(folder)
+    with open(os.path.join(folder, "Local State"), "w") as handle:
+        json.dump({"profile": {"info_cache": {n: {"name": n} for n in names}}}, handle)
+    return folder
+
+
+def profiles_offline():
+    """profiles.make and State over a stand-in Google folder, with ports this check holds itself."""
+    saved = (profiles.GOOGLE, profiles.FIRST_PORT, profiles.LAST_PORT, cdp.owner, cdp.port_of)
+    workdir = tempfile.mkdtemp(prefix="browser-profiles-")
+    held = socket.socket()
+    try:
+        google = profiles.GOOGLE = os.path.join(workdir, "Google")
+        school = chrome_folder(google, "Chrome-School")
+        chrome_folder(google, "Chrome-Two", ("Default", "Profile 1"))
+        chrome_folder(google, "Chrome")
+        open(os.path.join(google, "Chrome-notes"), "w").close()
+        held.bind(("127.0.0.1", 0))
+        held.listen(1)
+        first = held.getsockname()[1]
+        profiles.FIRST_PORT, profiles.LAST_PORT = first, first + 40
+        path = os.path.join(workdir, "state.db")
+        state = State(path)
+        check("the folders a new profile may take over are the Chrome-<name> folders, not Chrome's own or a file",
+              profiles.free_folders(state.profiles()) == ["Chrome-School", "Chrome-Two"],
+              repr(profiles.free_folders(state.profiles())))
+        for bad in ("1jobs", "my jobs", "../x", "", None, "x" * 25):
+            check("the name %r is refused" % (bad,), refusal(lambda: profiles.make(state, bad), profiles.ProfileError)
+                  == profiles.NAME_RULE)
+
+        jobs = profiles.make(state, "Jobs", "Chrome-School", (first + 1,))
+        check("taking over a folder keeps it, and the port is the first free one: not listened on, not reserved",
+              jobs.folder == school and first + 1 < jobs.port <= first + 40, repr(jobs))
+        check("the profile is kept", state.profiles() == [jobs], repr(state.profiles()))
+        check("a name is taken whatever its case", "already" in refusal(lambda: profiles.make(state, "jobs"), profiles.ProfileError))
+        check("a taken folder is no longer offered", profiles.free_folders(state.profiles()) == ["Chrome-Two"])
+        said = refusal(lambda: profiles.make(state, "Other", "Chrome-School"), profiles.ProfileError)
+        check("a taken folder is refused", "no profile uses" in said, said)
+        said = refusal(lambda: profiles.make(state, "Other", "Chrome"), profiles.ProfileError)
+        check("Chrome's own folder is refused", "no profile uses" in said, said)
+        said = refusal(lambda: profiles.make(state, "Other", "Chrome-Two"), profiles.ProfileError)
+        check("a folder holding a second profile is refused, by name", "Profile 1" in said, said)
+        said = refusal(lambda: profiles.make(state, "School"), profiles.ProfileError)
+        check("a new folder that is there already, taken, is refused", said.endswith("Chrome-School is there already"), said)
+        said = refusal(lambda: profiles.make(state, "Two"), profiles.ProfileError)
+        check("a new folder that is there already, free, is refused, pointing at taking it over", "take over" in said, said)
+
+        research = profiles.make(state, "Research")
+        check("a new profile gets a new folder, Chrome-<name>, and a port of its own",
+              research.folder == os.path.join(google, "Chrome-Research") and os.path.isdir(research.folder)
+              and research.port not in (jobs.port, first), repr(research))
+        chrome_folder(google, "Chrome-Held")
+        cdp.owner, cdp.port_of = (lambda folder: 4242), (lambda pid: first)
+        held_profile = profiles.make(state, "Held", "Chrome-Held")
+        check("a folder whose Chrome runs keeps the port it runs with", held_profile.port == first, repr(held_profile))
+        chrome_folder(google, "Chrome-Clash")
+        cdp.port_of = lambda pid: jobs.port
+        clash = profiles.make(state, "Clash", "Chrome-Clash")
+        check("but not a port another profile has", clash.port not in (jobs.port, research.port, first), repr(clash))
+        state.close()
+        again = State(path)
+        check("profiles outlive the server", [p.name for p in again.profiles()] == ["Clash", "Held", "Jobs", "Research"],
+              repr(again.profiles()))
+        again.close()
+    finally:
+        profiles.GOOGLE, profiles.FIRST_PORT, profiles.LAST_PORT, cdp.owner, cdp.port_of = saved
+        held.close()
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def page_offline():
+    """The page's requests: what each must carry, and the profile its button makes."""
+    saved = (profiles.GOOGLE, profiles.FIRST_PORT)
+    workdir = tempfile.mkdtemp(prefix="browser-page-")
+    state = State(os.path.join(workdir, "state.db"))
+    board = page.Page("127.0.0.1", 0, state, ())
+    threading.Thread(target=board.serve_forever, daemon=True).start()
+    here = "127.0.0.1:%d" % board.server_address[1]
+
+    def ask(method, path, body=None, **headers):
+        conn = http.client.HTTPConnection("127.0.0.1", board.server_address[1], timeout=10)
+        sent = {"Host": here}
+        sent.update({key.replace("_", "-"): value for key, value in headers.items()})
+        conn.request(method, path, None if body is None else (body if isinstance(body, bytes) else json.dumps(body).encode()),
+                     {key: value for key, value in sent.items() if value is not None})
+        response = conn.getresponse()
+        raw = response.read()
+        conn.close()
+        return response.status, raw, response
+
+    own = {"Origin": "http://" + here, page.TOKEN: board.token, "Content-Type": "application/json"}
+    try:
+        profiles.GOOGLE = os.path.join(workdir, "Google")
+        chrome_folder(profiles.GOOGLE, "Chrome-School")
+        profiles.FIRST_PORT = profiles.LAST_PORT - 40
+        status, raw, response = ask("GET", "/")
+        check("the page is served with its token written in", status == 200 and board.token.encode() in raw
+              and b"__TOKEN__" not in raw, repr(status))
+        check("and may not be framed by another page", "frame-ancestors 'none'" in (response.getheader("Content-Security-Policy") or ""))
+        check("the page for another host name is refused", ask("GET", "/", Host="evil.example:80")[0] == 403)
+        check("state without the token is refused", ask("GET", "/state")[0] == 403)
+        status, raw, _ = ask("GET", "/state", **{page.TOKEN: board.token})
+        shown = json.loads(raw) if status == 200 else {}
+        check("state with it lists the profiles and the folders a new one may take over",
+              shown == {"profiles": [], "folders": ["Chrome-School"]}, repr(shown))
+        check("state asked from another origin is refused",
+              ask("GET", "/state", Origin="https://evil.example", **{page.TOKEN: board.token})[0] == 403)
+        body = {"name": "Jobs", "folder": "Chrome-School"}
+        check("a POST with no Origin is refused", ask("POST", "/profiles", body, **dict(own, Origin=None))[0] == 403)
+        check("a POST with another token is refused", ask("POST", "/profiles", body, **dict(own, **{page.TOKEN: "x"}))[0] == 403)
+        check("a POST that is not JSON is refused", ask("POST", "/profiles", b"name=Jobs", **dict(own, Content_Type="text/plain"))[0] == 415)
+        check("and nothing was made", state.profiles() == [])
+        status, raw, _ = ask("POST", "/profiles", body, **own)
+        made = json.loads(raw)
+        check("New profile makes one, answering its folder and port",
+              status == 200 and made["name"] == "Jobs" and made["folder"].endswith("Chrome-School"), raw.decode())
+        status, raw, _ = ask("POST", "/profiles", {"name": "no good"}, **own)
+        check("a refusal is answered for the page to show", status == 400 and json.loads(raw)["error"] == profiles.NAME_RULE, raw.decode())
+        check("an unknown action is refused", ask("POST", "/nothing", {}, **own)[0] == 404)
+    finally:
+        profiles.GOOGLE, profiles.FIRST_PORT = saved
+        board.shutdown()
+        board.server_close()
+        state.close()
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def front_app():
     """The frontmost Mac app's name, or None where lsappinfo is missing."""
     try:
@@ -1776,6 +1907,10 @@ if __name__ == "__main__":
     records_offline()
     print()
     recording_offline()
+    print()
+    profiles_offline()
+    print()
+    page_offline()
     print()
     quitting()
     service_offline()

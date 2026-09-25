@@ -31,7 +31,7 @@ def launch(wait=15.0):
         wait (float): seconds to let a freshly started Chrome open its port.
     """
     # Checked first: Chrome would quietly make an empty profile in a missing folder.
-    cdp.check_folder()
+    cdp.check_folder(cdp.DATA_DIR)
     if cdp.listener() is not None or cdp.school_chrome() is not None:
         # Something is already up, so starting another would help nothing: it is the
         # School Chrome with its port, or require says what it is instead.

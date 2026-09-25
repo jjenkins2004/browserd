@@ -6,11 +6,13 @@ Run in the background by service.py (../start). README.md covers the lifecycle a
 import os
 import shutil
 import signal
+import sqlite3
 import threading
 import time
 
-from . import cdp, focus, launch, mcp, record, steps
+from . import cdp, focus, launch, mcp, page, record, steps
 from .devtools import Devtools
+from .state import State
 from .tabs import NOT_AN_ID, Tabs, is_id
 from .worker import Workers
 from .ws import WebSocketError
@@ -18,12 +20,14 @@ from .ws import WebSocketError
 HOST = "127.0.0.1"
 PORT = 9230
 URL = "http://%s:%d%s" % (HOST, PORT, mcp.PATH)
+PAGE_URL = "http://%s:%d/" % (HOST, page.PORT)
 NAME = "browserd"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN = os.path.join(ROOT, ".run")
 CALLS = os.path.join(RUN, "calls")
 PID_FILE = os.path.join(RUN, "server.pid")
 LOG_FILE = os.path.join(RUN, "server.log")
+STATE_FILE = os.path.join(RUN, "state.db")
 CHROME_POLL = 2.0
 QUIT_WAIT = 15.0
 KEEP_DAYS = 7  # a tab's record folder and devtools log, once unused this long, are removed at start
@@ -324,6 +328,13 @@ def serve():
     tools = tab_tools(tabs, workers) + [queue_tool(tabs, workers, _allowed_tools())]
     # Bound before launch, so a port another program holds fails before Chrome is started for nothing.
     server = mcp.Server(HOST, PORT, tools, NAME)
+    state = State(STATE_FILE)
+    try:
+        page_server = page.Page(HOST, page.PORT, state, (PORT, page.PORT))
+    except OSError:
+        server.server_close()
+        state.close()
+        raise
     chrome_quit = threading.Event()
 
     def watch_chrome():
@@ -369,19 +380,25 @@ def serve():
         if was_up is False:
             _stop_started_chrome()
         server.server_close()
+        page_server.server_close()
+        state.close()
         _remove_pid()
         raise
     threading.Thread(target=watch_chrome, daemon=True).start()
     threading.Thread(target=keep_focus, daemon=True).start()
-    mcp.log("serving %s (pid %d)" % (URL, os.getpid()))
+    threading.Thread(target=page_server.serve_forever, daemon=True).start()
+    mcp.log("serving %s, and the page at %s (pid %d)" % (URL, PAGE_URL, os.getpid()))
     try:
         server.serve_forever()
     finally:
+        page_server.shutdown()
         workers.stop_all()
         if not chrome_quit.is_set():
             chrome_quit.set()
             _quit_chrome()
         server.server_close()
+        page_server.server_close()
+        state.close()
         _remove_pid()
         mcp.log("stopped")
 
@@ -389,6 +406,6 @@ def serve():
 if __name__ == "__main__":
     try:
         serve()
-    except (cdp.CdpError, OSError) as exc:
+    except (cdp.CdpError, OSError, sqlite3.Error) as exc:
         mcp.log("could not start: %s" % exc)
         raise SystemExit(1)
