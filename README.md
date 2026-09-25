@@ -12,7 +12,7 @@ records each `queue` call in that tab's record folder, `.run/calls/<tab>/`.
     start, stop             launchers for browser/service.py
     browser/                the server: tabs, the queue, and its own README
     package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
-    .run/                   gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/
+    .run/                   gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/; a tab's log and calls/<tab>/ go at start once 7 days unused
     tests/                  check_browser.py, check_server.py
 
 `browser/README.md` is the one to read before changing any of it: the Chrome proof, the tab ids, the
@@ -21,8 +21,9 @@ registered once at user scope so every Claude Code session has it:
 
     claude mcp add -s user --transport http browserd http://127.0.0.1:9230/mcp
 
-A session reads the tool list when it connects, so after a restart that changed the tools, reconnect
-browserd from `/mcp` in each session already open.
+After a restart that changed the tools, a session already open lists them again at its next browserd
+call and has them from its next turn; a session that connected to a browserd from before
+`tools.listChanged` needs `/mcp` to reconnect once. `browser/README.md` says why.
 
 ## Tests
 

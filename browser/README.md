@@ -26,11 +26,12 @@ chrome-devtools-mcp (pinned in `../package.json`; run `npm ci`).
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
       worker.py    one tab's process, paired with its page; Workers registry
       steps.py     the queue: load, check, run, report; snapshot views
-      checked.py   the queue's checked steps: pick, expect, type, wait; fill_refused
+      checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused
+      clipboard.py lends the Mac's clipboard to a paste, then puts it back whole
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       record.py    one queue call's numbered files in a folder
     ../start, ../stop           launchers
-    ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/
+    ../.run/                    gitignored: server.pid, server.log, start.lock, devtools-*.log, calls/<tab>/; a tab's log and calls/<tab>/ go at start once 7 days unused
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
     ../tests/check_server.py    protocol, tab ids, focus, queue, recording, service; live tabs, queue
     ../tests/check_browser.py   framing, School Chrome proof, launch; live proof, tab load
@@ -69,7 +70,9 @@ alone.
 call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added (and
 without take_snapshot's own `under`, `full` and `find`), hands each checked step to `checked.run`, passes
 every reply's text, less chrome-devtools-mcp's `## Pages` list of every tab in Chrome and its note on
-which page it now selects, through **`steps.view`**, and returns a whole MCP result: a text report,
+which page it now selects, and with a `Page navigated to <url>.` line cut to the url's query and fragment
+when the queue's navigation line before it named the same scheme, host and path and the url has a query
+(`navigate_page` starts over), through **`steps.view`**, and returns a whole MCP result: a text report,
 any images, and `isError` when a step failed or the queue stopped at `steps.QUEUE_MOST`. A reply
 longer than `steps.REPLY_MOST` (40,000 characters) is cut after its last whole line within that (mid-line
 when that line would leave less than half), the
@@ -78,8 +81,9 @@ step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view s
 `<n>-page-now-reply.txt`.
 
 **Server lifecycle**, in `server.serve()`: ask a chrome-devtools-mcp process for its tool list (no
-browser needed), bind 9230, install SIGTERM/SIGINT handlers, write `.run/server.pid`, then
-`launch.launch()` (start the School Chrome, or adopt it once `require` passes), then serve. If
+browser needed), bind 9230, install SIGTERM/SIGINT handlers, write `.run/server.pid`, remove each
+tab's record folder and `devtools-<tab>.log` unused for `server.KEEP_DAYS` (7; `server.prune`, which
+touches only names shaped like a tab id), then `launch.launch()` (start the School Chrome, or adopt it once `require` passes), then serve. If
 `launch` fails after this start launched Chrome, that Chrome is sent SIGTERM. A watcher polls
 `cdp.school_chrome()` every 2s, and when Chrome quits the server stops. Another thread runs `focus.keep` on a connection of its own; if that
 connection fails, it logs so and gives no more focus back until the server restarts. When the server stops, every
@@ -158,9 +162,16 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
 - **Claude Code cuts a tool's description at about 2,000 characters.** `server.QUEUE_HELP` stays
   under it; `server.STEPS_HELP` and the step catalog, `steps.describe`, make up the `steps` argument's
   description, which Claude Code passes whole.
-- **Claude Code reads the tool list once, when a session connects.** A session connected before a
-  restart that changed the tools keeps the old list until `/mcp` reconnects it, and the queue's refusal
-  of an argument it does not take says so.
+- **Claude Code reads the tool list when a session connects, and again only when told it changed.**
+  So `initialize` declares `tools.listChanged` and gives an `Mcp-Session-Id`, and a request under an id
+  this process did not give (one from before a restart) is answered as an event stream:
+  `notifications/tools/list_changed`, then the answer, once per id; any other request is plain JSON. Not
+  the 404 the spec gives an unknown id: Claude Code answers that by initializing again, without listing
+  the tools.
+  Claude Code (2.1.181, seen with `claude -p`) then lists the tools again, and the model has the new
+  list from the session's next turn; a turn already running, a subagent's included, keeps the old one.
+  A session that connected to a browserd not yet declaring `listChanged` never hears it, and needs
+  `/mcp` to reconnect; the queue's refusal of an argument it does not take says so.
 - **Claude Code cuts an error result over about 10,000 characters out of its middle** (seen in a
   trace; a success of 17,593 came whole). So a failed queue's view of the page now is cut to keep the report
   under `steps.ERROR_MOST` (9,000), but never below `steps.PAGE_NOW_LEAST` (2,000), the whole of it
@@ -215,7 +226,7 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   quote followed by one of the attribute names a snapshot line can carry (`steps.ATTRIBUTES`), and a
   native select's value, its last attribute, runs to the line's end, so quotes inside either are kept.
 - **A chrome-devtools-mcp tool reports success once it has acted, not once the page took it,** so
-  `checked.py` adds checked steps that read the page back; `server.STEPS_HELP` tells agents
+  `checked.py` adds checked steps that read the page back (all but a `paste` without a uid); `server.STEPS_HELP` tells agents
   when to use each.
   - **`pick`** only clicks an option that typing listed, not one already on the page (a
     `<select multiple>` with the same words). It passes once the field holds `text`; a text box
@@ -236,6 +247,20 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
     send as Enter and so submit the form. It passes on exactly the text, or on the text with only its
     spacing and punctuation changed (a masked phone), saying what the field shows; a field that cut the
     text short (a `maxlength`) fails, saying so.
+  - **`paste`** exists because editors change text as it is typed (Slides curls quotes; a code editor
+    closes brackets and indents lines), and a real paste is taken as it is. `clipboard.lent` saves every
+    item and type on the Mac's clipboard (JavaScript for Automation, since `pbpaste` reads text only),
+    puts the text on as one UTF-8 item, and puts the clipboard back after, one paste at a time; a
+    clipboard manager still records the text. The paste is Meta+V sent over the server's own
+    connection to the tab with Chrome's `paste` command, since on a Mac a key press alone, as
+    `press_key` sends it, pastes nothing. Two other ways were measured to fail: Monaco takes a synthetic
+    `paste` event and inserts nothing, and `Input.insertText` gets closed brackets as typing does. With a
+    uid, it focuses and selects as `type` does, refusing what `type` refuses but a line break in a
+    one-line box (a paste presses no Enter), and reads back as `type` reads;
+    without, it pastes where the focus is, followed into same-origin frames (where Google Docs and
+    Slides take typing) and shadow roots, refusing unless that is a text box or contenteditable element
+    (a frame from another site passes), and nothing reads it back. A clipboard that could not be put
+    back fails the step, saying whether the paste key was pressed.
   - **`wait`** takes one condition: `gone` (the text, once seen, is in no snapshot line's page text,
     the title included; uids, roles and urls are left out), `uid` and `value` (the field holds it, read
     as `expect` reads), or `still` (ms without a change). `timeout` is ms, like `wait_for`'s; `pick`'s
@@ -272,14 +297,17 @@ to exit, and if Chrome has not exited 15s later the server logs it and stops any
   - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for `lsof`,
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
     `tabs_offline` stands in for Chrome and `osascript`; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
-    `dialogs_offline` for the answerer's connection; `limits_offline` for a slow tool;
+    `dialogs_offline` for the answerer's connection; `paste_offline` for chrome-devtools-mcp, the
+    clipboard and the connection that presses the paste key; `limits_offline` for a slow tool;
     `recording_offline` for Chrome, recording into a temporary folder;
     `service_offline` for the spawned server, with real `ps`.
   - **Live:** the live groups need the School Chrome up. Nothing listening on 9223 skips them;
     anything else wrong with the port is a failure. `queue_live` also needs `npm ci` done, and skips
     without it, and records into a temporary folder; its checked steps run on a local page whose
     dropdowns and one textarea take only trusted input, whose Parse resume button runs a stand-in resume parser,
-    and whose Warn me confirm, clicked with no handle_dialog step after it, makes one click take about 30s.
+    whose Quoted editor curls quotes as they are typed, and whose Warn me confirm, clicked with no handle_dialog
+    step after it, makes one click take about 30s. Its paste checks lend the Mac's clipboard, and check it is
+    put back.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; a tab already open is never touched. No live check moves the Mac's focus:
     `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.

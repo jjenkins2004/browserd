@@ -1,11 +1,14 @@
 """MCP over HTTP: one JSON-RPC message per POST, answered as plain JSON.
 
 Only the slice Claude Code uses is here: initialize, ping, tools/list, tools/call and
-notifications. There is no event stream (GET answers 405) and no session id. README.md, "Agent
-Gotchas", says why a request carrying an Origin header is refused.
+notifications. There is no standing event stream (GET answers 405); the one exception to plain JSON
+is the first answer to a session id this process did not give, an event stream that also says the
+tool list changed.
+README.md, "Agent Gotchas", says why, and why a request carrying an Origin header is refused.
 """
 
 import json
+import secrets
 import sys
 import time
 import traceback
@@ -13,6 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
 PATH = "/mcp"
+SESSION = "Mcp-Session-Id"
+LIST_CHANGED = {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
 MAX_BODY = 5 << 20
 SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26")
 FALLBACK_VERSION = "2025-06-18"
@@ -56,6 +61,7 @@ class Server(ThreadingHTTPServer):
         """
         self.tools = {tool["name"]: tool for tool in tools}
         self.info = {"name": name, "version": version}
+        self.sessions = set()  # the session ids this process gave, or has told its tool list changed
         super().__init__((host, port), Handler)
         self.hosts = {"%s:%d" % (host, self.server_address[1]), "localhost:%d" % self.server_address[1]}
 
@@ -68,7 +74,7 @@ class Server(ThreadingHTTPServer):
             return {"jsonrpc": "2.0", "id": message_id, "result": {
                 "protocolVersion": (params.get("protocolVersion") if params.get("protocolVersion") in SUPPORTED_VERSIONS
                                     else FALLBACK_VERSION),
-                "capabilities": {"tools": {}},
+                "capabilities": {"tools": {"listChanged": True}},
                 "serverInfo": self.info,
             }}
         if method == "ping":
@@ -110,11 +116,21 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # one line per tool call is logged by Server.call instead
 
-    def _send(self, status, body=None):
-        data = json.dumps(body).encode() if body is not None else b""
+    def _send(self, status, body=None, session=None):
+        self._write(status, json.dumps(body).encode() if body is not None else b"",
+                    "application/json" if body is not None else None, session)
+
+    def _send_events(self, messages):
+        """Answer with an event stream holding messages, in order, as a Streamable HTTP server may."""
+        data = "".join("event: message\ndata: %s\n\n" % json.dumps(message) for message in messages)
+        self._write(200, data.encode(), "text/event-stream")
+
+    def _write(self, status, data, kind, session=None):
         self.send_response(status)
-        if body is not None:
-            self.send_header("Content-Type", "application/json")
+        if session is not None:
+            self.send_header(SESSION, session)
+        if kind is not None:
+            self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(data)))
         if self.close_connection:
             self.send_header("Connection", "close")
@@ -150,8 +166,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, _error(None, -32700, "the body is not JSON"))
         if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
             return self._send(400, _error(None, -32600, "one JSON-RPC 2.0 message per request"))
+        if message.get("method") == "initialize" and "id" in message:
+            session = secrets.token_hex(16)
+            server.sessions.add(session)
+            return self._send(200, server.dispatch(message), session)
         if "method" not in message:
             return self._send(202)  # a client's answer to a request; this server sends none
         if "id" not in message:
             return self._send(202)  # a notification
-        self._send(200, server.dispatch(message))
+        session = self.headers.get(SESSION)
+        if session is None or session in server.sessions:
+            return self._send(200, server.dispatch(message))
+        # A session from before a restart lists tools this process may not have: tell it, and it lists them again.
+        self._send_events([LIST_CHANGED, server.dispatch(message)])
+        server.sessions.add(session)  # only once sent, so a client that dropped the answer is told again

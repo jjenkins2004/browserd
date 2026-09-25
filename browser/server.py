@@ -4,6 +4,7 @@ Run in the background by service.py (../start). README.md covers the lifecycle a
 """
 
 import os
+import shutil
 import signal
 import threading
 import time
@@ -25,6 +26,7 @@ PID_FILE = os.path.join(RUN, "server.pid")
 LOG_FILE = os.path.join(RUN, "server.log")
 CHROME_POLL = 2.0
 QUIT_WAIT = 15.0
+KEEP_DAYS = 7  # a tab's record folder and devtools log, once unused this long, are removed at start
 
 
 def _refusing(run):
@@ -129,9 +131,14 @@ step runs. ? marks an optional argument.
 
 When to use which. pick for any dropdown you type into (react-select, an autocomplete). fill for a native select,
 with an option's exact text, which take_snapshot under the select's uid lists. type for text of 100 characters or
-more. expect after a fill or click whose result matters. wait for a
+more. paste for text an editor changes as it is typed (Slides curls quotes, a code editor closes brackets and
+indents): click into the editor and select what it replaces (Meta+A) first, or give a text box's uid; never set an
+editor's text with evaluate_script. expect after a fill or click whose result matters. wait for a
 page still at work, like a resume parser after an upload: uid and value for a field it fills (passing at once if
 the field holds it already), or gone with its status text; never a setTimeout in evaluate_script.
+
+A login, a consent or permission screen, or a captcha is Joshua's to pass: stop there, tab_show the tab, and hand
+it over by its title and URL.
 
 Dialogs: put a handle_dialog step right after the step that opens an alert, confirm or prompt (a click, a key
 press), and the dialog is answered the moment it opens, or up to 5s after that step for a late one; evaluate_script
@@ -188,7 +195,8 @@ def queue_tool(tabs, workers, allowed, calls=CALLS):
         unknown = set(arguments) - {"tab", "steps", "file"}
         if unknown:
             raise mcp.ToolError("queue takes tab, and steps or file; not %s. A tool list that shows other arguments is "
-                                "older than this server: ask the user to reconnect browserd with /mcp"
+                                "older than this server, and is listed again from your next turn; if it still shows "
+                                "them, ask the user to reconnect browserd with /mcp"
                                 % ", ".join(sorted(unknown)))
         tab = _text(arguments, "tab")
         if not is_id(tab):  # it names a folder, so "../x" must not reach os.path.join
@@ -280,6 +288,27 @@ def _stop_started_chrome():
         os.kill(pid, signal.SIGTERM)
 
 
+def prune(run):
+    """Remove each tab's record folder, <run>/calls/<tab>/, and devtools log, <run>/devtools-<tab>.log, unused for
+    KEEP_DAYS, and return how many of each went. Only names shaped like a tab id are touched.
+
+    Args:
+        run (str): the folder holding them, .run/.
+    """
+    now = time.time()
+    calls = os.path.join(run, "calls")
+    folders = [os.path.join(calls, name) for name in (os.listdir(calls) if os.path.isdir(calls) else []) if is_id(name)]
+    logs = [os.path.join(run, name) for name in os.listdir(run)
+            if name.startswith("devtools-") and name.endswith(".log") and is_id(name[len("devtools-"):-len(".log")])]
+    unused = lambda path: now - os.path.getmtime(path) > KEEP_DAYS * 86400
+    old_folders, old_logs = [path for path in folders if unused(path)], [path for path in logs if unused(path)]
+    for path in old_folders:
+        shutil.rmtree(path)
+    for path in old_logs:
+        os.remove(path)
+    return len(old_folders), len(old_logs)
+
+
 def _allowed_tools():
     """The tools a queue's steps may name, asked of chrome-devtools-mcp itself, which needs no browser to list them."""
     os.makedirs(RUN, exist_ok=True)
@@ -325,6 +354,13 @@ def serve():
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
     _write_pid()
+    try:
+        # Tab ids die with the server, so at start every record folder and log belongs to a tab no id reaches.
+        folders, logs = prune(RUN)
+        if folders or logs:
+            mcp.log("removed %d record folders and %d devtools logs unused for %d days" % (folders, logs, KEEP_DAYS))
+    except OSError as exc:
+        mcp.log("could not remove old record folders and devtools logs: %s" % exc)
     was_up = None
     try:
         was_up = cdp.school_chrome() is not None

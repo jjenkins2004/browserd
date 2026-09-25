@@ -19,10 +19,11 @@ import tempfile
 import threading
 import time
 import urllib.parse
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from browser import cdp, checked, dialogs, focus, mcp, record, server, service, steps
+from browser import cdp, checked, clipboard, dialogs, focus, mcp, record, server, service, steps
 from browser.devtools import PACKAGE, Devtools
 from browser.tabs import LETTERS, Tabs
 from browser.worker import Workers, returned
@@ -46,22 +47,37 @@ def refusal(run, kind: type[BaseException] = cdp.CdpError):
 
 
 def serving(tools, name="check"):
-    """An mcp.Server on a free port, serving on a thread."""
+    """An mcp.Server on a free port, serving on a thread, and a session its checks' requests carry."""
     httpd = mcp.Server("127.0.0.1", 0, tools, name)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    setattr(httpd, "session", initialize(httpd))
     return httpd
 
 
-def post(httpd, body, headers=None, path=mcp.PATH, method="POST"):
-    """(status, parsed JSON or None) for one request to httpd."""
+def initialize(httpd):
+    """The session id an initialize to httpd gets back, or None."""
+    conn = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=10)
+    conn.request("POST", mcp.PATH, json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+                 {"Content-Type": "application/json"})
+    response = conn.getresponse()
+    response.read()
+    conn.close()
+    return response.getheader(mcp.SESSION)
+
+
+def post(httpd, body, headers=None, path=mcp.PATH, method="POST") -> "tuple[int, Any]":
+    """(status, parsed JSON, the list of an event stream's messages, or None) for one request to httpd, under its
+    session unless headers say otherwise."""
     conn = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=120)
     data = body if isinstance(body, bytes) else json.dumps(body).encode()
-    sent = {"Content-Type": "application/json"}
+    sent = {"Content-Type": "application/json", mcp.SESSION: getattr(httpd, "session", None)}
     sent.update(headers or {})
     conn.request(method, path, data if method == "POST" else None, {k: v for k, v in sent.items() if v is not None})
     response = conn.getresponse()
     raw = response.read()
     conn.close()
+    if response.getheader("Content-Type") == "text/event-stream":
+        return response.status, [json.loads(line[len("data: "):]) for line in raw.decode().splitlines() if line.startswith("data: ")]
     return response.status, (json.loads(raw) if raw else None)
 
 
@@ -97,6 +113,23 @@ def protocol():
         check("initialize answers with the client's protocol version and a tools capability",
               status == 200 and result.get("protocolVersion") == "2025-03-26" and "tools" in result.get("capabilities", {}))
         check("initialize names the server", result.get("serverInfo", {}).get("name") == "check")
+        check("initialize says the tool list can change", result.get("capabilities", {}).get("tools") == {"listChanged": True})
+        first, second = initialize(httpd), initialize(httpd)
+        check("each initialize gives a session id of its own", bool(first) and bool(second) and first != second,
+              repr((first, second)))
+        ping = {"jsonrpc": "2.0", "id": 4, "method": "ping"}
+        status, _ = post(httpd, {"jsonrpc": "2.0", "method": "notifications/initialized"}, {mcp.SESSION: "from-before"})
+        check("a notification under a session id this process never gave is taken, and tells it nothing", status == 202)
+        status, answer = post(httpd, ping, {mcp.SESSION: "from-before"})
+        check("a request under a session id this process never gave, as from before a restart, is answered as an "
+              "event stream saying the tool list changed, then the answer",
+              status == 200 and answer == [mcp.LIST_CHANGED, {"jsonrpc": "2.0", "id": 4, "result": {}}], repr(answer))
+        status, answer = post(httpd, ping, {mcp.SESSION: "from-before"})
+        check("and once told, that session is answered as plain JSON", answer == {"jsonrpc": "2.0", "id": 4, "result": {}},
+              repr(answer))
+        status, answer = post(httpd, ping, {mcp.SESSION: None})
+        check("a request with no session id is answered as plain JSON", answer == {"jsonrpc": "2.0", "id": 4, "result": {}},
+              repr(answer))
         logged, errors, saved_log = [], io.StringIO(), mcp.log
         mcp.log = logged.append
         try:
@@ -500,7 +533,7 @@ def queue_offline():
         check("a step naming a tool the queue leaves out is refused, by number, saying why", "step 2" in said and "left out" in said, said)
         said = refusal(lambda: steps.check([{"tool": "click"}, {"tool": "frobnicate"}], {"click": {}}), steps.StepError)
         check("a step naming a tool that does not exist is refused, by number, naming the tools a queue runs",
-              "step 2" in said and "not a tool" in said and "it runs pick, expect, type, wait, click" in said, said)
+              "step 2" in said and "not a tool" in said and "it runs pick, expect, type, paste, wait, click" in said, said)
         check("a step whose tool name is empty is refused", "not an object with a tool name" in load(steps=[{"tool": ""}]))
         inside = os.path.join(workdir, "resume.pdf")
         for label, step, words in (
@@ -536,8 +569,9 @@ def queue_offline():
             "required": ["pageId", "uid"]}}})
         check("a tool is described by its arguments without pageId, optional ones marked, and its first sentence",
               described.endswith("\n  fill(uid: string, includeSnapshot?: boolean) - Type text into an input"), described)
-        check("the queue's own pick, expect and type are described first",
-              described.startswith("  pick(") and "\n  expect(" in described and "\n  type(" in described.split("\n  fill(")[0])
+        check("the queue's own pick, expect, type and paste are described first",
+              described.startswith("  pick(") and "\n  expect(" in described and "\n  type(" in described.split("\n  fill(")[0]
+              and "\n  paste(text: string, uid?: string) - " in described.split("\n  fill(")[0], described[:1500])
         said = refusal(lambda: steps.check([{"tool": "pick", "uid": "1_1", "text": "x", "txt": "x"}], {}), steps.StepError)
         check("a pick with a key it does not take is refused before anything runs", "txt" in said, said)
         for label, step, words in (
@@ -553,7 +587,10 @@ def queue_offline():
                 ("a wait whose timeout is 0", {"tool": "wait", "gone": "x", "timeout": 0}, "timeout"),
                 ("a wait whose still is not under its timeout", {"tool": "wait", "still": 5000, "timeout": 5000}, "still"),
                 ("a wait whose timeout reads as seconds", {"tool": "wait", "gone": "x", "timeout": 10}, "for 10 seconds give 10000"),
-                ("a wait whose still reads as seconds", {"tool": "wait", "still": 2}, "for 2 seconds give 2000")):
+                ("a wait whose still reads as seconds", {"tool": "wait", "still": 2}, "for 2 seconds give 2000"),
+                ("a paste without text", {"tool": "paste", "uid": "1_1"}, "paste needs text"),
+                ("a paste whose uid is empty", {"tool": "paste", "text": "x", "uid": ""}, "paste's uid"),
+                ("a paste with a key it does not take", {"tool": "paste", "text": "x", "value": "x"}, "value")):
             said = refusal(lambda: steps.check([{"tool": "take_snapshot"}, step], {"take_snapshot": {}}), steps.StepError)
             check("%s is refused before any step runs, by number" % label, "step 2" in said and words in said, said)
         check("pick and expect need no chrome-devtools-mcp tool of that name",
@@ -630,6 +667,22 @@ def queue_offline():
         report = text_of(steps.run(fake, 1, [{"tool": "click", "uid": "1_1"}], called, restarted=True)["content"])
         check("a process that dies mid-step is a failed step, not a crash", "--- 1 click FAILED" in report and "exited" in report, report)
         check("a queue on a restarted process says old uids are gone", report.startswith("note:") and "uids" in report, report)
+        navigations = ["https://docs.example/d/1/edit?s=a#s=a", "https://docs.example/d/1/edit?s=b#s=b",
+                       "https://docs.example/d/1/edit#only", "https://other.example/", "https://docs.example/d/1/edit?s=c"]
+        fake = FakeDevtools([([{"type": "text", "text": "Pressed.\nPage navigated to %s." % url}], False) for url in navigations[:3]]
+                            + [([{"type": "text", "text": "Successfully navigated to %s." % navigations[3]}], False),
+                               ([{"type": "text", "text": "Clicked.\nPage navigated to %s." % navigations[4]}], False)])
+        report = text_of(steps.run(fake, 7, [{"tool": "press_key", "key": "ArrowDown"}] * 3
+                                   + [{"tool": "navigate_page", "url": navigations[3]}, {"tool": "click", "uid": "1_1"}],
+                                   called)["content"])
+        check("a navigation with a query, on the scheme, host and path the one before it named, is cut to its query and "
+              "fragment; the first, one with no query, and one after a navigate_page stay whole",
+              "Page navigated to %s." % navigations[0] in report and "Page navigated to ?s=b#s=b (scheme, host and path as "
+              "before)." in report and "Page navigated to %s." % navigations[2] in report
+              and "Page navigated to %s." % navigations[4] in report, report)
+        report = text_of(steps.run(FakeDevtools([]), 7, [{"tool": "paste", "text": "x"}], called)["content"])
+        check("a paste in a queue not given the tab's target fails before it touches the clipboard",
+              "--- 1 paste FAILED" in report and "not given" in report, report)
 
         views(workdir)
         waits()
@@ -927,6 +980,81 @@ def dialogs_offline():
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+class Lent:
+    """Stands in for clipboard.lent: records each text lent, and touches no clipboard."""
+
+    def __init__(self):
+        self.texts = []
+
+    @contextlib.contextmanager
+    def lend(self, text):
+        self.texts.append(text)
+        yield
+
+
+class Keys:
+    """A connection to the School Chrome that records what it is asked."""
+
+    def __init__(self):
+        self.calls = []
+
+    def call(self, method, session=None, **params):
+        self.calls.append((method, params))
+        return {"sessionId": "S1"} if method == "Target.attachToTarget" else {}
+
+    def close(self):
+        pass
+
+
+class Answers:
+    """A tab's process whose evaluate_script answers come from a list, in turn."""
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+
+    def text(self, tool, arguments, wait=None):
+        return "Script ran on page and returned:\n```json\n%s\n```" % json.dumps(self.answers.pop(0))
+
+
+def paste_offline():
+    """checked.paste with stand-ins for the tab, the connection that presses its key, and the clipboard."""
+    lent, saved = Lent(), clipboard.lent
+    setattr(clipboard, "lent", lent.lend)
+    try:
+        keys = Keys()
+        said = checked.paste(Answers([{"focused": "editable"}]), 7, {"tool": "paste", "text": 'It\'s "a"'}, "T1", lambda: keys)
+        check("paste lends the clipboard its text and presses Meta+V on the tab with Chrome's own paste command",
+              lent.texts == ['It\'s "a"'] and keys.calls[0] == ("Target.attachToTarget", {"targetId": "T1", "flatten": True})
+              and keys.calls[1][1].get("commands") == ["paste"] and keys.calls[1][1].get("modifiers") == checked.META
+              and keys.calls[2][1].get("type") == "keyUp", repr(keys.calls))
+        check("and without a uid, says nothing reads the text back", "where the focus is; nothing reads them back" in said, said)
+        keys, lent.texts = Keys(), []
+        said = refusal(lambda: checked.paste(Answers([{"refused": "button"}]), 7, {"tool": "paste", "text": "x"}, "T1",
+                                             lambda: keys), checked.CheckFailed)
+        check("paste refuses when nothing that takes text has the focus, lending no clipboard and pressing no key",
+              "(button has it), so nothing was pasted" in said and lent.texts == [] and keys.calls == [], said)
+        said = refusal(lambda: checked.paste(Answers([{"refused": "readonly"}]), 7, {"tool": "paste", "uid": "1_1", "text": "x"},
+                                             "T1", lambda: keys), checked.CheckFailed)
+        check("paste with a uid refuses what type refuses, saying so", "is a read-only text box, so nothing was pasted" in said
+              and lent.texts == [], said)
+        said = checked.paste(Answers([{"focused": "textarea"}, {"kind": "value", "value": "a\nb"}]), 7,
+                             {"tool": "paste", "uid": "1_1", "text": "a\nb"}, "T1", lambda: Keys())
+        check("paste with a uid reads the text box back", said == 'pasted 3 characters; the field holds "a\\nb"', said)
+
+        @contextlib.contextmanager
+        def unreturned(text):
+            yield
+            raise clipboard.ClipboardError("could not put the Mac's clipboard back as it was: boom")
+
+        setattr(clipboard, "lent", unreturned)
+        said = refusal(lambda: checked.paste(Answers([{"focused": "editable"}]), 7, {"tool": "paste", "text": "x"}, "T1",
+                                             lambda: Keys()), checked.CheckFailed)
+        check("a clipboard that could not be put back fails the paste, saying so, and that the paste key was pressed",
+              "could not put the Mac's clipboard back" in said and "the paste key was pressed" in said, said)
+    finally:
+        setattr(clipboard, "lent", saved)
+
+
 def limits_offline():
     """What a queue refuses or stops for: its time, a fill that would do harm, a chrome-devtools-mcp timeout too long."""
     workdir = tempfile.mkdtemp(prefix="browser-limits-")
@@ -1020,6 +1148,20 @@ def records_offline():
         for thread in threads:
             thread.join()
         check("calls made at once each get their own number", len(set(made)) == 20, repr(sorted(made)))
+
+        run = os.path.join(root, "run")
+        for name in ("calls/k3f9", "calls/ab2c", "calls/notes"):
+            os.makedirs(os.path.join(run, name))
+        for name in ("devtools-k3f9.log", "devtools-ab2c.log", "devtools-tools.log", "server.log"):
+            open(os.path.join(run, name), "w").close()
+        weeks = time.time() - 8 * 86400
+        for name in ("calls/k3f9", "calls/notes", "devtools-k3f9.log", "devtools-tools.log", "server.log"):
+            os.utime(os.path.join(run, name), (weeks, weeks))
+        removed = server.prune(run)
+        check("prune removes each tab's record folder and devtools log unused for 7 days, and only names shaped like a tab id",
+              removed == (1, 1) and sorted(os.listdir(os.path.join(run, "calls"))) == ["ab2c", "notes"]
+              and sorted(os.listdir(run)) == ["calls", "devtools-ab2c.log", "devtools-tools.log", "server.log"],
+              repr((removed, os.listdir(run), os.listdir(os.path.join(run, "calls")))))
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1228,6 +1370,7 @@ WIDGETS = r"""<title>checked scratch</title>
 <label for=locked>Locked</label><input id=locked readonly value=fixed>
 <label for=mask>Phone</label><input id=mask oninput="const d = this.value.replace(/\D/g, ''); this.value = d.length > 6 ? '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6) : d">
 <div id=bio contenteditable role=textbox aria-multiline=true aria-label=Bio></div>
+<div id=quoted contenteditable role=textbox aria-label=Quoted></div>
 <button onclick="document.getElementById('warned').textContent = confirm('Sure?') ? 'confirmed' : 'cancelled'">Warn me</button><p id=warned></p>
 <button onclick="setTimeout(() => { document.getElementById('warned').textContent = confirm('Later?') ? 'confirmed' : 'cancelled' }, 1500)">Warn later</button>
 <label for=off>Off</label><input id=off disabled value=off>
@@ -1271,6 +1414,10 @@ function parseResume(late) {
 // Like React, keeps its own copy of the value and puts it back after any input event that is not trusted.
 let letterKept = letter.value;
 letter.addEventListener('input', (e) => { if (e.isTrusted) letterKept = letter.value; else letter.value = letterKept; });
+// Like Slides, curls each quote as it is typed; a paste goes in as it is.
+quoted.addEventListener('keydown', (e) => {
+  if (e.key === '"' || e.key === "'") { e.preventDefault(); document.execCommand('insertText', false, e.key === '"' ? '\u201c' : '\u2019'); }
+});
 </script>"""
 
 
@@ -1375,6 +1522,26 @@ def checked_live(httpd, tabs, opened):
     check("type refuses a line break for a one-line box, where it would press Enter", is_error and "one-line" in text, text)
     text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
     check("type into a contenteditable element takes a line break and reads the text back", not is_error, text)
+
+    held_before = clipboard._script(clipboard.SAVE, "save the clipboard")
+    said = 'It\'s "exact"'
+    quoted = field("textbox", "Quoted")
+    text, _ = call(httpd, "queue", tab=tab, steps=[
+        {"tool": "click", "uid": quoted}, {"tool": "type_text", "text": said},
+        {"tool": "evaluate_script", "function": "() => { const t = quoted.textContent; quoted.textContent = ''; return t; }"}])
+    check("the stand-in editor curls quotes as they are typed", returned(text.split("--- 3")[-1]) == "It\u2019s \u201cexact\u201c", text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[
+        {"tool": "click", "uid": quoted}, {"tool": "paste", "text": said}, {"tool": "expect", "uid": quoted, "value": said}])
+    check("paste without a uid puts text in where the focus is, as it is, quotes straight", not is_error
+          and "pasted %d characters where the focus is" % len(said) in text, text)
+    pasted = 'Dear "team",\nit\'s me'
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "paste", "uid": field("textbox", "Cover letter"), "text": pasted}])
+    check("paste with a uid replaces a text box's text, in a field that ignores scripted changes, and reads it back",
+          not is_error and "pasted %d characters; the field holds" % len(pasted) in text, text)
+    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "click", "uid": field("button", "Yes")}, {"tool": "paste", "text": "x"}])
+    check("paste without a uid refuses when nothing that takes text has the focus", is_error
+          and "nothing that takes text has the focus" in text and "so nothing was pasted" in text, text)
+    check("and the Mac's clipboard holds what it held before the pastes", clipboard._script(clipboard.SAVE, "save the clipboard") == held_before)
 
     warned = {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}
     text, is_error = call(httpd, "queue", tab=tab, steps=[
@@ -1601,6 +1768,8 @@ if __name__ == "__main__":
     queue_offline()
     print()
     dialogs_offline()
+    print()
+    paste_offline()
     print()
     limits_offline()
     print()

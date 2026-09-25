@@ -1,5 +1,5 @@
-"""The queue's checked steps, pick, expect, type and wait: they read the page, not a tool's "Successfully"; and
-fill_refused, which reads each element before a fill.
+"""The queue's checked steps, pick, expect, type, paste and wait: they read the page, not a tool's "Successfully"
+(all but a paste without a uid); and fill_refused, which reads each element before a fill.
 
 server.STEPS_HELP says when to use which.
 """
@@ -8,8 +8,9 @@ import json
 import re
 import time
 
-from . import cdp
+from . import cdp, clipboard
 from .worker import returned
+from .ws import WebSocketError
 
 PICK_WAIT = 8.0
 POLL = 0.4
@@ -63,8 +64,8 @@ CLEAR_JS = r"""(el) => {
 }"""
 
 
-# type_'s focus and select-all; README.md, "Agent Gotchas & Invariants", says which element it focuses. It returns
-# {focused: the box's type, or "editable"} or {refused: why}. getRootNode() reaches a box inside a shadow root.
+# type's and paste's focus and select-all; README.md, "Agent Gotchas & Invariants", says which element it focuses. It
+# returns {focused: the box's type, or "editable"} or {refused: why}. getRootNode() reaches a box inside a shadow root.
 SELECT_JS = r"""(el) => {
   const box = el.matches('input, textarea') ? el : el.isContentEditable ? null : el.querySelector('input, textarea');
   if (box) {
@@ -87,6 +88,25 @@ SELECT_JS = r"""(el) => {
   selection.addRange(range);
   return el.contains(el.getRootNode().activeElement) ? {focused: 'editable'} : {refused: 'focus'};
 }"""
+# Where a paste without a uid lands: the element with focus, followed into same-origin frames (Google Docs and Slides
+# type into one) and shadow roots. It returns {focused: what it is} or {refused: the tag that has focus instead}.
+FOCUS_JS = r"""() => {
+  let el = document.activeElement;
+  for (;;) {
+    if (el && el.shadowRoot && el.shadowRoot.activeElement) { el = el.shadowRoot.activeElement; continue; }
+    let inner = null;
+    try { inner = el && el.tagName === 'IFRAME' ? el.contentDocument : null; } catch (e) {}
+    if (inner && inner.activeElement) { el = inner.activeElement; continue; }
+    break;
+  }
+  if (!el) return {refused: 'nothing'};
+  if (el.tagName === 'IFRAME') return {focused: 'a frame from another site'};
+  if (el.isContentEditable) return {focused: 'editable'};
+  const text = el.matches('textarea')
+    || (el.matches('input') && ['text', 'search', 'email', 'url', 'tel', 'password', 'number'].includes(el.type));
+  return text && !el.disabled && !el.readOnly ? {focused: el.type} : {refused: el.tagName.toLowerCase()};
+}"""
+META = 4  # CDP's modifier bit for Meta, the Mac's Command key
 # What fill_refused reads first; README.md, "Agent Gotchas & Invariants", says why. A dropdown's option labels are
 # its options' accessible names, which chrome-devtools-mcp matches exactly; a <select multiple> matches by value.
 FILL_JS = r"""(el) => {
@@ -97,7 +117,7 @@ FILL_JS = r"""(el) => {
     || ['checkbox', 'radio', 'switch'].includes(el.getAttribute('role'));
   return {kind: toggle ? 'toggle' : 'box', disabled: !!el.disabled, readonly: !toggle && !!el.readOnly};
 }"""
-# Why type_ typed nothing, by what SELECT_JS refused; any other input type is not text-like.
+# Why type or paste put nothing in, by what SELECT_JS refused; any other input type is not text-like.
 TYPE_REFUSED = {
     "combobox": "is a dropdown you type into, which takes pick",
     "disabled": "is a disabled text box",
@@ -158,9 +178,11 @@ def problem(step):
         return "%s does not take %s" % (tool, ", ".join(sorted(extra)))
     if tool == "wait":
         return _wait_problem(step)
-    for key in ("uid", "value") if tool == "expect" else ("uid", "text"):
+    for key in {"expect": ("uid", "value"), "paste": ("text",)}.get(tool, ("uid", "text")):
         if not isinstance(step.get(key), str) or not step[key]:
             return "%s needs %s, as a non-empty string" % (tool, key)
+    if tool == "paste" and "uid" in step and (not isinstance(step["uid"], str) or not step["uid"]):
+        return "paste's uid must be a non-empty string, or left out to paste where the focus is"
     if tool == "pick":
         if "search" in step and (not isinstance(step["search"], str) or not step["search"]):
             return "pick's search must be a non-empty string"
@@ -318,12 +340,7 @@ def type_(devtools, page_id, step):
         page_id (int): the tab's page id in it.
         step (dict): {"tool": "type", "uid": field uid, "text": what the field should hold}.
     """
-    selected = returned(_script(devtools, page_id, SELECT_JS, step["uid"]))
-    if not isinstance(selected, dict) or "focused" not in selected:
-        refused = str(selected.get("refused")) if isinstance(selected, dict) else "none"
-        why = TYPE_REFUSED.get(refused, "is a %s input, not a text box (click, fill or upload_file it)" % refused)
-        raise CheckFailed("element %s %s, so nothing was typed" % (step["uid"], why))
-    focused = selected["focused"]
+    focused = _selected(devtools, page_id, step["uid"], "typed")
     if focused not in ("textarea", "editable") and re.search(r"[\r\n]", step["text"]):
         # type_text presses Enter for a line break, which in a one-line box submits its form.
         raise CheckFailed("element %s is a one-line text box, where a line break would press Enter, so nothing was "
@@ -332,20 +349,89 @@ def type_(devtools, page_id, step):
         devtools.text("type_text", {"pageId": page_id, "text": step["text"]})
     except cdp.CdpError as exc:
         raise CheckFailed("%s; the field may hold part of the text" % exc)
+    held = _holds_text(devtools, page_id, step["uid"], step["text"], focused)
+    return "typed %d characters; %s" % (len(step["text"]), held)
+
+
+def _selected(devtools, page_id, uid, done):
+    """Focus the text box at or inside uid and select its text, or refuse; what it focused, as SELECT_JS names it.
+
+    done (str): what would have been done to the box, for the refusal: "typed" or "pasted".
+    """
+    selected = returned(_script(devtools, page_id, SELECT_JS, uid))
+    if not isinstance(selected, dict) or "focused" not in selected:
+        refused = str(selected.get("refused")) if isinstance(selected, dict) else "none"
+        why = TYPE_REFUSED.get(refused, "is a %s input, not a text box (click, fill or upload_file it)" % refused)
+        raise CheckFailed("element %s %s, so nothing was %s" % (uid, why, done))
+    return selected["focused"]
+
+
+def _holds_text(devtools, page_id, uid, text, focused):
+    """What a text box holds once text went in, read as expect reads: exactly text, or with only its spacing and
+    punctuation changed; otherwise CheckFailed, saying when the box kept only the start of it."""
     # A contenteditable element reads back as its text with each run of spaces and line breaks made one space.
-    value = " ".join(step["text"].split()) if focused == "editable" else step["text"]
+    value = " ".join(text.split()) if focused == "editable" else text
     try:
-        held = expect(devtools, page_id, {"uid": step["uid"], "value": value})
+        return expect(devtools, page_id, {"uid": uid, "value": value})
     except CheckFailed as exc:
-        shown = _read(devtools, page_id, step["uid"]).get("value") or ""
+        shown = _read(devtools, page_id, uid).get("value") or ""
         if shown and re.sub(r"[^\w.]", "", shown) == re.sub(r"[^\w.]", "", value):  # a dropped decimal point fails
             # A masked field, like a phone number, adds its own spacing and punctuation; every letter and digit is in.
-            return "typed %d characters; the field shows them as %s, only its spacing and punctuation changed" % (
-                len(step["text"]), json.dumps(shown))
+            return "the field shows them as %s, only its spacing and punctuation changed" % json.dumps(shown)
         if shown and value.startswith(shown):
             raise CheckFailed("%s; the field keeps only its first %d characters" % (exc, len(shown)))
         raise
-    return "typed %d characters; %s" % (len(step["text"]), held)
+
+
+def paste(devtools, page_id, step, target, connect=None):
+    """Put text in with a real paste, Meta+V from the Mac's clipboard, which an editor takes as it is: no quotes
+    curled, brackets closed or lines indented, as typing gets.
+
+    Args:
+        devtools (Devtools): the tab's process.
+        page_id (int): the tab's page id in it.
+        step (dict): {"tool": "paste", "text": what to paste, "uid"?: a text box's uid}.
+        target (str | None): the tab's target id, which the key press is sent to.
+        connect (callable | None): opens a proven connection to the School Chrome; cdp.Browser unless a check
+            passes a stand-in.
+    """
+    if target is None:
+        raise CheckFailed("paste needs the tab's target id to press its key, and this queue was not given one")
+    focused = _selected(devtools, page_id, step["uid"], "pasted") if "uid" in step else None
+    if "uid" not in step:
+        where = returned(devtools.text("evaluate_script", {"pageId": page_id, "function": FOCUS_JS, "dialogAction": "",
+                                                           "waitForStableDom": False}))
+        if not isinstance(where, dict) or "focused" not in where:
+            raise CheckFailed("nothing that takes text has the focus (%s has it), so nothing was pasted; click the "
+                              "field or editor first, or give paste its uid"
+                              % (where.get("refused") if isinstance(where, dict) else "no element"))
+    pressed = False
+    try:
+        with clipboard.lent(step["text"]):
+            _press_paste(target, connect or cdp.Browser)
+            pressed = True
+    except clipboard.ClipboardError as exc:
+        raise CheckFailed("%s%s" % (exc, "; the paste key was pressed, so the text went in all the same" if pressed else ""))
+    except (WebSocketError, OSError) as exc:
+        raise CheckFailed("could not press the paste key: %s" % exc)
+    if "uid" not in step:
+        return ("pasted %d characters where the focus is; nothing reads them back, so check them in a snapshot or "
+                "screenshot" % len(step["text"]))
+    held = _holds_text(devtools, page_id, step["uid"], step["text"], focused)
+    return "pasted %d characters; %s" % (len(step["text"]), held)
+
+
+def _press_paste(target, connect):
+    """Press Meta+V on the tab with Chrome's own paste command: on a Mac a key press alone, as press_key sends it,
+    pastes nothing."""
+    browser = connect()
+    try:
+        session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
+        key = {"key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": META}
+        browser.call("Input.dispatchKeyEvent", session, type="rawKeyDown", commands=["paste"], **key)
+        browser.call("Input.dispatchKeyEvent", session, type="keyUp", **key)
+    finally:
+        browser.close()
 
 
 def fill_refused(devtools, page_id, step):
@@ -437,9 +523,10 @@ def _still(devtools, page_id, still, timeout):
     raise CheckFailed("the page did not stay unchanged for %gms within %gms" % (still, timeout))
 
 
-STEPS = {"pick": pick, "expect": expect, "type": type_, "wait": wait}
+STEPS = {"pick": pick, "expect": expect, "type": type_, "paste": paste, "wait": wait}
 KEYS = {"pick": {"tool", "uid", "text", "search", "wait"}, "expect": {"tool", "uid", "value"},
-        "type": {"tool", "uid", "text"}, "wait": {"tool", "gone", "uid", "value", "still", "timeout"}}
+        "type": {"tool", "uid", "text"}, "paste": {"tool", "text", "uid"},
+        "wait": {"tool", "gone", "uid", "value", "still", "timeout"}}
 
 
 def describe():
@@ -454,6 +541,9 @@ def describe():
         "  type(uid: string, text: string) - Select the text box's text and type text over it with real keys, then fail "
         "unless the field holds text, exactly or with only its spacing and punctuation changed (a masked phone); use it "
         "instead of fill for a value of 100 characters or more, which fill sets by script",
+        "  paste(text: string, uid?: string) - Paste text with Meta+V, so an editor takes it as it is, with no quotes "
+        "curled or brackets closed as typing gets (the Mac's clipboard is lent for it and put back after); with uid, "
+        "over a text box's text, read back as type reads; without, where the focus is, read back by nothing",
         "  wait(gone?: string, uid?: string, value?: string, still?: number, timeout?: number) - Wait for one "
         "condition: until the text in gone, seen on the page within %gs, is off it, or the page has not changed for "
         "still ms (both read from snapshots), or the field at uid holds value, read as expect reads; still and timeout "
@@ -462,7 +552,7 @@ def describe():
     ])
 
 
-def run(devtools, page_id, step, left=None):
+def run(devtools, page_id, step, left=None, target=None):
     """(report text, failed) for one checked step. A tool error inside it fails the step with that error.
 
     Args:
@@ -470,13 +560,15 @@ def run(devtools, page_id, step, left=None):
         page_id (int): the tab's page id in it.
         step (dict): a checked step that problem has passed.
         left (float | None): seconds the queue has left; a wait's timeout or a pick's wait longer than that is cut to it.
+        target (str | None): the tab's target id, which a paste sends its key press to.
     """
     asked, cut = _waits(step), None
     if left is not None and asked is not None and asked > left:
         cut = left
         step = dict(step, timeout=cut * 1000) if step["tool"] == "wait" else dict(step, wait=cut)
     try:
-        return STEPS[step["tool"]](devtools, page_id, step), False
+        extra = (target,) if step["tool"] == "paste" else ()  # only paste reaches the tab past chrome-devtools-mcp
+        return STEPS[step["tool"]](devtools, page_id, step, *extra), False
     except (CheckFailed, cdp.CdpError) as exc:
         return "%s%s" % (exc, "" if cut is None else "; its %s was cut to the %.1fs the queue had left, so give it a "
                          "queue of its own" % ("timeout" if step["tool"] == "wait" else "wait", cut)), True

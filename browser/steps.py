@@ -8,6 +8,7 @@ import json
 import os
 import re
 import time
+import urllib.parse
 
 from . import cdp, checked, dialogs
 from .devtools import may_touch
@@ -36,6 +37,7 @@ UNBLOCKED = {"handle_dialog", "list_console_messages", "get_console_message"}
 OWN_DIALOGS = {"evaluate_script", "navigate_page", "handle_dialog"}
 # chrome-devtools-mcp's note on which page it now selects, whose numbers mean nothing in a queue.
 SELECTION_NOTE = re.compile(r"^Note: the previously selected page .*\n?", re.M)
+NAVIGATED = re.compile(r"^Page navigated to (\S+)\.$", re.M)  # chrome-devtools-mcp's line for a step that navigated
 # How a chrome-devtools-mcp schema's types are held once its JSON is read.
 TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool, "array": list, "object": dict}
 
@@ -181,7 +183,8 @@ def check(steps, allowed):
                 if tool in PAGE_TOOLS else "it profiles the page, and a queue only reads and drives one"))
         elif tool not in allowed:
             wrong = "%r is not a tool a queue can run; it runs %s (the steps argument's description gives their " \
-                    "arguments; if it lacks one, ask the user to reconnect browserd with /mcp)" \
+                    "arguments; if it lacks one, your next turn has the new list, and if that still lacks it, ask " \
+                    "the user to reconnect browserd with /mcp)" \
                     % (tool, ", ".join(list(checked.STEPS) + sorted(allowed)))
         else:
             wrong = _arguments_problem(step, allowed[tool])
@@ -446,6 +449,30 @@ def _without_pages(text):
     return "\n".join(lines[:start] + lines[end:])
 
 
+def _short_navigations(text, last):
+    """(text, the url the queue's last navigation line named, this reply's included): each "Page navigated to <url>."
+    line before any snapshot, once the queue's navigation line before it named the same scheme, host and path, cut to
+    its query and fragment, like a slide's ?slide=...#slide=... as an editor moves between slides. A url with no
+    query stays whole, since a fragment alone would read as keeping the query before it.
+
+    Args:
+        text (str): a step's reply.
+        last (str | None): the url the queue's last navigation line named, before this step.
+    """
+    head, snapshot, rest = text.partition(SNAPSHOT)
+
+    def cut(line):
+        nonlocal last
+        before, last = last, line.group(1)
+        was, now = urllib.parse.urlsplit(before or ""), urllib.parse.urlsplit(last)
+        if before is None or not now.query or (was.scheme, was.netloc, was.path) != (now.scheme, now.netloc, now.path):
+            return line.group(0)
+        changed = last[len(urllib.parse.urlunsplit((now.scheme, now.netloc, now.path, "", ""))):]
+        return "Page navigated to %s (scheme, host and path as before)." % changed
+
+    return NAVIGATED.sub(cut, head) + snapshot + rest, last
+
+
 def _capped(text, path, most=REPLY_MOST):
     """text, or its whole lines within `most` characters once the whole of it is saved to path."""
     if len(text) <= most:
@@ -473,13 +500,13 @@ def run(devtools, page_id, steps, path, restarted=False, target=None):
         steps (list[dict]): checked by load and check.
         path (callable): the full path for a file name, like record.Call.path; it names where each whole snapshot goes.
         restarted (bool): the process was started again after dying, so the report says old uids are gone.
-        target (str | None): the tab's target id, for answering a dialog the moment it opens; None leaves every
-            dialog to chrome-devtools-mcp.
+        target (str | None): the tab's target id, for answering a dialog the moment it opens and for a paste's key
+            press; None leaves every dialog to chrome-devtools-mcp and fails every paste.
     """
     report, images, failed = [], [], False
     if restarted:
         report.append(RESTARTED)
-    started, answerer = time.monotonic(), None
+    started, answerer, navigated = time.monotonic(), None, None
     try:
         for number, step in enumerate(steps, 1):
             left = QUEUE_MOST - (time.monotonic() - started)
@@ -494,11 +521,12 @@ def run(devtools, page_id, steps, path, restarted=False, target=None):
             if target and following and following["tool"] == "handle_dialog" and step["tool"] not in OWN_DIALOGS:
                 answerer = dialogs.Answerer(target, following)
                 answerer.start_listening()
-            content, failed = _step(devtools, page_id, step, left, answerer)
+            content, failed = _step(devtools, page_id, step, left, answerer, target)
             if step["tool"] == "handle_dialog":
                 answerer = None
             took = time.monotonic() - began
-            text = SELECTION_NOTE.sub("", _without_pages(_text(content)))
+            text, navigated = _short_navigations(SELECTION_NOTE.sub("", _without_pages(_text(content))),
+                                                 None if step["tool"] == "navigate_page" else navigated)
             dialog = OPEN_DIALOG in text and DIALOG_BEFORE not in text
             if failed and dialog and step["tool"] not in checked.STEPS and step["tool"] not in UNBLOCKED:
                 # The action opened a dialog, which blocks the page, so the action itself ran out its 30s timeout.
@@ -528,10 +556,10 @@ def run(devtools, page_id, steps, path, restarted=False, target=None):
     return {"content": [{"type": "text", "text": "\n".join(report)}] + images, "isError": failed}
 
 
-def _step(devtools, page_id, step, left, answerer):
+def _step(devtools, page_id, step, left, answerer, target):
     """(content, failed) for one step: a checked step, a dialog the answerer answered, a refused fill, or the tool's own."""
     if step["tool"] in checked.STEPS:
-        text, failed = checked.run(devtools, page_id, step, left)
+        text, failed = checked.run(devtools, page_id, step, left, target)
         return [{"type": "text", "text": text}], failed
     if step["tool"] == "handle_dialog" and answerer is not None:
         answered = answerer.answered(min(dialogs.LATE, left))
