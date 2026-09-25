@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import threading
+import time
 
 from . import cdp
 from .devtools import Devtools
@@ -29,7 +30,7 @@ def returned(text):
 class Worker:
     """One tab's chrome-devtools-mcp and page id. Hold `lock` for anything that uses them."""
 
-    def __init__(self, tab, target_id, profile, log_dir, connect=None):
+    def __init__(self, tab, target_id, profile, log_dir, connect=None, carried=False):
         """
         Args:
             tab (str): the tab id, used in messages and the log name.
@@ -38,6 +39,8 @@ class Worker:
             log_dir (str): where devtools-<tab>.log goes.
             connect (callable | None): opens a proven connection to that Chrome; a cdp.Browser unless a check passes a
                 stand-in.
+            carried (bool): the tab is older than this server, so an earlier server's process may have given out uids
+                that are gone.
         """
         self.tab = tab
         self.target_id = target_id
@@ -46,24 +49,26 @@ class Worker:
         self._log_dir = log_dir
         self.connect = connect or (lambda: cdp.Browser(profile))
         self._devtools = None
+        self._carried = carried
         self.page_id = None
 
     def ensure(self):
         """(Devtools, page id, restarted): the running process, starting and pairing one when there is none.
 
-        restarted is True when an earlier process for this tab had died, since every element uid it handed
-        out died with it.
+        restarted is True when uids this tab was given may be gone: an earlier process for it died, or the tab is
+        carried over from an earlier server, whose processes stopped with it.
         """
         if self._devtools is not None and self._devtools.alive():
             return self._devtools, self.page_id, False
-        restarted = self._devtools is not None  # the dead process stays here until a new one pairs, so this holds
+        # The dead process stays here until a new one pairs, so this holds.
+        restarted = self._devtools is not None or self._carried
         devtools = Devtools(os.path.join(self._log_dir, "devtools-%s.log" % self.tab), self.profile.endpoint)
         try:
             self.page_id = self._pair(devtools)
         except Exception:
             devtools.close()  # stored nowhere yet, so nothing else could ever stop it
             raise
-        self._devtools = devtools
+        self._devtools, self._carried = devtools, False
         return devtools, self.page_id, restarted
 
     def _pair(self, devtools):
@@ -131,12 +136,22 @@ class Workers:
         self._connect = connect
         self._lock = threading.Lock()
         self._workers = {}
+        self.started = time.time()
 
-    def get(self, tab, target_id, profile):
+    def get(self, tab, target_id, profile, made=None):
+        """A tab's Worker, made on its first use.
+
+        Args:
+            tab (str): the tab id.
+            target_id (str): the DevTools target id behind it.
+            profile (Profile): whose Chrome holds it.
+            made (float | None): when the tab was given its id; one older than this server is carried over.
+        """
         with self._lock:
             worker = self._workers.get(tab)
             if worker is None:
-                worker = self._workers[tab] = Worker(tab, target_id, profile, self._log_dir, self._connect)
+                carried = made is not None and made < self.started
+                worker = self._workers[tab] = Worker(tab, target_id, profile, self._log_dir, self._connect, carried)
             return worker
 
     def drop(self, tab):

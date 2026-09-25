@@ -7,11 +7,12 @@ agent starts with `session_start {profile, label}`, and sees only its session's 
 
     ./start    the server, in the background; each profile's Chrome starts on its first use. The
                browserd page, http://127.0.0.1:9231/, lists and makes profiles
-    ./stop     stops the server, which quits every profile's Chrome with it
+    ./stop     stops the server, which quits every profile's Chrome with it and closes every session
+    ./restart  restarts the server alone: every Chrome keeps running and every session stays open
 
 ## Layout
 
-    start, stop             launchers for browser/service.py
+    start, stop, restart    launchers for browser/service.py
     browser/                the server: tabs, the queue, and its own README
     package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
     .run/                   gitignored: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs), devtools-*.log, calls/<profile>/<session>-<label>/<tab>/; a tab's log and a closed session's folder go at start once 7 days unused

@@ -1,4 +1,5 @@
-"""../start and ../stop: run the browser MCP server in the background, or stop it and every profile's Chrome with it."""
+"""../start, ../stop and ../restart: run the browser MCP server in the background; stop it and every profile's Chrome
+with it; or restart the server alone."""
 
 import fcntl
 import json
@@ -85,27 +86,43 @@ def start():
                          % (START_WAIT, _log_since(offset)))
 
 
-def stop():
-    """Stop the server, which quits every profile's Chrome, and return a line saying what happened."""
+def _signal(number):
+    """Send the running server a signal and wait for it to exit; False when no server was running."""
     pid = _pid()
     if pid is None or not _is_server(pid):
         if answering() == server.NAME:
             raise SystemExit("the browser MCP server answers on port %d but %s names no live pid; stop it by hand"
                              % (server.PORT, server.PID_FILE))
-        return "not running"
-    os.kill(pid, signal.SIGTERM)
+        return False
+    os.kill(pid, number)
     deadline = time.time() + STOP_WAIT
     while time.time() < deadline:
         if not _is_server(pid):
-            return "stopped the browser MCP server and every profile's Chrome"
+            return True
         time.sleep(0.25)
     raise SystemExit("the browser MCP server (pid %d) is still running after %gs; see %s" % (pid, STOP_WAIT, server.LOG_FILE))
 
 
+def stop():
+    """Stop the server, which quits every profile's Chrome and closes every session, and return a line saying what
+    happened."""
+    if not _signal(signal.SIGTERM):
+        return "not running"
+    return "stopped the browser MCP server and every profile's Chrome, and closed every session"
+
+
+def restart():
+    """Restart the server alone, leaving every profile's Chrome and every session as they are, and return a line
+    saying what happened."""
+    was_running = _signal(signal.SIGHUP)
+    return "%s; %s" % ("restarted, every Chrome and session kept" if was_running else "was not running", start())
+
+
 def main():
-    if sys.argv[1:] not in (["start"], ["stop"]):
-        raise SystemExit("usage: ./start or ./stop, with no arguments")
-    print(start() if sys.argv[1] == "start" else stop())
+    commands = {"start": start, "stop": stop, "restart": restart}
+    if len(sys.argv) != 2 or sys.argv[1] not in commands:
+        raise SystemExit("usage: ./start, ./stop or ./restart, with no arguments")
+    print(commands[sys.argv[1]]())
 
 
 if __name__ == "__main__":

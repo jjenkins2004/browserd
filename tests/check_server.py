@@ -809,6 +809,10 @@ def queue_offline():
             def close(self):
                 self.running = False
 
+        carried = workers.get("cary", "T6", STAND_IN, workers.started - 1)
+        fresh = workers.get("frsh", "T7", STAND_IN, workers.started + 1)
+        check("a tab older than this server is carried over, so its first report says its uids are gone",
+              carried._carried and not fresh._carried)
         paused, idle = workers.get("paus", "T4", STAND_IN), workers.get("idle", "T5", STAND_IN)
         setattr(paused, "_devtools", Process(True))
         setattr(idle, "_devtools", Process(False))
@@ -1425,6 +1429,24 @@ def service_offline():
         with open(server.PID_FILE, "w") as handle:
             handle.write(str(os.getpid()))
         check("stop never signals a pid that is not the browser MCP server", service.stop() == "not running")
+
+        ours = serving([], server.NAME)
+        server.URL = "http://127.0.0.1:%d%s" % (ours.server_address[1], mcp.PATH)
+        # A process ps shows running -m browser.server, which exits 1 on SIGHUP and 2 on SIGTERM.
+        said = {}
+        for name, number, code in (("restart", "HUP", 1), ("stop", "TERM", 2)):
+            stand_in = subprocess.Popen(["/bin/bash", "-c", "trap 'exit 1' HUP; trap 'exit 2' TERM; echo set; "
+                                         "while :; do sleep 0.05; done", "-m", "browser.server"], stdout=subprocess.PIPE, text=True)
+            assert stand_in.stdout is not None
+            stand_in.stdout.readline()  # its traps are set
+            with open(server.PID_FILE, "w") as handle:
+                handle.write(str(stand_in.pid))
+            said[name] = getattr(service, name)()
+            check("%s sends the server SIG%s and waits for it to exit" % (name, number), stand_in.wait(5) == code, said[name])
+        check("restart then starts the server again, which here answers already",
+              said["restart"] == "restarted, every Chrome and session kept; already running: %s" % server.URL, said["restart"])
+        ours.shutdown()
+        ours.server_close()
     finally:
         server.URL, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE, subprocess.Popen = saved
         shutil.rmtree(workdir, ignore_errors=True)

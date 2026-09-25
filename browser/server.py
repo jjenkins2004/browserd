@@ -251,7 +251,7 @@ def _worker(state, tabs, workers, session, tab):
         if _closed(state, tab):
             workers.drop(tab)
         raise
-    return workers.get(tab, target, tabs.profile(session))
+    return workers.get(tab, target, tabs.profile(session), state.tab(tab).made)
 
 
 def _recorded(call, run):
@@ -401,10 +401,12 @@ def serve():
     # A port another program holds fails the start here, before the pid file is written.
     server = mcp.Server(HOST, PORT, tools, NAME)
     page_server = page.Page(HOST, page.PORT, state, (PORT, page.PORT), chromes)
-    stopping = threading.Event()
+    stopping, signals = threading.Event(), set()
 
     def on_signal(number, frame):
-        mcp.log("stopping on signal %d" % number)
+        signals.add(number)
+        # Only SIGHUP, from ../restart, keeps every Chrome and session; a SIGTERM or SIGINT at any point quits them.
+        mcp.log("%s on signal %d" % ("restarting" if signals == {signal.SIGHUP} else "stopping", number))
         # shutdown waits for serve_forever to return, and that runs on this thread, so it needs another.
         threading.Thread(target=server.shutdown, daemon=True).start()
 
@@ -423,6 +425,7 @@ def serve():
     # under way included.
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
+    signal.signal(signal.SIGHUP, on_signal)
     _write_pid()
     try:
         folders, logs = prune(RUN, {session.id for session in state.open_sessions()})
@@ -440,8 +443,9 @@ def serve():
         stopping.set()
         page_server.shutdown()
         workers.stop_all()
-        chromes.quit_all(state.profiles())
-        state.close_all(time.time())  # every Chrome quit, so every session and tab with it
+        if signals != {signal.SIGHUP}:
+            chromes.quit_all(state.profiles())
+            state.close_all(time.time())  # every Chrome quit, so every session and tab with it
         server.server_close()
         page_server.server_close()
         state.close()

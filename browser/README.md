@@ -12,7 +12,8 @@ opens a profile's Chrome. Python standard library, plus Node for chrome-devtools
 run `npm ci`).
 
     ../start    start the server in the background; no Chrome starts with it
-    ../stop     stop the server, which quits every profile's Chrome
+    ../stop     stop the server, which quits every profile's Chrome and closes every session
+    ../restart  restart the server alone, leaving every Chrome and session as it is
 
 ## Directory Layout
 
@@ -25,7 +26,7 @@ run `npm ci`).
       focus.py     the Mac's focus: which app has it; gives it back from tabs pages open
       mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch
       server.py    the server process: tools, page, pid file
-      service.py   ../start and ../stop: background start, locked; stop by pid
+      service.py   ../start, ../stop, ../restart: background start, locked; stop and restart by pid
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
       worker.py    one tab's process, paired with its page; Workers registry
       steps.py     the queue: load, check, run, report; snapshot views
@@ -38,7 +39,7 @@ run `npm ci`).
       sessions.py  session ids, labels, record folder names, when a session is paused
       page.py      the browserd page on 9231: GET /state, POST /profiles and /open
       page.html    the page itself: one file, plain JavaScript, polls /state
-    ../start, ../stop           launchers
+    ../start, ../stop, ../restart  launchers
     ../.run/                    gitignored: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/; a tab's log and a closed session's folder go at start once 7 days unused
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
     ../tests/check_server.py    protocol, tab ids, sessions, focus, queue, recording, profiles, page, service; live tabs, queue
@@ -107,7 +108,9 @@ asked, and writes what came back through `_recorded`, a raised error included.
 so one tab's queues run in turn and different tabs run at once. The process is pointed at the tab's
 profile's Chrome (`--browser-url`), and `Worker.connect` is how the queue's dialog answerer and paste
 reach the tab. `Worker.ensure()` starts and pairs
-the process on the tab's first queue, and again after it dies. **`worker.Workers`** holds
+the process on the tab's first queue, and again after it dies; the first report on a tab older than this
+server (carried over: `Workers.get`'s `made` is before `Workers.started`) also says its uids are gone, since an
+earlier server's process may have given some out. **`worker.Workers`** holds
 one per tab id. `tab_close`, `tab_list` (for tabs found closed) and a queue on a tab found closed drop it;
 any other failure to reach a tab leaves its process and uids alone. `Workers.pause` stops the processes of a
 paused session's tabs but keeps each dead one, so its next queue starts a new one and says the uids are gone;
@@ -128,7 +131,7 @@ step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view s
 `<n>-page-now-reply.txt`.
 
 **Server lifecycle**, in `server.serve()`: open `.run/state.db`, ask a chrome-devtools-mcp process for its
-tool list (no browser needed), bind 9230 and the page's 9231, install SIGTERM/SIGINT handlers, write
+tool list (no browser needed), bind 9230 and the page's 9231, install SIGTERM/SIGINT/SIGHUP handlers, write
 `.run/server.pid`, remove each closed session's record folder and each `devtools-<tab>.log` unused for
 `server.KEEP_DAYS` (7; `server.prune`, which touches only names shaped like a session's folder, a tab's log or
 a tab's folder from before sessions, `calls/<tab>/`, and counts a call in a tab's folder as use of its
@@ -137,7 +140,9 @@ running, then serve the page on a thread and the tools. Another thread looks eve
 for sessions paused, and `Workers.pause`s their tabs. No Chrome starts with the server, and one quitting
 leaves the server up. When the server stops, every tab's process is stopped, `chromes.quit_all` sends each
 running Chrome `Browser.close` and waits for it to exit (one not exited 15s later is logged, and the server
-stops anyway), and every open session and tab is marked closed.
+stops anyway), and every open session and tab is marked closed. On SIGHUP alone, which `../restart` sends, only
+the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits everything): every Chrome keeps running and every session stays open for the server that
+`../restart` starts next, whose listings find the same tabs under the same ids. A crash leaves the same.
 
 ## Agent Gotchas & Invariants (⚠️)
 
@@ -202,7 +207,7 @@ stops anyway), and every open session and tab is marked closed.
   written into the page when it is served and new each start. A web page open in any Chrome
   cannot read the token, since the page sends no CORS headers, and cannot frame the page to steer a click
   (`frame-ancestors 'none'`).
-- **`../stop` only signals a pid whose command line runs `-m browser.server`.** A stale pid file
+- **`../stop` and `../restart` only signal a pid whose command line runs `-m browser.server`.** A stale pid file
   can name a reused pid. `../start` holds `.run/start.lock` while it checks and spawns, and treats
   anything answering on 9230 under another server name as a refusal.
 - **One chrome-devtools-mcp process runs one tool call at a time** (one `Mutex` in its
@@ -365,7 +370,8 @@ stops anyway), and every open session and tab is marked closed.
     `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
     and a folder's running Chrome, and `page_offline` for `.run/state.db` and the Google folder, each in a
     temporary folder;
-    `service_offline` for the spawned server, with real `ps`.
+    `service_offline` for the spawned server, with real `ps`, and for the server `../stop` and `../restart`
+    signal, a process that runs `-m browser.server` in its command line.
   - **Live:** the live groups start a Chrome of their own, `throwaway.chrome()`, on a new folder under
     `$TMPDIR` and a free port, and quit it after, so no live check touches a profile's Chrome; with no
     Chrome installed they skip. `queue_live` also needs `npm ci` done, and skips
@@ -377,5 +383,5 @@ stops anyway), and every open session and tab is marked closed.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; a tab already open is never touched. No live check moves the Mac's focus:
     `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
-  - **Never automated:** `../start` and `../stop` are never run, because stopping quits every profile's
-    Chrome.
+  - **Never automated:** `../start`, `../stop` and `../restart` are never run, since each acts on the real
+    browserd: stopping quits every profile's Chrome, and restarting replaces the one running.

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Restart the browser MCP server alone: every profile's Chrome and every session stay as they are. Works from any directory.
+DIR=$(cd "$(dirname "$0")" && pwd)
+exec env PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -m browser.service restart "$@"
