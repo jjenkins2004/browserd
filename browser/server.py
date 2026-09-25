@@ -11,11 +11,11 @@ import sqlite3
 import threading
 import time
 
-from . import cdp, mcp, page, record, steps
+from . import cdp, mcp, page, record, sessions, steps
 from .chromes import Chromes
 from .devtools import Devtools
-from .state import State
-from .tabs import NOT_AN_ID, Tabs, is_id
+from .state import Session, State
+from .tabs import NOT_AN_ID, NOT_YOURS, Tabs, is_id
 from .worker import Workers
 
 HOST = "127.0.0.1"
@@ -29,8 +29,8 @@ CALLS = os.path.join(RUN, "calls")
 PID_FILE = os.path.join(RUN, "server.pid")
 LOG_FILE = os.path.join(RUN, "server.log")
 STATE_FILE = os.path.join(RUN, "state.db")
-SCHOOL = "School"  # the profile the tools drive, until sessions let an agent pick one
-KEEP_DAYS = 7  # a tab's record folder and devtools log, once unused this long, are removed at start
+KEEP_DAYS = 7  # a closed session's record folder, and a tab's devtools log, once unused this long, are removed at start
+PAUSE_POLL = 60.0  # seconds between looks for sessions newly paused
 
 
 def _refusing(run):
@@ -54,55 +54,134 @@ def _line(tab, info):
     return "%s  %s  %s" % (tab, (info.get("title") or "")[:60], info.get("url", ""))
 
 
-def tab_tools(tabs, workers):
-    """The tab_open, tab_list, tab_show and tab_close tools over one Tabs.
+def _closed(state, tab):
+    """Whether a tab is closed, or was never given out."""
+    row = state.tab(tab)
+    return row is None or row.closed is not None
+
+
+def _in_session(state, run):
+    """A tool body run(session, arguments) for the open session its session argument names; README.md, "Core
+    Abstractions & Shared Pieces", has the rest."""
+    def wrapped(arguments):
+        given = arguments.get("session")
+        if not isinstance(given, str) or not given:
+            raise mcp.ToolError("session is required: call session_start first, with the profile your instructions "
+                                "name, and pass the id it gives. A tool list with no session_start is older than this "
+                                "server, and is listed again from your next turn")
+        if not sessions.is_id(given):
+            raise mcp.ToolError(sessions.NOT_AN_ID % given)
+        session = state.session(given)
+        if session is None:
+            raise mcp.ToolError("no session has the id %r; session_start gives one" % given)
+        if session.closed is not None:
+            raise mcp.ToolError("session %s is closed; call session_start for a new one" % given)
+        state.touch(given, time.time())
+        try:
+            return run(session, arguments)
+        finally:
+            state.touch(given, time.time())
+    return wrapped
+
+
+SESSION_HELP = """Start a browserd session: call it once, before any other browserd tool, with the profile your
+instructions name (if they name none, ask the user which) and a label of a few words saying what you are doing,
+like "apply acme backend". It returns the session id every other browserd tool takes as session.
+
+A profile is one Chrome with its own logins. A session sees and drives only its own tabs: the ones it opened, and
+the ones their pages opened (a popup, a target=_blank link). Every agent starts its own session, a subagent
+included; pass yours on only to an agent that carries on your task in your tabs.
+
+No agent ends a session: when your task is done, leave its tabs open. After %d minutes without a call a session is
+paused, which stops the processes that drive its tabs, so their element uids are gone; any call with its id resumes
+it. A session closes only when browserd stops, its tabs with it; a closed session's id is refused, so start a new
+one and open its tabs again."""
+
+
+def tab_tools(state, tabs, workers):
+    """The session_start, tab_open, tab_list, tab_show and tab_close tools.
 
     Args:
+        state (State): the profiles, sessions and tabs.
         tabs (Tabs): holds the tab ids the tools hand out and accept.
         workers (Workers): each tab's Worker, dropped when its tab is closed.
     """
-    def tab_open(arguments):
-        return _line(*tabs.open(_text(arguments, "url")))
+    def session_start(arguments):
+        name, label = _text(arguments, "profile"), arguments.get("label")
+        problem = sessions.label_problem(label)
+        if problem:
+            raise mcp.ToolError(problem)
+        profile = state.profile(name)
+        if profile is None:
+            known = [p.name for p in state.profiles()]
+            raise mcp.ToolError("there is no profile named %r; %s" % (name, "the profiles are %s" % ", ".join(known)
+                                if known else "there are none yet: the user makes them on the browserd page, %s"
+                                % PAGE_URL))
+        now = time.time()
+        while True:
+            session = Session(sessions.new_id(), profile.name, label.strip(), now, now, None)
+            try:
+                state.add_session(session)
+                break
+            except sqlite3.IntegrityError:
+                continue  # that id was taken; ids are never reused
+        mcp.log("session %s started on %s: %s" % (session.id, profile.name, session.label))
+        return ("session %s, on the %s profile. Pass session %s to every other browserd tool; tab_open opens this "
+                "session's first tab." % (session.id, profile.name, session.id))
 
-    def tab_list(arguments):
-        found, outside = tabs.list()
-        workers.drop_except({tab for tab, _ in found})
-        lines = [_line(tab, info) for tab, info in found] or ["no School-profile tabs are open"]
+    def tab_open(session, arguments):
+        return _line(*tabs.open(session, _text(arguments, "url")))
+
+    def tab_list(session, arguments):
+        found, outside = tabs.list(session)
+        workers.drop_closed(lambda tab: _closed(state, tab))
+        lines = [_line(tab, info) for tab, info in found] or ["session %s has no open tabs" % session.id]
         if outside:
             lines.append("(%d tab(s) in another browser context, like Incognito, are not listed and cannot be driven)"
                          % outside)
         return "\n".join(lines)
 
-    def tab_show(arguments):
+    def tab_show(session, arguments):
         tab = _text(arguments, "tab")
-        return _line(tab, tabs.show(tab))
+        return _line(tab, tabs.show(session, tab))
 
-    def tab_close(arguments):
+    def tab_close(session, arguments):
         tab = _text(arguments, "tab")
-        tabs.close(tab)
+        tabs.close(session, tab)
         workers.drop(tab)
         return "closed %s" % tab
 
-    by_tab = {"type": "object", "required": ["tab"], "additionalProperties": False,
-              "properties": {"tab": {"type": "string", "description": "a tab id from tab_open or tab_list"}}}
+    session_argument = {"type": "string", "description": "your session id, from session_start"}
+    by_tab = {"type": "object", "required": ["session", "tab"], "additionalProperties": False,
+              "properties": {"session": session_argument,
+                             "tab": {"type": "string", "description": "a tab id from tab_open or tab_list"}}}
     return [
-        {"name": "tab_open", "run": _refusing(tab_open),
-         "description": "Open a URL in a new background tab of the School Chrome, starting that Chrome first if it is "
-                        "not running; wait for the tab to load (up to about "
-                        "30s), and return its tab id, title and URL; a page still loading is returned as it is. The Mac's focus "
-                        "does not move.",
-         "inputSchema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"],
-                         "additionalProperties": False}},
-        {"name": "tab_list", "run": _refusing(tab_list),
-         "description": "Every open School-profile tab as: tab id, title, URL. A tab opened by hand gets its id here.",
-         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
-        {"name": "tab_show", "run": _refusing(tab_show),
-         "description": "Bring a tab to the front of the School Chrome and the School Chrome to the front of the Mac; "
-                        "return its tab id, title and URL. Call it before handing a tab to Joshua, and name the tab by "
-                        "that title and URL: tab ids show nowhere in Chrome.",
+        {"name": "session_start", "run": _refusing(session_start),
+         "description": SESSION_HELP % (sessions.PAUSE_AFTER // 60),
+         "inputSchema": {"type": "object", "required": ["profile", "label"], "additionalProperties": False,
+                         "properties": {
+                             "profile": {"type": "string", "description": "the profile your instructions name"},
+                             "label": {"type": "string",
+                                       "description": "a few words saying what this session is for"}}}},
+        {"name": "tab_open", "run": _refusing(_in_session(state, tab_open)),
+         "description": "Open a URL in a new background tab of your session's profile's Chrome, starting that Chrome "
+                        "first if it is not running; wait for the tab to load (up to about 30s), and return its tab "
+                        "id, title and URL; a page still loading is returned as it is. The Mac's focus does not move.",
+         "inputSchema": {"type": "object", "required": ["session", "url"], "additionalProperties": False,
+                         "properties": {"session": session_argument, "url": {"type": "string"}}}},
+        {"name": "tab_list", "run": _refusing(_in_session(state, tab_list)),
+         "description": "Every open tab of your session as: tab id, title, URL. A tab one of its pages opened (a "
+                        "popup, a target=_blank link) is your session's too, and gets its id here.",
+         "inputSchema": {"type": "object", "required": ["session"], "additionalProperties": False,
+                         "properties": {"session": session_argument}}},
+        {"name": "tab_show", "run": _refusing(_in_session(state, tab_show)),
+         "description": "Bring a tab of your session to the front of its Chrome and that Chrome to the front of the "
+                        "Mac; return its "
+                        "tab id, title and URL. Call it before handing a tab to Joshua, and name the tab by that title "
+                        "and URL: tab ids show nowhere in Chrome.",
          "inputSchema": by_tab},
-        {"name": "tab_close", "run": _refusing(tab_close),
-         "description": "Close a tab by its tab id.",
+        {"name": "tab_close", "run": _refusing(_in_session(state, tab_close)),
+         "description": "Close a tab of your session by its tab id.",
          "inputSchema": by_tab},
     ]
 
@@ -111,14 +190,14 @@ def tab_tools(tabs, workers):
 # "Agent Gotchas & Invariants".
 QUEUE_HELP = """Run steps on one tab, top to bottom, stopping at the first that fails.
 
-Give the tab id and steps, a list of {"tool": <name>, ...its arguments}, or file, a JSON file holding that list (a
-relative path is read from the tab's record folder). Never pass pageId: the tab chooses the page. The steps
+Give your session id, the tab id and steps, a list of {"tool": <name>, ...its arguments}, or file, a JSON file holding
+that list. Never pass pageId: the tab chooses the page. The steps
 argument's description lists every tool a step may name, with its arguments, and when to use which: a
 chrome-devtools-mcp tool reports success once it has acted, not once the page took it, so pick, expect, type and
 wait read the page back.
 
-Element uids (1_13) come from a snapshot and stay valid on this tab until the page navigates or the element goes
-away. Every snapshot in a report is a view: each line that carries words, in page order with its uid, and every
+Element uids (1_13) come from a snapshot and stay valid on this tab until the page navigates, the element goes
+away or the session is paused. Every snapshot in a report is a view: each line that carries words, in page order with its uid, and every
 control, with a native select on one line, like combobox "Country" = "United States" (249 options). A view's header
 names where the whole snapshot is saved. take_snapshot also takes under, a uid, for that element and what sits
 under it (a native select's options); find, a regex, for only the lines it matches; and full: true, for its lines
@@ -126,7 +205,8 @@ as chrome-devtools-mcp wrote them.
 
 The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A failure makes the result an error,
 names the steps not run, and ends with a view of the page now. A step's reply over %d characters is cut, the
-whole of it saved. Each call is recorded in the tab's record folder, %s/<tab>/: 001-queue.json the steps,
+whole of it saved. Each call is recorded in the tab's record folder, %s/<profile>/<session>-<label>/<tab>/:
+001-queue.json the steps,
 001-queue.txt the report. A take_screenshot with no filePath is saved there too; the report gives its path. A
 step's file paths (filePath, filePaths) must be absolute and sit inside ~/Desktop, /tmp, $TMPDIR or browserd's
 folder. After %gs a queue starts no more steps and names them, as Claude Code drops a reply after about 60s.
@@ -162,19 +242,16 @@ uid=5_1..25 StaticText "<words>": word k has uid 5_(1+k), and a step given 5_1..
 """
 
 
-def _worker(tabs, workers, tab, profile):
-    """The Worker for a tab id, once the tab is proven open in the profile's Chrome."""
+def _worker(state, tabs, workers, session, tab):
+    """The Worker for a session's tab, once the tab is proven open in its profile's Chrome."""
     try:
-        target = tabs.target(tab)
+        target = tabs.target(session, tab)
     except cdp.CdpError:
-        # Only a tab a fresh listing no longer shows is closed; a passing failure leaves its process and uids alone.
-        try:
-            if tab not in {listed for listed, _ in tabs.list()[0]}:
-                workers.drop(tab)
-        except cdp.CdpError:
-            pass
+        # Only a tab found closed loses its process; a passing failure leaves its process and uids alone.
+        if _closed(state, tab):
+            workers.drop(tab)
         raise
-    return workers.get(tab, target, profile)
+    return workers.get(tab, target, tabs.profile(session))
 
 
 def _recorded(call, run):
@@ -188,27 +265,31 @@ def _recorded(call, run):
     return result
 
 
-def queue_tool(tabs, workers, profile, allowed, calls=CALLS):
-    """The queue tool: run a list of chrome-devtools-mcp steps on a tab through that tab's own process.
+def queue_tool(state, tabs, workers, allowed, calls=CALLS):
+    """The queue tool: run a list of chrome-devtools-mcp steps on a session's tab through that tab's own process.
 
     Args:
+        state (State): the sessions and tabs.
         tabs (Tabs): resolves the tab id, and refuses a closed tab.
         workers (Workers): each tab's Worker, made on the tab's first use.
-        profile (callable): returns the Profile whose Chrome holds the tabs, looked up at each call.
         allowed (dict): the chrome-devtools-mcp tools a step may name, from steps.chrome_tools.
-        calls (str): holds each tab's record folder, <calls>/<tab>/; the checks pass one of their own.
+        calls (str): holds each tab's record folder, <calls>/<profile>/<session>-<label>/<tab>/; the checks pass one
+            of their own.
     """
-    def queue(arguments):
-        unknown = set(arguments) - {"tab", "steps", "file"}
+    def queue(session, arguments):
+        unknown = set(arguments) - {"session", "tab", "steps", "file"}
         if unknown:
-            raise mcp.ToolError("queue takes tab, and steps or file; not %s. A tool list that shows other arguments is "
+            raise mcp.ToolError("queue takes session and tab, and steps or file; not %s. A tool list that shows other arguments is "
                                 "older than this server, and is listed again from your next turn; if it still shows "
                                 "them, ask the user to reconnect browserd with /mcp"
                                 % ", ".join(sorted(unknown)))
         tab = _text(arguments, "tab")
         if not is_id(tab):  # it names a folder, so "../x" must not reach os.path.join
             raise mcp.ToolError(NOT_AN_ID % tab)
-        folder = os.path.join(calls, tab)
+        row = state.tab(tab)
+        if row is None or row.session != session.id:
+            raise mcp.ToolError(NOT_YOURS % tab)  # before recording, so no record folder is made for a tab not this session's
+        folder = os.path.join(calls, session.profile, sessions.folder(session), tab)
         try:
             planned = steps.load(arguments, folder)
             steps.check(planned, allowed)
@@ -219,7 +300,7 @@ def queue_tool(tabs, workers, profile, allowed, calls=CALLS):
         call.asked({"tab": tab, "steps": planned})
 
         def run():
-            worker = _worker(tabs, workers, tab, profile())
+            worker = _worker(state, tabs, workers, session, tab)
             with worker.lock:
                 devtools, page_id, restarted = worker.ensure()
                 result = steps.run(devtools, page_id, planned, call.path, restarted, worker.target_id, worker.connect)
@@ -232,11 +313,12 @@ def queue_tool(tabs, workers, profile, allowed, calls=CALLS):
         return _recorded(call, run)
 
     return {
-        "name": "queue", "run": _refusing(queue),
+        "name": "queue", "run": _refusing(_in_session(state, queue)),
         "description": QUEUE_HELP % (steps.REPLY_MOST, calls, steps.QUEUE_MOST),
         "inputSchema": {
-            "type": "object", "required": ["tab"], "additionalProperties": False,
+            "type": "object", "required": ["session", "tab"], "additionalProperties": False,
             "properties": {
+                "session": {"type": "string", "description": "your session id, from session_start"},
                 "tab": {"type": "string", "description": "a tab id from tab_open or tab_list"},
                 "steps": {"type": "array", "items": {"type": "object"},
                           "description": STEPS_HELP + steps.describe(allowed)},
@@ -264,19 +346,35 @@ def _remove_pid():
         pass
 
 
-def prune(run):
-    """Remove each tab's record folder, <run>/calls/<tab>/, and devtools log, <run>/devtools-<tab>.log, unused for
-    KEEP_DAYS, and return how many of each went. Only names shaped like a tab id are touched.
+def prune(run, keep):
+    """Remove each closed session's record folder, <run>/calls/<profile>/<session>-<label>/, each tab's record folder
+    from before sessions, <run>/calls/<tab>/, and each tab's devtools log, <run>/devtools-<tab>.log, unused for
+    KEEP_DAYS, and return how many folders and logs went. Only names shaped like those are touched.
 
     Args:
         run (str): the folder holding them, .run/.
+        keep (set[str]): the ids of the sessions still open, whose folders stay however old.
     """
     now = time.time()
     calls = os.path.join(run, "calls")
-    folders = [os.path.join(calls, name) for name in (os.listdir(calls) if os.path.isdir(calls) else []) if is_id(name)]
+    folders = []
+    for profile in (os.listdir(calls) if os.path.isdir(calls) else []):
+        under = os.path.join(calls, profile)
+        if not os.path.isdir(under):
+            continue
+        inside = os.listdir(under)
+        if is_id(profile) and not any(os.path.isdir(os.path.join(under, name)) for name in inside):
+            folders.append(under)  # a tab's folder from before sessions, calls/<tab>/; a profile's holds folders
+            continue
+        folders += [os.path.join(under, name) for name in inside if sessions.folder_id(name) not in keep | {None}]
     logs = [os.path.join(run, name) for name in os.listdir(run)
             if name.startswith("devtools-") and name.endswith(".log") and is_id(name[len("devtools-"):-len(".log")])]
-    unused = lambda path: now - os.path.getmtime(path) > KEEP_DAYS * 86400
+
+    def unused(path):
+        # A call touches only its tab's folder, one level down from a session's.
+        inside = [os.path.join(path, name) for name in os.listdir(path)] if os.path.isdir(path) else []
+        return now - max(os.path.getmtime(each) for each in [path] + inside) > KEEP_DAYS * 86400
+
     old_folders, old_logs = [path for path in folders if unused(path)], [path for path in logs if unused(path)]
     for path in old_folders:
         shutil.rmtree(path)
@@ -295,29 +393,31 @@ def _allowed_tools():
         devtools.close()
 
 
-def _school(state):
-    """The profile named SCHOOL, which the tools drive."""
-    profile = state.profile(SCHOOL)
-    if profile is None:
-        raise cdp.CdpError("there is no profile named %s for the tools to drive; make one on the browserd page, %s"
-                           % (SCHOOL, PAGE_URL))
-    return profile
-
-
 def serve():
     os.makedirs(RUN, exist_ok=True)
     state, chromes = State(STATE_FILE), Chromes()
-    school = lambda: _school(state)
-    tabs, workers = Tabs(lambda: cdp.Browser(school()), lambda: chromes.ensure(school())), Workers(RUN)
-    tools = tab_tools(tabs, workers) + [queue_tool(tabs, workers, school, _allowed_tools())]
+    tabs, workers = Tabs(state, cdp.Browser, chromes.ensure), Workers(RUN)
+    tools = tab_tools(state, tabs, workers) + [queue_tool(state, tabs, workers, _allowed_tools())]
     # A port another program holds fails the start here, before the pid file is written.
     server = mcp.Server(HOST, PORT, tools, NAME)
     page_server = page.Page(HOST, page.PORT, state, (PORT, page.PORT), chromes)
+    stopping = threading.Event()
 
     def on_signal(number, frame):
         mcp.log("stopping on signal %d" % number)
         # shutdown waits for serve_forever to return, and that runs on this thread, so it needs another.
         threading.Thread(target=server.shutdown, daemon=True).start()
+
+    def pause_idle():
+        """Stop the chrome-devtools-mcp processes of each session paused since the last look."""
+        while not stopping.wait(PAUSE_POLL):
+            now = time.time()
+            for session in state.open_sessions():
+                if sessions.paused(session, now):
+                    still = lambda: sessions.paused(state.session(session.id), time.time())  # a call may resume it
+                    stopped = workers.pause([tab.id for tab in state.session_tabs(session.id)], still)
+                    if stopped:
+                        mcp.log("session %s is paused, so %d chrome-devtools-mcp process(es) stopped" % (session.id, stopped))
 
     # Installed before serving, so a ./stop at any point from here still stops the server and every Chrome, a start
     # under way included.
@@ -325,21 +425,23 @@ def serve():
     signal.signal(signal.SIGINT, on_signal)
     _write_pid()
     try:
-        # Tab ids die with the server, so at start every record folder and log belongs to a tab no id reaches.
-        folders, logs = prune(RUN)
+        folders, logs = prune(RUN, {session.id for session in state.open_sessions()})
         if folders or logs:
             mcp.log("removed %d record folders and %d devtools logs unused for %d days" % (folders, logs, KEEP_DAYS))
     except OSError as exc:
         mcp.log("could not remove old record folders and devtools logs: %s" % exc)
     chromes.adopt(state.profiles())
     threading.Thread(target=page_server.serve_forever, daemon=True).start()
+    threading.Thread(target=pause_idle, daemon=True).start()
     mcp.log("serving %s, and the page at %s (pid %d)" % (URL, PAGE_URL, os.getpid()))
     try:
         server.serve_forever()
     finally:
+        stopping.set()
         page_server.shutdown()
         workers.stop_all()
         chromes.quit_all(state.profiles())
+        state.close_all(time.time())  # every Chrome quit, so every session and tab with it
         server.server_close()
         page_server.server_close()
         state.close()

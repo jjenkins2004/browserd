@@ -108,6 +108,15 @@ class Worker:
             self._devtools.close()
             self._devtools = None
 
+    def pause(self):
+        """Stop the process to free its memory, and return whether one was running; README.md, "Core Abstractions &
+        Shared Pieces", says why the dead process stays."""
+        devtools = self._devtools  # stop_all may clear it as the server stops
+        if devtools is None or not devtools.alive():
+            return False
+        devtools.close()
+        return True
+
 
 class Workers:
     """Every tab's Worker, made on the tab's first queue and stopped when the tab closes."""
@@ -138,12 +147,28 @@ class Workers:
             with worker.lock:
                 worker.stop()
 
-    def drop_except(self, open_tabs):
-        """Stop and forget the Worker of every tab not in open_tabs, the ids a fresh listing gave."""
+    def drop_closed(self, closed):
+        """Stop and forget the Worker of every tab closed(tab) says is closed."""
         with self._lock:
-            gone = [tab for tab in self._workers if tab not in open_tabs]
+            gone = [tab for tab in self._workers if closed(tab)]
         for tab in gone:
             self.drop(tab)
+
+    def pause(self, tabs, still):
+        """Stop the process of each of these tabs, once any queue running on it has finished and if still() holds then,
+        and return how many were running.
+
+        Args:
+            tabs (list[str]): tab ids, a paused session's.
+            still (callable): whether the session is paused still, asked once each queue has let go of its tab.
+        """
+        with self._lock:
+            workers = [self._workers[tab] for tab in tabs if tab in self._workers]
+        stopped = 0
+        for worker in workers:
+            with worker.lock:
+                stopped += still() and worker.pause()
+        return stopped
 
     def stop_all(self):
         with self._lock:

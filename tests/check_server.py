@@ -24,16 +24,30 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import cdp, checked, chromes, clipboard, dialogs, focus, mcp, page, profiles, record, server, service, steps
+from browser import cdp, checked, chromes, clipboard, dialogs, focus, mcp, page, profiles, record, server, service, sessions, steps
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
-from browser.state import State
+from browser.state import Session, State, Tab
 from browser.tabs import LETTERS, Tabs
 from browser.worker import Workers, returned
 from browser.ws import WebSocketError
 
 passed, failed, skipped = [], [], []
 STAND_IN = Profile("School", "/nowhere/Chrome-School", 9223)  # the profile offline checks name; no Chrome is behind it
+
+
+def stand_in_state(workdir, profile=STAND_IN):
+    """A state.db in workdir holding one profile."""
+    state = State(os.path.join(workdir, "state.db"))
+    state.add_profile(profile)
+    return state
+
+
+def open_session(state, label="check run", profile=STAND_IN):
+    now = time.time()
+    session = Session(sessions.new_id(), profile.name, label, now, now, None)
+    state.add_session(session)
+    return session
 
 
 def check(name, condition, detail=""):
@@ -213,17 +227,20 @@ class FakeChrome:
         self.default: str | None = "school"
         self.open_connections = 0
         self.made = 0
+        self.on_create = lambda: None  # runs as Target.createTarget answers, as another call's listing could
 
-    def add(self, url, kind="page", context="school", title=""):
+    def add(self, url, kind="page", context="school", title="", opener=None):
         self.made += 1
         target = {"targetId": "T%d" % self.made, "type": kind, "url": url, "title": title, "browserContextId": context}
+        if opener:
+            target["openerId"] = opener
         self.targets.append(target)
         return target
 
     def find(self, target_id):
         return next(t for t in self.targets if t["targetId"] == target_id)
 
-    def connect(self):
+    def connect(self, profile=STAND_IN):
         self.open_connections += 1
         return FakeConnection(self)
 
@@ -243,7 +260,9 @@ class FakeConnection:
             return {"targetInfos": [dict(t) for t in chrome.targets]}
         if method == "Target.createTarget":
             chrome.created.append(params)
-            return {"targetId": chrome.add(params["url"])["targetId"]}
+            made = chrome.add(params["url"])["targetId"]
+            chrome.on_create()
+            return {"targetId": made}
         if method == "Target.attachToTarget":
             return {"sessionId": "S" + params["targetId"]}
         if method == "Page.enable":
@@ -276,120 +295,181 @@ class FakeConnection:
 
 
 def tabs_offline():
+    workdir = tempfile.mkdtemp(prefix="browser-tabs-")
+    state = stand_in_state(workdir)
+    mine, theirs = open_session(state, "mine"), open_session(state, "theirs")
     chrome = FakeChrome()
-    first = chrome.add("https://jobs.ashbyhq.com/a", title="A")
-    chrome.add("https://example.com/b", title="B")
+    by_hand = chrome.add("https://jobs.ashbyhq.com/a", title="A")
     chrome.add("devtools://devtools/bundled/inspector.html")
     chrome.add("chrome-extension://abc/popup.html")
     chrome.add("https://example.com/worker.js", kind="service_worker")
     chrome.add("https://incognito.example", context="other")
-    tabs = Tabs(chrome.connect)
+    tabs = Tabs(state, chrome.connect)
     brought, saved_bring = [], focus.bring
     focus.bring = lambda pid: brought.append(pid) or True
-
-    found, outside = tabs.list()
-    ids = [tab for tab, _ in found]
-    check("only School-profile page tabs are listed", [info["title"] for _, info in found] == ["A", "B"])
-    check("a tab in another browser context is counted, not listed", outside == 1, repr(outside))
-    check("tab ids are four characters from the unambiguous set",
-          all(len(tab) == 4 and set(tab) <= set(LETTERS) for tab in ids) and len(set(ids)) == 2, repr(ids))
-    check("a tab keeps its id from one list to the next", [tab for tab, _ in tabs.list()[0]] == ids)
-    check("an id names its target", tabs.target(ids[0]) == first["targetId"])
-    check("an unknown id is refused, pointing at tab_list", "tab_list" in refusal(lambda: tabs.target("zzzz")))
-
-    chrome.targets.remove(first)
-    check("a tab closed outside the server is refused as closed", "is closed" in refusal(lambda: tabs.target(ids[0])))
-    check("and its id is forgotten", "no tab has the id" in refusal(lambda: tabs.target(ids[0])))
-
-    before_open = tabs._pages()
-    raced, _ = tabs.open("https://jobs.ashbyhq.com/raced")
-    setattr(tabs, "_pages", lambda: before_open)  # a list whose snapshot was taken before that open
-    tabs.list()
-    delattr(tabs, "_pages")
-    check("a list running alongside an open keeps the id open handed out", not refusal(lambda: tabs.target(raced)))
-
-    tab, info = tabs.open("https://jobs.ashbyhq.com/new")
-    check("open makes a background tab, blank first, so the load is heard",
-          chrome.created[-1] == {"url": "about:blank", "background": True}, repr(chrome.created[-1]))
-    check("open answers with where the tab landed", info["url"] == "https://jobs.ashbyhq.com/new")
-    check("an opened tab is listed under the id open gave", tab in [t for t, _ in tabs.list()[0]])
-
-    chrome.loads = False
-    tab_slow, _ = tabs.open("https://slow.example")
-    check("a tab whose load never finishes is still opened", tab_slow in [t for t, _ in tabs.list()[0]])
-    chrome.navigate_raises = cdp.Late("Page.navigate did not answer in time")
-    tab_late, _ = tabs.open("https://slower.example")
-    check("a tab whose site has not answered its navigation yet is still opened", tab_late in [t for t, _ in tabs.list()[0]])
-    chrome.navigate_raises, chrome.loads = cdp.CdpError("Page.navigate: Cannot navigate to invalid URL"), True
-    count = len(chrome.targets)
-    said = refusal(lambda: tabs.open("not a url"))
-    check("a URL Chrome will not navigate to is refused naming it and why, and its tab closed",
-          said == "could not open not a url: Cannot navigate to invalid URL" and len(chrome.targets) == count, said)
-    chrome.navigate_raises = None
-
-    count = len(chrome.targets)
-    chrome.navigate_error = "net::ERR_NAME_NOT_RESOLVED"
-    said = refusal(lambda: tabs.open("https://nowhere.invalid"))
-    chrome.navigate_error = None
-    check("a URL that cannot be opened says why", "ERR_NAME_NOT_RESOLVED" in said, said)
-    check("and the tab made for it is closed again", len(chrome.targets) == count)
-
-    shown = tabs.show(tab)
-    check("show brings the tab's target and the School Chrome to the front and answers with where it is",
-          chrome.activated == [tabs.target(tab)] and brought == [FakeConnection.pid]
-          and shown["url"] == "https://jobs.ashbyhq.com/new", repr((chrome.activated, brought)))
-    check("show refuses an unknown id", "no tab has the id" in refusal(lambda: tabs.show("zzzz")))
-    check("an id of the wrong shape is refused as no tab id at all", "'../..' is not a tab id" in refusal(lambda: tabs.show("../..")))
-    focus.bring = lambda pid: False
-    check("show fails when macOS does not bring the School Chrome to the front",
-          "did not bring that Chrome" in refusal(lambda: tabs.show(tab)))
-    focus.bring = lambda pid: brought.append(pid) or True
-
-    tabs.close(tab)
-    check("close closes the tab", all(t["url"] != "https://jobs.ashbyhq.com/new" for t in chrome.targets))
-    check("and forgets its id", "no tab has the id" in refusal(lambda: tabs.close(tab)))
-
-    chrome.default = None
-    check("a Chrome that names no School browser context is refused", "its Chrome profile" in refusal(tabs.list))
-    open_targets, chrome.targets = chrome.targets, []
-    check("a Chrome with no window open lists no tabs", tabs.list() == ([], 0))
-    chrome.targets = open_targets
-    chrome.default = "school"
-    check("every connection opened was closed", chrome.open_connections == 0, repr(chrome.open_connections))
-
-    started = []
-    starting = Tabs(chrome.connect, lambda: started.append(len(chrome.created)))
-    starting.open("https://example.com/started")
-    check("open starts the profile's Chrome before it opens the tab", started == [len(chrome.created) - 1], repr(started))
-
-    def not_running():
-        raise cdp.NotRunning("the School Chrome is not running: nothing is listening on port 9223. tab_open starts it")
-
-    down = Tabs(not_running, lambda: started.append("started"))
-    check("a Chrome that is not running lists no tabs, and is not started by a list", down.list() == ([], 0)
-          and started[-1] != "started")
-    check("and a tab id is refused as no tab", "no tab has the id" in refusal(lambda: down.target("k3f9")))
-
-    httpd = serving(server.tab_tools(Tabs(chrome.connect), Workers(tempfile.gettempdir())))
     try:
-        text, is_error = call(httpd, "tab_open")
-        check("tab_open without a url is refused by name", is_error and "url is required" in text, text)
-        text, is_error = call(httpd, "tab_open", url="https://example.com/c")
+        found, outside = tabs.list(mine)
+        check("a tab opened by hand is in no session's list", found == [], repr(found))
+        check("a tab in another browser context is counted, not listed", outside == 1, repr(outside))
+        hand = state.tab_for_target("School", by_hand["targetId"])
+        check("but it has a tab id, of no session", hand is not None and hand.session is None, repr(hand))
+
+        tab, info = tabs.open(mine, "https://jobs.ashbyhq.com/new")
+        check("open makes a background tab, blank first, so the load is heard",
+              chrome.created[-1] == {"url": "about:blank", "background": True}, repr(chrome.created[-1]))
+        check("open answers with where the tab landed, under a tab id", info["url"] == "https://jobs.ashbyhq.com/new"
+              and len(tab) == 4 and set(tab) <= set(LETTERS), repr((tab, info)))
+        check("the tab is its session's, listed under that id", [t for t, _ in tabs.list(mine)[0]] == [tab])
+        check("and in no other session's list", tabs.list(theirs)[0] == [])
+        check("another session is refused it as no tab of its own", "no tab of this session" in refusal(lambda: tabs.target(theirs, tab)))
+        check("an id of the wrong shape is refused as no tab id at all", "'../..' is not a tab id" in refusal(lambda: tabs.target(mine, "../..")))
+        check("an id no tab has is refused, pointing at tab_list", "tab_list" in refusal(lambda: tabs.target(mine, "zzzz")))
+
+        popup = chrome.add("https://accounts.example/sign-in", title="Sign in", opener=chrome.find(tabs.target(mine, tab))["targetId"])
+        chrome.add("https://accounts.example/second", title="Second", opener=popup["targetId"])
+        chrome.add("https://example.com/from-hand", title="From hand", opener=by_hand["targetId"])
+        listed = {info["title"]: t for t, info in tabs.list(mine)[0]}
+        check("a page a session's tab opened is the session's, and so is the page that one opened",
+              set(listed) == {"Loaded", "Sign in", "Second"}, repr(listed))
+        check("a page a tab of no session opened is no session's", "From hand" not in listed
+              and all(info["title"] != "From hand" for _, info in tabs.list(theirs)[0]))
+        chrome.targets.remove(popup)
+        late = chrome.add("https://accounts.example/late", title="Late", opener=popup["targetId"])
+        check("a page opened by a tab since closed is still its session's",
+              "Late" in {info["title"] for _, info in tabs.list(mine)[0]}, repr(late))
+
+        chrome.targets.remove(chrome.find(tabs.target(mine, listed["Second"])))
+        check("a tab closed outside the server is refused as closed", "is closed" in refusal(lambda: tabs.target(mine, listed["Second"])))
+        check("and stays closed, its row marked so", state.tab(listed["Second"]).closed is not None)
+
+        profile = tabs.profile(mine)
+        before_open = tabs._pages(profile)
+        raced, _ = tabs.open(mine, "https://jobs.ashbyhq.com/raced")
+        with tabs._lock:
+            tabs._sync(profile, before_open[0], before_open[2])  # a listing Chrome answered before that open
+        check("a listing older than an open leaves the tab open", not refusal(lambda: tabs.target(mine, raced)))
+        chrome.on_create = lambda: tabs.list(theirs)
+        caught, _ = tabs.open(mine, "https://jobs.ashbyhq.com/caught")
+        chrome.on_create = lambda: None
+        rows = [row for row in state.open_tabs("School") if row.target == state.tab(caught).target]
+        check("a listing between Chrome making a tab and open taking it gives the tab one id, the opening session's",
+              [row.session for row in rows] == [mine.id], repr(rows))
+
+        chrome.loads = False
+        slow, _ = tabs.open(mine, "https://slow.example")
+        check("a tab whose load never finishes is still opened", slow in [t for t, _ in tabs.list(mine)[0]])
+        chrome.navigate_raises = cdp.Late("Page.navigate did not answer in time")
+        later, _ = tabs.open(mine, "https://slower.example")
+        check("a tab whose site has not answered its navigation yet is still opened", later in [t for t, _ in tabs.list(mine)[0]])
+        chrome.navigate_raises, chrome.loads = cdp.CdpError("Page.navigate: Cannot navigate to invalid URL"), True
+        count = len(chrome.targets)
+        said = refusal(lambda: tabs.open(mine, "not a url"))
+        check("a URL Chrome will not navigate to is refused naming it and why, and its tab closed",
+              said == "could not open not a url: Cannot navigate to invalid URL" and len(chrome.targets) == count, said)
+        chrome.navigate_raises = None
+        chrome.navigate_error = "net::ERR_NAME_NOT_RESOLVED"
+        said = refusal(lambda: tabs.open(mine, "https://nowhere.invalid"))
+        chrome.navigate_error = None
+        check("a URL that cannot be opened says why", "ERR_NAME_NOT_RESOLVED" in said, said)
+        check("and the tab made for it is closed again, its row too", len(chrome.targets) == count
+              and all(row.session != mine.id or row.target in {t["targetId"] for t in chrome.targets}
+                      for row in state.open_tabs("School")))
+
+        shown = tabs.show(mine, tab)
+        check("show brings the tab's target and its Chrome to the front and answers with where it is",
+              chrome.activated == [tabs.target(mine, tab)] and brought == [FakeConnection.pid]
+              and shown["url"] == "https://jobs.ashbyhq.com/new", repr((chrome.activated, brought)))
+        check("show refuses another session's tab", "no tab of this session" in refusal(lambda: tabs.show(theirs, tab)))
+        focus.bring = lambda pid: False
+        check("show fails when macOS does not bring the Chrome to the front", "did not bring that Chrome" in refusal(lambda: tabs.show(mine, tab)))
+        focus.bring = lambda pid: brought.append(pid) or True
+
+        check("close refuses another session's tab", "no tab of this session" in refusal(lambda: tabs.close(theirs, tab)))
+        tabs.close(mine, tab)
+        check("close closes the tab", all(t["url"] != "https://jobs.ashbyhq.com/new" for t in chrome.targets))
+        check("and its id is refused as closed", "is closed" in refusal(lambda: tabs.close(mine, tab)))
+
+        chrome.default = None
+        check("a Chrome that names no browser context as its Chrome profile is refused", "its Chrome profile" in refusal(lambda: tabs.list(mine)))
+        open_targets, chrome.targets = chrome.targets, []
+        check("a Chrome with no window open lists no tabs", tabs.list(mine) == ([], 0))
+        chrome.targets = open_targets
+        chrome.default = "school"
+        check("every connection opened was closed", chrome.open_connections == 0, repr(chrome.open_connections))
+
+        started = []
+        starting = Tabs(state, chrome.connect, lambda profile: started.append((profile.name, len(chrome.created))))
+        starting.open(mine, "https://example.com/started")
+        check("open starts the session's profile's Chrome before it opens the tab",
+              started == [("School", len(chrome.created) - 1)], repr(started))
+
+        def not_running(profile):
+            raise cdp.NotRunning("the School Chrome is not running: nothing is listening on port 9223. tab_open starts it")
+
+        down = Tabs(state, not_running, lambda profile: started.append("started"))
+        check("a Chrome that is not running lists no tabs, and is not started by a list", down.list(mine) == ([], 0)
+              and started[-1] != "started")
+        state.add_tab(Tab("k3f9", "School", "T999", mine.id, time.time(), None))
+        check("and a tab of it is refused as closed", "is closed" in refusal(lambda: down.target(mine, "k3f9")))
+    finally:
+        focus.bring = saved_bring
+        state.close()
+        shutil.rmtree(workdir, ignore_errors=True)
+    session_tools_offline()
+
+
+def session_tools_offline():
+    """session_start, and the tab tools' session argument, over HTTP against a stand-in Chrome."""
+    workdir = tempfile.mkdtemp(prefix="browser-sessions-")
+    state = stand_in_state(workdir)
+    state.add_profile(Profile("Jobs", "/nowhere/Chrome-Jobs", 9224))
+    chrome = FakeChrome()
+    httpd = serving(server.tab_tools(state, Tabs(state, chrome.connect), Workers(workdir)))
+    saved_bring, focus.bring = focus.bring, lambda pid: True
+    try:
+        text, is_error = call(httpd, "session_start", profile="school", label="  Apply to Acme  ")
+        found = re.match(r"session (\S+), on the School profile", text)
+        check("session_start names the session and its profile, whatever case the name was given in",
+              not is_error and found is not None and sessions.is_id(found.group(1)), text)
+        session = found.group(1) if found else ""
+        check("and keeps the label, trimmed", state.session(session).label == "Apply to Acme")
+        text, is_error = call(httpd, "session_start", profile="Research", label="look around")
+        check("an unknown profile is refused, naming the profiles there are", is_error and "Jobs, School" in text, text)
+        for label, said in ((None, "label is required"), ("   ", "label is required"), ("x" * 61, "at most 60")):
+            text, is_error = call(httpd, "session_start", profile="Jobs", label=label)
+            check("a label of %r is refused" % (label if label is None else label[:5],), is_error and said in text, text)
+
+        text, is_error = call(httpd, "tab_list")
+        check("a tool without a session says to call session_start", is_error and "session_start" in text, text)
+        text, is_error = call(httpd, "tab_list", session="k3f9")
+        check("a session id of the wrong shape is refused as none", is_error and "not a session id" in text, text)
+        text, is_error = call(httpd, "tab_list", session="zzzzzz")
+        check("a session id no session has is refused", is_error and "no session has the id" in text, text)
+        text, is_error = call(httpd, "tab_open", session=session, url="https://example.com/c")
         opened = text.split()[0] if text else ""
         check("tab_open answers with the tab id first", not is_error and re.fullmatch(r"[%s]{4}" % LETTERS, opened), text)
-        text, is_error = call(httpd, "tab_list")
+        text, is_error = call(httpd, "tab_list", session=session)
         check("tab_list lists it by that id", not is_error and opened in text, text)
-        check("tab_list says how many tabs it is not listing", "in another browser context" in text, text)
-        text, is_error = call(httpd, "tab_show", tab=opened)
-        check("tab_show answers with the tab's id and URL", not is_error and text.split()[0] == opened
-              and "https://example.com/c" in text, text)
-        text, is_error = call(httpd, "tab_close", tab="zzzz")
-        check("a refusal from Chrome's side reaches the agent as an error result", is_error and "zzzz" in text, text)
-        check("tab_close closes by id", call(httpd, "tab_close", tab=opened) == ("closed %s" % opened, False))
+        other = call(httpd, "session_start", profile="School", label="other")[0].split()[1].rstrip(",")
+        text, is_error = call(httpd, "tab_list", session=other)
+        check("another session's list does not show it", not is_error and opened not in text and "no open tabs" in text, text)
+        text, is_error = call(httpd, "tab_close", session=other, tab=opened)
+        check("another session cannot close it", is_error and "no tab of this session" in text, text)
+        text, is_error = call(httpd, "tab_show", session=session, tab=opened)
+        check("tab_show answers with the tab's id and URL", not is_error and text.split()[0] == opened, text)
+        state.touch(session, 0)
+        check("tab_close closes by id", call(httpd, "tab_close", session=session, tab=opened) == ("closed %s" % opened, False))
+        check("and any call moves the session's last call to now", time.time() - state.session(session).last_call < 5)
+        state.close_all(time.time())
+        text, is_error = call(httpd, "tab_list", session=session)
+        check("a closed session is refused, pointing at session_start", is_error and "is closed" in text
+              and "session_start" in text, text)
     finally:
+        focus.bring = saved_bring
         httpd.shutdown()
         httpd.server_close()
-        focus.bring = saved_bring
+        state.close()
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 class FakeEvents:
@@ -716,8 +796,29 @@ def queue_offline():
         kept, gone = workers.get("keep", "T2", STAND_IN), workers.get("gone", "T3", STAND_IN)
         setattr(gone, "stop", lambda: stopped.append("gone"))
         setattr(kept, "stop", lambda: stopped.append("kept"))
-        workers.drop_except({"keep", "ab12"})
-        check("a listing stops the worker of every tab it no longer shows, and only those", stopped[1:] == ["gone"], repr(stopped))
+        workers.drop_closed(lambda tab: tab == "gone")
+        check("a listing stops the worker of every tab found closed, and only those", stopped[1:] == ["gone"], repr(stopped))
+
+        class Process:
+            def __init__(self, alive):
+                self.running = alive
+
+            def alive(self):
+                return self.running
+
+            def close(self):
+                self.running = False
+
+        paused, idle = workers.get("paus", "T4", STAND_IN), workers.get("idle", "T5", STAND_IN)
+        setattr(paused, "_devtools", Process(True))
+        setattr(idle, "_devtools", Process(False))
+        check("pausing stops the process of each running tab named, counting them",
+              workers.pause(["paus", "idle", "none"], lambda: True) == 1 and not paused._devtools.alive(), repr(stopped))
+        check("and leaves the dead process, so the next queue's report says the uids are gone",
+              paused._devtools is not None and workers.pause(["paus"], lambda: True) == 0)
+        setattr(paused, "_devtools", Process(True))
+        check("but stops none of a session a call has resumed since", workers.pause(["paus"], lambda: False) == 0
+              and paused._devtools.alive())
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -1138,7 +1239,7 @@ def limits_offline():
 
 
 def records_offline():
-    """record.Call: how a call is numbered and what it writes."""
+    """record.Call's numbering and files, server.prune, and sessions.folder and sessions.paused."""
     root = tempfile.mkdtemp(prefix="browser-calls-")
     try:
         folder = os.path.join(root, "k3f9")
@@ -1169,18 +1270,34 @@ def records_offline():
         check("calls made at once each get their own number", len(set(made)) == 20, repr(sorted(made)))
 
         run = os.path.join(root, "run")
-        for name in ("calls/k3f9", "calls/ab2c", "calls/notes"):
+        for name in ("calls/Jobs/aaaaaa-old/k3f9", "calls/Jobs/bbbbbb-busy/ab2c", "calls/Jobs/cccccc-open", "calls/Jobs/notes",
+                     "calls/School/dddddd-new", "calls/m4q2", "calls/test/eeeeee-kept"):
             os.makedirs(os.path.join(run, name))
         for name in ("devtools-k3f9.log", "devtools-ab2c.log", "devtools-tools.log", "server.log"):
             open(os.path.join(run, name), "w").close()
         weeks = time.time() - 8 * 86400
-        for name in ("calls/k3f9", "calls/notes", "devtools-k3f9.log", "devtools-tools.log", "server.log"):
+        open(os.path.join(run, "calls/m4q2/001-queue.json"), "w").close()
+        for name in ("calls/Jobs/aaaaaa-old/k3f9", "calls/Jobs/aaaaaa-old", "calls/Jobs/bbbbbb-busy", "calls/Jobs/cccccc-open",
+                     "calls/Jobs/notes", "calls/m4q2/001-queue.json", "calls/m4q2", "calls/test", "devtools-k3f9.log",
+                     "devtools-tools.log", "server.log"):
             os.utime(os.path.join(run, name), (weeks, weeks))
-        removed = server.prune(run)
-        check("prune removes each tab's record folder and devtools log unused for 7 days, and only names shaped like a tab id",
-              removed == (1, 1) and sorted(os.listdir(os.path.join(run, "calls"))) == ["ab2c", "notes"]
+        removed = server.prune(run, {"cccccc"})
+        check("prune removes each closed session's record folder unused for 7 days, a tab's call inside counting as use, "
+              "a tab's folder from before sessions, and each tab's devtools log unused as long, touching only names "
+              "shaped like those",
+              removed == (2, 1) and sorted(os.listdir(os.path.join(run, "calls", "Jobs"))) == ["bbbbbb-busy", "cccccc-open", "notes"]
+              and sorted(os.listdir(os.path.join(run, "calls"))) == ["Jobs", "School", "test"]
+              and os.listdir(os.path.join(run, "calls", "School")) == ["dddddd-new"]
               and sorted(os.listdir(run)) == ["calls", "devtools-ab2c.log", "devtools-tools.log", "server.log"],
-              repr((removed, os.listdir(run), os.listdir(os.path.join(run, "calls")))))
+              repr((removed, os.listdir(run), os.listdir(os.path.join(run, "calls", "Jobs")))))
+
+        session = Session("k3f9x2", "Jobs", "  Apply: Acme / Backend!! ", 0, 0, None)
+        check("a session's record folder is its id and its label's words", sessions.folder(session) == "k3f9x2-apply-acme-backend")
+        check("a label with no words still names a folder", sessions.folder(session._replace(label="!!")) == "k3f9x2-session")
+        check("a session is paused after 30 minutes without a call, and not before",
+              sessions.paused(session._replace(last_call=100), 100 + 30 * 60 + 1)
+              and not sessions.paused(session._replace(last_call=100), 100 + 30 * 60 - 1))
+        check("a closed session is not paused", not sessions.paused(session._replace(last_call=0, closed=1), 10 ** 6))
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -1188,8 +1305,13 @@ def records_offline():
 
 def recording_offline():
     root = tempfile.mkdtemp(prefix="browser-calls-")
-    tabs, workers = Tabs(FakeChrome().connect), Workers(root)
-    tools = [server.queue_tool(tabs, workers, lambda: STAND_IN, {"take_snapshot": {}, "take_screenshot": {}}, root)]
+    workdir = tempfile.mkdtemp(prefix="browser-state-")
+    state = stand_in_state(workdir)
+    session, other = open_session(state, "Record me"), open_session(state, "other")
+    state.add_tab(Tab("zzzz", "School", "T404", session.id, time.time(), None))  # its page is gone from Chrome
+    state.add_tab(Tab("yyyy", "School", "T405", other.id, time.time(), None))
+    tabs, workers = Tabs(state, FakeChrome().connect), Workers(root)
+    tools = [server.queue_tool(state, tabs, workers, {"take_snapshot": {}, "take_screenshot": {}}, root)]
     httpd = serving(tools)
     try:
         described = tools[0]["inputSchema"]["properties"]["steps"]["description"]
@@ -1197,23 +1319,28 @@ def recording_offline():
               len(tools[0]["description"]) < 1900, repr(len(tools[0]["description"])))
         check("and the steps argument's description holds the step catalog",
               "\n  pick(" in described and "\n  take_snapshot(" in described, described[-300:])
-        folder = os.path.join(root, "zzzz")
-        text, is_error = call(httpd, "queue", tab="zzzz/..", steps=[{"tool": "take_snapshot"}])
+        folder = os.path.join(root, "School", sessions.folder(session), "zzzz")
+        check("a tab's record folder sits under its profile and its session's id and label",
+              folder.endswith(os.path.join("School", session.id + "-record-me", "zzzz")), folder)
+        text, is_error = call(httpd, "queue", session=session.id, tab="zzzz/..", steps=[{"tool": "take_snapshot"}])
         check("a tab that is not shaped like a tab id is refused before anything is written",
               is_error and "is not a tab id" in text and os.listdir(root) == [], text)
-        text, is_error = call(httpd, "queue", tab="zzzz", workspace=root, steps=[{"tool": "take_snapshot"}])
+        text, is_error = call(httpd, "queue", session=session.id, tab="yyyy", steps=[{"tool": "take_snapshot"}])
+        check("another session's tab is refused before anything is written",
+              is_error and "no tab of this session" in text and os.listdir(root) == [], text)
+        text, is_error = call(httpd, "queue", session=session.id, tab="zzzz", workspace=root, steps=[{"tool": "take_snapshot"}])
         check("a queue given a workspace is refused, naming it and asking for a /mcp reconnect",
               is_error and "workspace" in text and "reconnect browserd with /mcp" in text, text)
-        text, is_error = call(httpd, "queue", tab="zzzz", steps=[{"tool": "new_page"}])
+        text, is_error = call(httpd, "queue", session=session.id, tab="zzzz", steps=[{"tool": "new_page"}])
         check("a call refused before it runs records nothing", is_error and os.listdir(root) == [], repr(os.listdir(root)))
 
         os.makedirs(folder)
         with open(os.path.join(folder, "steps.json"), "w") as handle:
             json.dump([{"tool": "take_snapshot"}, {"tool": "take_screenshot"}], handle)
-        text, is_error = call(httpd, "queue", tab="zzzz", file="steps.json")
+        text, is_error = call(httpd, "queue", session=session.id, tab="zzzz", file="steps.json")
         check("a queue that cannot reach its tab is still recorded in the tab's record folder, with the error as what came back",
               is_error and sorted(os.listdir(folder)) == ["001-queue.json", "001-queue.txt", "steps.json"]
-              and "no tab has the id" in open(os.path.join(folder, "001-queue.txt")).read(), repr(os.listdir(folder)))
+              and "is closed" in open(os.path.join(folder, "001-queue.txt")).read(), repr(os.listdir(folder)))
         with open(os.path.join(folder, "001-queue.json")) as handle:
             asked = json.load(handle)
         check("the record holds the tab and the steps read from the tab's record folder, the screenshot given its path",
@@ -1223,7 +1350,9 @@ def recording_offline():
     finally:
         httpd.shutdown()
         httpd.server_close()
+        state.close()
         shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def quitting():
@@ -1461,41 +1590,55 @@ def front_app():
     return found.group(1) if found else None
 
 
-def live(profile):
+def live(profile, state):
     connect = lambda: cdp.Browser(profile)
-    tabs = Tabs(connect)
+    tabs, session = Tabs(state, cdp.Browser), open_session(state, "live", profile)
     before = front_app()
-    tab, info = tabs.open("data:text/html,<title>server scratch</title><h1>hi</h1>")
+    tab, info = tabs.open(session, "data:text/html,<title>server scratch</title><h1>hi</h1>")
     try:
         check("a tab opens and reports its title", info.get("title") == "server scratch", repr(info.get("title")))
         check("opening a tab leaves the Mac's focus where it was", before is None or front_app() == before,
               "%s -> %s" % (before, front_app()))
-        found, _ = tabs.list()
+        found, _ = tabs.list(session)
         check("the new tab is listed under its id", tab in [t for t, _ in found])
+        browser = connect()
+        try:
+            browser.call("Runtime.evaluate", session=browser.call("Target.attachToTarget", targetId=tabs.target(session, tab),
+                                                                  flatten=True)["sessionId"],
+                         expression="window.open('data:text/html,<title>popped</title>')", userGesture=True)
+        finally:
+            browser.close()
+        opener = tabs.target(session, tab)
+        popped = [t for t, info in tabs.list(session)[0] if info.get("openerId") == opener]
+        check("a popup the session's tab opened is listed as the session's", len(popped) == 1, repr(tabs.list(session)[0]))
+        for extra in popped:
+            tabs.close(session, extra)
     finally:
-        tabs.close(tab)
-    check("a closed tab is gone from the list", tab not in [t for t, _ in tabs.list()[0]])
-    check("and its id is refused", "no tab has the id" in refusal(lambda: tabs.target(tab)))
+        tabs.close(session, tab)
+    check("a closed tab is gone from the list", tab not in [t for t, _ in tabs.list(session)[0]])
+    check("and its id is refused as closed", "is closed" in refusal(lambda: tabs.target(session, tab)))
 
     browser = connect()
     context = browser.call("Target.createBrowserContext")["browserContextId"]
     try:
         hidden = browser.call("Target.createTarget", url="about:blank", browserContextId=context,
                               background=True)["targetId"]
-        found, outside = tabs.list()
+        found, outside = tabs.list(session)
         check("an Incognito-like tab gets no id", hidden not in {info["targetId"] for _, info in found})
         check("and is counted as in another browser context", outside >= 1)
     finally:
         browser.call("Target.disposeBrowserContext", browserContextId=context)
         browser.close()
 
-    httpd = serving(server.tab_tools(Tabs(connect), Workers(tempfile.gettempdir())), server.NAME)
+    httpd = serving(server.tab_tools(state, Tabs(state, cdp.Browser), Workers(tempfile.gettempdir())), server.NAME)
     try:
-        text, is_error = call(httpd, "tab_open", url="data:text/html,<title>over http</title>")
+        text, _ = call(httpd, "session_start", profile=profile.name, label="over http")
+        over = text.split()[1].rstrip(",")
+        text, is_error = call(httpd, "tab_open", session=over, url="data:text/html,<title>over http</title>")
         opened = text.split()[0] if text else ""
         check("tab_open works over HTTP against a profile's Chrome", not is_error and "over http" in text, text)
-        check("tab_list over HTTP lists it", opened in call(httpd, "tab_list")[0])
-        check("tab_close over HTTP closes it", call(httpd, "tab_close", tab=opened) == ("closed %s" % opened, False))
+        check("tab_list over HTTP lists it", opened in call(httpd, "tab_list", session=over)[0])
+        check("tab_close over HTTP closes it", call(httpd, "tab_close", session=over, tab=opened) == ("closed %s" % opened, False))
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -1585,62 +1728,62 @@ quoted.addEventListener('keydown', (e) => {
 </script>"""
 
 
-def checked_live(httpd, tabs, opened):
+def checked_live(httpd, tabs, opened, session):
     """The checked steps over the queue tool, against widgets that take only trusted input and a stand-in resume parser."""
-    text, _ = call(httpd, "tab_open", url="data:text/html," + urllib.parse.quote(WIDGETS))
+    text, _ = call(httpd, "tab_open", session=session, url="data:text/html," + urllib.parse.quote(WIDGETS))
     tab = text.split()[0]
     opened.append(tab)
-    snapshot, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "take_snapshot"}])
+    snapshot, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "take_snapshot"}])
     field = lambda role, label: uid(snapshot, role, label) or uid(snapshot, role, " " + label)
     check("a native select is one line in a view", 'combobox "Auth" = "Select" (2 options)' in snapshot, snapshot)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "take_snapshot", "under": field("combobox", "Auth")}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "take_snapshot", "under": field("combobox", "Auth")}])
     check("and take_snapshot under its uid lists its options", not is_error and 'option "US Citizen"' in text, text)
 
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Clearance"), "text": 'Currently hold a "Secret" clearance'},
         {"tool": "expect", "uid": field("combobox", "Clearance"), "value": 'Currently hold a "Secret" clearance'}])
     check("pick chooses an option by exact text in a widget that takes only real input, and expect reads it back",
           not is_error and "--- 1 pick ok" in text and "--- 2 expect ok" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Clearance"), "text": 'Level "3" or above', "search": "Level"}])
     check("pick chooses an option whose name holds quotes and words after them", not is_error, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Location"), "text": "Los Angeles, California, United States",
          "search": "Los Angeles"}])
     check("pick types search and chooses the exact option among near matches", not is_error and "the field holds" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Country"), "text": "United States +1"}])
     check("pick accepts a field that shows a short form of the choice, and says what it shows",
           not is_error and "now shows \"+1\"" in text, text)
 
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Location"), "text": "Nowhere, At All", "wait": 2},
         {"tool": "expect", "uid": field("checkbox", "I agree"), "value": "false"}])
     check("a pick with no exact option fails the queue and says what typing showed", is_error and "no option is exactly" in text, text)
     check("and the steps after it do not run", "--- not run: 2 expect" in text, text)
-    text, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": field("combobox", "Location"), "value": "Nowhere, At All"}])
+    text, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": field("combobox", "Location"), "value": "Nowhere, At All"}])
     check("a failed pick leaves no typed text behind to pass for an answer", "FAILED" in text and "Nowhere" not in text.split("holds")[-1].split("(")[0], text)
 
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Dud"), "text": "Python", "wait": 3}])
     check("a pick whose option click takes nothing fails, though the box holds the typed text", is_error and "only what was typed" in text, text)
-    text, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "evaluate_script", "function": "() => document.getElementById('dud').value"}])
+    text, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "evaluate_script", "function": "() => document.getElementById('dud').value"}])
     check("and the typed text is cleared", returned(text) == "", text)
 
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Language"), "text": "Python"},
         {"tool": "evaluate_script", "function": "() => [...document.getElementById('langs').selectedOptions].length"}])
     check("pick chooses in its own dropdown, not an option with the same words elsewhere on the page",
           not is_error and "the field holds \"Python\"" in text and returned(text.split("--- 2")[-1]) == 0, text)
 
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "expect", "uid": field("combobox", "Ethnicity"), "value": "Hispanic or Latino"}])
     check("expect does not pass on a value that is only part of what a dropdown shows", is_error, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "expect", "uid": field("combobox", "Ethnicity"), "value": "White (Not Hispanic or Latino)"}])
     check("expect passes on the whole of what a dropdown shows", not is_error, text)
 
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "expect", "uid": field("checkbox", "I agree"), "value": "false"},
         {"tool": "click", "uid": field("checkbox", "I agree")},
         {"tool": "expect", "uid": field("checkbox", "I agree"), "value": "true"},
@@ -1650,117 +1793,117 @@ def checked_live(httpd, tabs, opened):
         {"tool": "fill", "uid": field("textbox", "Name"), "value": "Joshua Jenkins"},
         {"tool": "expect", "uid": field("textbox", "Name"), "value": "Joshua Jenkins"}])
     check("expect reads a checkbox, a pressed button, a select and a text box", not is_error, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": field("textbox", "Name"), "value": "Someone Else"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": field("textbox", "Name"), "value": "Someone Else"}])
     check("expect fails on a value the field does not hold, naming what it holds",
           is_error and "expected \"Someone Else\", but the field holds \"Joshua Jenkins\"" in text, text)
 
     letter = "Dear team,\n" + "I would like to build forms that fill themselves. " * 3
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Cover letter"), "text": letter}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Cover letter"), "text": letter}])
     check("type replaces a long text with real keys, in a field that ignores scripted changes, and reads it back",
           not is_error and "typed %d characters; the field holds" % len(letter) in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Name"), "text": "J. Jenkins"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Name"), "text": "J. Jenkins"}])
     check("type replaces all of what a field held", not is_error and "the field holds \"J. Jenkins\"" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Zip"), "text": "902101234"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Zip"), "text": "902101234"}])
     check("type fails when the field does not end up holding exactly the text, saying the field cut it",
           is_error and "expected \"902101234\", but the field holds \"90210\"" in text
           and "keeps only its first 5 characters" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Phone"), "text": "3105550100"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Phone"), "text": "3105550100"}])
     check("type into a masked field passes, naming what it shows, when only spacing and punctuation changed",
           not is_error and "the field shows them as \"(310) 555-0100\"" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Locked"), "text": "x"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Locked"), "text": "x"}])
     check("type into a read-only box fails without typing", is_error and "is a read-only text box" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "pick", "uid": field("textbox", "Zip"), "text": "90210", "wait": 1}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "pick", "uid": field("textbox", "Zip"), "text": "90210", "wait": 1}])
     check("pick on a field that lists nothing as you type says to fill or type it", is_error and "fill or type it" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("button", "Yes"), "text": "x"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("button", "Yes"), "text": "x"}])
     check("type into something that is not a text box fails without typing", is_error and "nothing was typed" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("checkbox", "I agree"), "text": " "}])
-    held, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": field("checkbox", "I agree"), "value": "true"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("checkbox", "I agree"), "text": " "}])
+    held, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": field("checkbox", "I agree"), "value": "true"}])
     check("type into a checkbox fails without typing, saying why, so a space does not untick it",
           is_error and "is a checkbox input, not a text box" in text and "--- 1 expect ok" in held, text + held)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "pick", "uid": field("combobox", "Auth"), "text": "US Citizen"}, {"tool": "expect", "uid": field("combobox", "Auth"), "value": "Select"}])
-    held, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": field("combobox", "Auth"), "value": "Select"}])
+    held, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": field("combobox", "Auth"), "value": "Select"}])
     check("pick refuses a native select before typing into it, and leaves its choice alone",
           is_error and "native select" in text and "--- 1 expect ok" in held, text + held)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Name"), "text": "a\nb"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Name"), "text": "a\nb"}])
     check("type refuses a line break for a one-line box, where it would press Enter", is_error and "one-line" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
     check("type into a contenteditable element takes a line break and reads the text back", not is_error, text)
 
     held_before = clipboard._script(clipboard.SAVE, "save the clipboard")
     said = 'It\'s "exact"'
     quoted = field("textbox", "Quoted")
-    text, _ = call(httpd, "queue", tab=tab, steps=[
+    text, _ = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": quoted}, {"tool": "type_text", "text": said},
         {"tool": "evaluate_script", "function": "() => { const t = quoted.textContent; quoted.textContent = ''; return t; }"}])
     check("the stand-in editor curls quotes as they are typed", returned(text.split("--- 3")[-1]) == "It\u2019s \u201cexact\u201c", text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": quoted}, {"tool": "paste", "text": said}, {"tool": "expect", "uid": quoted, "value": said}])
     check("paste without a uid puts text in where the focus is, as it is, quotes straight", not is_error
           and "pasted %d characters where the focus is" % len(said) in text, text)
     pasted = 'Dear "team",\nit\'s me'
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "paste", "uid": field("textbox", "Cover letter"), "text": pasted}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "paste", "uid": field("textbox", "Cover letter"), "text": pasted}])
     check("paste with a uid replaces a text box's text, in a field that ignores scripted changes, and reads it back",
           not is_error and "pasted %d characters; the field holds" % len(pasted) in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "click", "uid": field("button", "Yes")}, {"tool": "paste", "text": "x"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "click", "uid": field("button", "Yes")}, {"tool": "paste", "text": "x"}])
     check("paste without a uid refuses when nothing that takes text has the focus", is_error
           and "nothing that takes text has the focus" in text and "so nothing was pasted" in text, text)
     check("and the Mac's clipboard holds what it held before the pastes", clipboard._script(clipboard.SAVE, "save the clipboard") == held_before)
 
     warned = {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": field("button", "Warn me")}, {"tool": "handle_dialog", "action": "accept"}, warned])
     took = re.search(r"^--- 1 click ok ([\d.]+)s$", text, re.M)
     check("a confirm a handle_dialog step waits on is answered as it opens, so its click takes no 30s",
           not is_error and took is not None and float(took.group(1)) < 10
           and 'the confirm "Sure?" was accepted as it opened' in text and returned(text.split("--- 3")[-1]) == "confirmed"
           and "## Pages" not in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": field("button", "Warn later")}, {"tool": "handle_dialog", "action": "dismiss"}, warned])
     check("a confirm that opens after its click is still answered by the handle_dialog step after it",
           not is_error and "was dismissed as it opened" in text and returned(text.split("--- 3")[-1]) == "cancelled", text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "click", "uid": field("button", "Warn me")}])
-    answered, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "handle_dialog", "action": "accept"}, warned])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "click", "uid": field("button", "Warn me")}])
+    answered, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "handle_dialog", "action": "accept"}, warned])
     check("a confirm no handle_dialog step waits on counts its click done, and the next queue answers it",
           not is_error and "counts as done" in text and "--- 1 handle_dialog ok" in answered
           and returned(answered.split("--- 2")[-1]) == "confirmed", text + answered)
 
     locked, auth = field("textbox", "Locked"), field("combobox", "Auth")
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "fill", "uid": locked, "value": "x"}])
-    held, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": locked, "value": "fixed"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "fill", "uid": locked, "value": "x"}])
+    held, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": locked, "value": "fixed"}])
     check("fill refuses a read-only box, which it would empty, and the box keeps its value",
           is_error and "is read-only, and fill would empty it, so nothing was filled" in text and "--- 1 expect ok" in held,
           text + held)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "fill", "uid": field("textbox", "Off"), "value": "x"}])
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "fill", "uid": field("textbox", "Off"), "value": "x"}])
     check("fill refuses a disabled box at once, naming why", is_error and "is disabled, so nothing was filled" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[{"tool": "fill_form", "elements": [
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "fill_form", "elements": [
         {"uid": field("textbox", "Name"), "value": "Changed Name"}, {"uid": auth, "value": "Atlantis"}]}])
-    held, _ = call(httpd, "queue", tab=tab, steps=[{"tool": "expect", "uid": field("textbox", "Name"), "value": "Changed Name"}])
+    held, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": field("textbox", "Name"), "value": "Changed Name"}])
     check("fill_form refuses a select given text none of its options has, before filling any element",
           is_error and 'no option of the select %s is exactly "Atlantis"' % auth in text and "--- 1 expect FAILED" in held,
           text + held)
     parse, city = field("button", "Parse resume"), field("textbox", "City")
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": parse}, {"tool": "wait", "gone": "Parsing your resume", "timeout": 10000},
         {"tool": "expect", "uid": city, "value": "Los Angeles"}])
     check("wait for text to go waits out a parser, and the field it fills is then filled", not is_error, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": parse}, {"tool": "wait", "uid": city, "value": "Los Angeles", "timeout": 10000}])
     check("wait for a value waits until the field holds it", not is_error and "the field holds \"Los Angeles\"" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": parse}, {"tool": "wait", "still": 1000, "timeout": 10000}])
     took = re.search(r"^--- 2 wait ok ([\d.]+)s$", text, re.M)
     check("wait for the page to stop changing waits out the changes, then still ms more",
           not is_error and took is not None and float(took.group(1)) >= 4.0, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": parse}, {"tool": "wait", "gone": "Parsing your resume", "timeout": 500}])
     check("a wait whose condition does not come fails at its timeout", is_error and "still on the page" in text, text)
-    text, is_error = call(httpd, "queue", tab=tab, steps=[
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": field("button", "Parse later")}, {"tool": "wait", "gone": "Parsing your resume", "timeout": 10000}])
     check("wait for text to go waits for a status that shows a moment after the click", not is_error and "is off the page" in text, text)
 
 
-def queue_live(profile):
+def queue_live(profile, state):
     if not os.path.exists(PACKAGE):
         skipped.append("queue")
         print("\nskipped the live queue checks: chrome-devtools-mcp is not installed; run npm ci")
@@ -1773,32 +1916,35 @@ def queue_live(profile):
         devtools.close()
     check("chrome-devtools-mcp lists the form tools a queue needs",
           {"take_snapshot", "fill", "fill_form", "click", "type_text", "press_key", "upload_file", "evaluate_script"} <= set(allowed))
-    tabs, workers = Tabs(lambda: cdp.Browser(profile)), Workers(workdir)
+    tabs, workers = Tabs(state, cdp.Browser), Workers(workdir)
     root = os.path.join(workdir, "calls")
-    httpd = serving(server.tab_tools(tabs, workers) + [server.queue_tool(tabs, workers, lambda: profile, allowed, root)],
+    httpd = serving(server.tab_tools(state, tabs, workers) + [server.queue_tool(state, tabs, workers, allowed, root)],
                     server.NAME)
+    session = call(httpd, "session_start", profile=profile.name, label="queue live")[0].split()[1].rstrip(",")
+    mine = state.session(session)
+    home = os.path.join(root, profile.name, sessions.folder(mine))
     opened = []
     try:
         def open_tab(html):
-            text, _ = call(httpd, "tab_open", url="data:text/html," + urllib.parse.quote(html))
+            text, _ = call(httpd, "tab_open", session=session, url="data:text/html," + urllib.parse.quote(html))
             opened.append(text.split()[0])
             return opened[-1]
 
         same = FORM % "queue scratch"
         a, b = open_tab(same), open_tab(same)  # the same URL, so pairing has to tell them apart
-        snap_a, error_a = call(httpd, "queue", tab=a, steps=[{"tool": "take_snapshot"}])
-        snap_b, _ = call(httpd, "queue", tab=b, steps=[{"tool": "take_snapshot"}])
+        snap_a, error_a = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "take_snapshot"}])
+        snap_b, _ = call(httpd, "queue", session=session, tab=b, steps=[{"tool": "take_snapshot"}])
         check("a queue's first step reaches its tab through a new chrome-devtools-mcp", not error_a and "textbox \"Name\"" in snap_a, snap_a)
         saved = re.search(r"\(view; saved whole to (\S+)\)$", snap_a, re.M)
         check("its snapshot is a view, the whole one saved in the tab's record folder",
-              saved is not None and os.path.dirname(saved.group(1)) == os.path.join(root, a)
+              saved is not None and os.path.dirname(saved.group(1)) == os.path.join(home, a)
               and "RootWebArea" in open(saved.group(1)).read(), snap_a)
 
         spans = {}
 
         def fill(tab, snapshot, who):
             began = time.monotonic()
-            spans[who] = (began, call(httpd, "queue", tab=tab, steps=[
+            spans[who] = (began, call(httpd, "queue", session=session, tab=tab, steps=[
                 {"tool": "fill", "uid": uid(snapshot, "textbox", "Name"), "value": "Agent " + who},
                 {"tool": "click", "uid": uid(snapshot, "textbox", "Email")},
                 {"tool": "type_text", "text": who.lower() + "@example.com"},
@@ -1822,14 +1968,14 @@ def queue_live(profile):
             # Read over the server's own connection, not through the pairing this checks.
             browser = cdp.Browser(profile)
             try:
-                session = browser.call("Target.attachToTarget", targetId=tabs.target(tab), flatten=True)["sessionId"]
-                held = json.loads(browser.call("Runtime.evaluate", session=session, expression=read)["result"]["value"])
+                attached = browser.call("Target.attachToTarget", targetId=tabs.target(mine, tab), flatten=True)["sessionId"]
+                held = json.loads(browser.call("Runtime.evaluate", session=attached, expression=read)["result"]["value"])
             finally:
                 browser.close()
             check("tab %s holds only its own queue's values, typed keys included" % who,
                   held == ["Agent " + who, who.lower() + "@example.com", "CLICKED"], repr(held))
 
-        text, is_error = call(httpd, "queue", tab=a, steps=[
+        text, is_error = call(httpd, "queue", session=session, tab=a, steps=[
             {"tool": "click", "uid": "9_99"}, {"tool": "fill", "uid": uid(snap_a, "textbox", "Name"), "value": "never"}])
         check("a failing step makes the queue an error result", is_error and "--- 1 click FAILED" in text, text)
         check("the steps after it do not run", "--- not run: 2 fill" in text)
@@ -1838,47 +1984,47 @@ def queue_live(profile):
         path = os.path.join(workdir, "steps.json")
         with open(path, "w") as handle:
             json.dump([{"tool": "fill", "uid": uid(snap_a, "textbox", "Name"), "value": "from a file"}], handle)
-        text, is_error = call(httpd, "queue", tab=a, file=path)
+        text, is_error = call(httpd, "queue", session=session, tab=a, file=path)
         check("a queue runs from a file", not is_error and "--- 1 fill ok" in text, text)
 
         status, answer = rpc(httpd, "tools/call", {"name": "queue", "arguments": {
-            "tab": a, "steps": [{"tool": "take_screenshot", "fullPage": True}]}})
+            "session": session, "tab": a, "steps": [{"tool": "take_screenshot", "fullPage": True}]}})
         content = (answer or {}).get("result", {}).get("content", [])
         text = text_of(content)
         saved = re.search(r"Saved screenshot to (.+)\.$", text, re.M)
         where = saved.group(1) if saved else ""
         check("a take_screenshot is saved in the tab's record folder",
-              os.path.realpath(os.path.dirname(where)) == os.path.realpath(os.path.join(root, a)) and os.path.getsize(where) > 0, text)
+              os.path.realpath(os.path.dirname(where)) == os.path.realpath(os.path.join(home, a)) and os.path.getsize(where) > 0, text)
         check("and not sent back as an image", all(item.get("type") == "text" for item in content), repr([i.get("type") for i in content]))
 
-        text, is_error = call(httpd, "queue", tab=a, steps=[{"tool": "new_page", "url": "about:blank"}])
+        text, is_error = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "new_page", "url": "about:blank"}])
         check("a tab-managing tool is refused in a queue", is_error and "new_page" in text, text)
-        text, is_error = call(httpd, "queue", tab=a, steps=[{"tool": "click"}], extra=1)
+        text, is_error = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "click"}], extra=1)
         check("an argument queue does not take is refused", is_error and "extra" in text, text)
-        before = sorted(os.listdir(os.path.join(root, a)))
-        text, is_error = call(httpd, "queue", tab=a, steps=[
+        before = sorted(os.listdir(os.path.join(home, a)))
+        text, is_error = call(httpd, "queue", session=session, tab=a, steps=[
             {"tool": "fill", "uid": uid(snap_a, "textbox", "Name"), "value": "never"},
             {"tool": "take_snapshot", "bogus": 1}])
         check("a step's argument chrome-devtools-mcp would refuse stops the queue before any step runs, recording nothing",
-              is_error and "step 2: take_snapshot does not take bogus" in text and sorted(os.listdir(os.path.join(root, a))) == before, text)
+              is_error and "step 2: take_snapshot does not take bogus" in text and sorted(os.listdir(os.path.join(home, a))) == before, text)
 
-        worker = workers.get(a, tabs.target(a), profile)
+        worker = workers.get(a, tabs.target(mine, a), profile)
         process = worker._devtools._process if worker._devtools else None
         if process:
             process.kill()
             process.wait()
-        text, is_error = call(httpd, "queue", tab=a, steps=[{"tool": "take_snapshot"}])
+        text, is_error = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "take_snapshot"}])
         check("a tab whose chrome-devtools-mcp died gets a new one on its next queue", not is_error and "RootWebArea" in text, text)
         check("and the report says its old uids are gone", text.startswith("note:"), text[:120])
 
-        checked_live(httpd, tabs, opened)
+        checked_live(httpd, tabs, opened, session)
 
         framed = open_tab(FRAMED)
         time.sleep(1)  # the frame loads after the tab does
-        text, _ = call(httpd, "queue", tab=framed, steps=[{"tool": "take_snapshot"}])
+        text, _ = call(httpd, "queue", session=session, tab=framed, steps=[{"tool": "take_snapshot"}])
         inside = uid(text, "textbox", "Inside")
         check("a field inside a cross-origin frame shows in the snapshot", bool(inside), text)
-        text, is_error = call(httpd, "queue", tab=framed, steps=[
+        text, is_error = call(httpd, "queue", session=session, tab=framed, steps=[
             {"tool": "fill", "uid": inside, "value": "reached"},
             {"tool": "evaluate_script", "function": "() => document.querySelector('iframe') !== null"}])
         check("and fills", not is_error and "--- 1 fill ok" in text, text)
@@ -1886,34 +2032,34 @@ def queue_live(profile):
         closer = cdp.Browser(profile)
         try:
             hand = open_tab(same)
-            process = workers.get(hand, tabs.target(hand), profile)
-            call(httpd, "queue", tab=hand, steps=[{"tool": "take_snapshot"}])
+            process = workers.get(hand, tabs.target(mine, hand), profile)
+            call(httpd, "queue", session=session, tab=hand, steps=[{"tool": "take_snapshot"}])
             by_hand = process._devtools
-            closer.call("Target.closeTarget", targetId=tabs.target(hand))
+            closer.call("Target.closeTarget", targetId=tabs.target(mine, hand))
             opened.remove(hand)
         finally:
             closer.close()
-        call(httpd, "tab_list")
+        call(httpd, "tab_list", session=session)
         check("tab_list stops the chrome-devtools-mcp of a tab closed outside the server", by_hand is not None and not by_hand.alive())
 
-        process = workers.get(b, tabs.target(b), profile)._devtools
-        call(httpd, "tab_close", tab=b)
+        process = workers.get(b, tabs.target(mine, b), profile)._devtools
+        call(httpd, "tab_close", session=session, tab=b)
         opened.remove(b)
         check("closing a tab stops its chrome-devtools-mcp", process is not None and not process.alive())
-        text, is_error = call(httpd, "queue", tab=b, steps=[{"tool": "take_snapshot"}])
-        check("a queue on a closed tab is refused", is_error and "no tab has the id" in text, text)
+        text, is_error = call(httpd, "queue", session=session, tab=b, steps=[{"tool": "take_snapshot"}])
+        check("a queue on a closed tab is refused", is_error and "is closed" in text, text)
         numbered, total = True, 0
-        for tab in os.listdir(root):
-            names = os.listdir(os.path.join(root, tab))
+        for tab in os.listdir(home):
+            names = os.listdir(os.path.join(home, tab))
             calls = [name[:-len(".json")] for name in names if name.endswith(".json")]
             numbered = numbered and len({name.split("-")[0] for name in calls}) == len(calls)
             numbered = numbered and all(name + ".txt" in names for name in calls)
             total += len(calls)
         check("every call is recorded in its tab's record folder, with its own number and both its files",
-              numbered and total > 20 and set(os.listdir(root)) >= {a, b}, repr(os.listdir(root)))
+              numbered and total > 20 and set(os.listdir(home)) >= {a, b}, repr(os.listdir(home)))
     finally:
         for tab in opened:
-            call(httpd, "tab_close", tab=tab)
+            call(httpd, "tab_close", session=session, tab=tab)
         workers.stop_all()
         httpd.shutdown()
         httpd.server_close()
@@ -1952,8 +2098,14 @@ if __name__ == "__main__":
             skipped.append("live")
             print("\nskipped the live checks: Chrome is not installed at %s" % cdp.CHROME)
         else:
-            live(profile)
-            print()
-            queue_live(profile)
+            workdir = tempfile.mkdtemp(prefix="browser-live-")
+            state = stand_in_state(workdir, profile)
+            try:
+                live(profile, state)
+                print()
+                queue_live(profile, state)
+            finally:
+                state.close()
+                shutil.rmtree(workdir, ignore_errors=True)
     print("\n%d passed, %d failed%s" % (len(passed), len(failed), ", live checks skipped" if skipped else ""))
     sys.exit(1 if failed else 0)
