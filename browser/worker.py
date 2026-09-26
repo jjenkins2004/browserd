@@ -65,6 +65,9 @@ class Worker:
         devtools = Devtools(os.path.join(self._log_dir, "devtools-%s.log" % self.tab), self.profile.endpoint)
         try:
             self.page_id = self._pair(devtools)
+            # README.md, "Core Abstractions & Shared Pieces", says why the page is selected. Never bringToFront, which
+            # would take the Mac's focus.
+            devtools.text("select_page", {"pageId": self.page_id})
         except Exception:
             devtools.close()  # stored nowhere yet, so nothing else could ever stop it
             raise

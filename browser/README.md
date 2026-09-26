@@ -119,7 +119,12 @@ the steps it runs, and what came back is written through `_recorded`, a refusal 
 so one tab's queues run in turn and different tabs run at once. The process is pointed at the tab's
 profile's Chrome (`--browser-url`), and `Worker.connect` is how the queue's dialog answerer and paste
 reach the tab. `Worker.ensure()` starts and pairs
-the process on the tab's first queue, and again after it dies; the first report on a tab older than this
+the process on the tab's first queue, and again after it dies, then selects the tab's page there (`select_page` without
+`bringToFront`): chrome-devtools-mcp sets its own timeouts on a page only once it is selected, 5s for a click or fill
+to finish, its wait for the element included, and 10s for a navigation, and one it never selected keeps Puppeteer's 30s
+for both (measured: a fill on a date's month field failed after 30.1s unselected, 5.1s selected). A navigation that
+runs out its timeout still reports ok, on a page half loaded, so `steps.run` gives a `navigate_page` that names no
+`timeout` `steps.NAVIGATE_TIMEOUT` (30s), what it had before. The first report on a tab older than this
 server (carried over: `Workers.get`'s `made` is before `Workers.started`) also says its uids are gone, since an
 earlier server's process may have given some out. **`worker.Workers`** holds
 one per tab id. `tab_close`, the page's Close, Close session and Close all paused, `tab_list` (for tabs found closed) and a
@@ -270,7 +275,7 @@ same tabs under the same ids. A crash leaves the same.
   `timeout` over `checked.WAIT_MOST` (45,000 ms), a `wait`'s or a chrome-devtools-mcp tool's, or a
   `pick` `wait` over 45s, is refused.
 - **A dialog a `handle_dialog` step waits on is answered the moment it opens.** chrome-devtools-mcp
-  blocks about 30s on a step whose dialog it was not told to answer. So when a `handle_dialog` step
+  blocks about 5s on a step whose dialog it was not told to answer. So when a `handle_dialog` step
   follows a step, `steps.run` first starts a `dialogs.Answerer` on a connection of its own to the tab
   (`Page.enable`, then `Page.javascriptDialogOpening`), which answers the dialog as that step asks,
   and the `handle_dialog` step waits up to `dialogs.LATE` (5s) after the step before for one that
@@ -281,7 +286,7 @@ same tabs under the same ids. A crash leaves the same.
   When a queue stops before its `handle_dialog` step runs, the report still says what the answerer
   answered.
 - **A step that opens a dialog nothing waits on counts as done.** chrome-devtools-mcp fails it after
-  about 30s, with an `# Open dialog` section in its reply; `steps.run` counts it as done, so a
+  about 5s, with an `# Open dialog` section in its reply; `steps.run` counts it as done, so a
   `handle_dialog` step in the next queue answers it. A reply that also holds `A dialog is open (`,
   chrome-devtools-mcp's refusal of a step begun while a dialog was open, still fails, as does a
   checked step, whose read-back never ran, and a tool in `steps.UNBLOCKED`, which runs with a dialog
@@ -406,7 +411,7 @@ same tabs under the same ids. A crash leaves the same.
     dropdowns and one textarea take only trusted input, whose Parse resume button runs a stand-in resume parser,
     whose Quoted editor curls quotes as they are typed, whose Stopper editor puts a paste in itself and stops
     it without cancelling Chrome's own insert, as Slides does, and whose Warn me confirm, clicked with no
-    handle_dialog step after it, makes one click take about 30s. Its paste checks read the Mac's clipboard's
+    handle_dialog step after it, makes one click take about 5s. Its paste checks read the Mac's clipboard's
     change count, never its contents, and check nothing wrote it.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; a tab already open is never touched. No live check moves the Mac's focus:

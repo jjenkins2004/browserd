@@ -222,7 +222,7 @@ the field holds it already), or gone with its status text; never a setTimeout in
 Dialogs: put a handle_dialog step right after the step that opens an alert, confirm or prompt (a click, a key
 press), and the dialog is answered the moment it opens, or up to 5s after that step for a late one; evaluate_script
 answers its own with dialogAction (default accept), so takes none. A dialog no handle_dialog step waits on blocks
-the page: its step takes about 30s and counts as done, and a handle_dialog step in the next queue answers it.
+the page: its step takes about 5s and counts as done, and a handle_dialog step in the next queue answers it.
 
 A step that loads a new page (navigate_page, a link or submit click) makes every uid new: end the queue with
 take_snapshot and use its uids in the next queue. navigate_page leaves a page even when the page asks to stay

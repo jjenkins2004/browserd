@@ -19,6 +19,7 @@ LEFT_OUT = PAGE_TOOLS | {"lighthouse_audit", "take_heapsnapshot"}
 RESTARTED = ("note: this tab's chrome-devtools-mcp had stopped and was started again, so element uids from before "
              "are gone; take a new snapshot")
 GAP = 0.1  # seconds between steps, so the page can react to one step before the next
+NAVIGATE_TIMEOUT = 30000  # ms a navigate_page that names none gives the load; README.md, "Core Abstractions & Shared Pieces"
 QUEUE_MOST = 50.0  # seconds a queue starts steps for; README.md, "Agent Gotchas & Invariants", says why
 REPLY_MOST = 40000  # characters of one step's reply a report holds; the whole reply is saved when longer
 ERROR_MOST = 9000  # characters a failed queue's report keeps under, its view of the page now cut to fit; README.md
@@ -530,10 +531,10 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
                                                  None if step["tool"] == "navigate_page" else navigated)
             dialog = OPEN_DIALOG in text and DIALOG_BEFORE not in text
             if failed and dialog and step["tool"] not in checked.STEPS and step["tool"] not in UNBLOCKED:
-                # The action opened a dialog, which blocks the page, so the action itself ran out its 30s timeout.
+                # The action opened a dialog, which blocks the page, so the action itself ran out its 5s timeout.
                 failed = False
                 text += ("\n(a dialog opened during this step and blocked the page, so the step counts as done; answer "
-                         "it with a handle_dialog step, and put one right after such a step to skip this 30s)")
+                         "it with a handle_dialog step, and put one right after such a step to skip this 5s)")
             if failed and step["tool"] == "wait_for" and WAIT_FOR_TIMEOUT.search(text):
                 text += WAIT_FOR_MISSED
             view_options = {key: step[key] for key in VIEW_OPTIONS if key in step and step["tool"] == "take_snapshot"}
@@ -573,6 +574,8 @@ def _step(devtools, page_id, step, left, answerer, target, connect):
     arguments = {key: value for key, value in step.items()
                  if key != "tool" and not (step["tool"] == "take_snapshot" and key in VIEW_OPTIONS)}
     arguments["pageId"] = page_id
+    if step["tool"] == "navigate_page":
+        arguments.setdefault("timeout", NAVIGATE_TIMEOUT)
     if isinstance(arguments.get("timeout"), (int, float)) and arguments["timeout"] > left * 1000:
         arguments["timeout"] = max(1, int(left * 1000))  # a chrome-devtools-mcp wait, cut as checked.run cuts its own
     try:

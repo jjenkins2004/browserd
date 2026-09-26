@@ -1244,6 +1244,12 @@ def limits_offline():
         steps.run(fake, 7, [{"tool": "wait_for", "text": ["x"], "timeout": 40000}], called)
         check("a chrome-devtools-mcp timeout is cut to the time the queue has left",
               fake.calls[0][1]["timeout"] <= steps.QUEUE_MOST * 1000, repr(fake.calls[0]))
+        fake = FakeDevtools([([{"type": "text", "text": "Successfully navigated"}], False)] * 2)
+        steps.run(fake, 7, [{"tool": "navigate_page", "url": "https://example.com/"},
+                            {"tool": "navigate_page", "type": "reload", "timeout": 5000}], called)
+        check("a navigate_page that names no timeout is given NAVIGATE_TIMEOUT, and one that names its own keeps it",
+              [arguments.get("timeout") for tool, arguments in fake.calls if tool == "navigate_page"]
+              == [steps.NAVIGATE_TIMEOUT, 5000], repr(fake.calls))
         long_json = "Script ran on page and returned:\n```json\n" + "x" * (steps.REPLY_MOST + 10) + "\n```"
         report = text_of(steps.run(FakeDevtools([([{"type": "text", "text": long_json}], False)]), 3,
                                    [{"tool": "evaluate_script"}], lambda name: os.path.join(workdir, "007-" + name))["content"])
@@ -1959,8 +1965,8 @@ def checked_live(httpd, tabs, opened, session):
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": field("button", "Warn me")}, {"tool": "handle_dialog", "action": "accept"}, warned])
     took = re.search(r"^--- 1 click ok ([\d.]+)s$", text, re.M)
-    check("a confirm a handle_dialog step waits on is answered as it opens, so its click takes no 30s",
-          not is_error and took is not None and float(took.group(1)) < 10
+    check("a confirm a handle_dialog step waits on is answered as it opens, so its click takes no 5s",
+          not is_error and took is not None and float(took.group(1)) < 3
           and 'the confirm "Sure?" was accepted as it opened' in text and returned(text.split("--- 3")[-1]) == "confirmed"
           and "## Pages" not in text, text)
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
@@ -2085,6 +2091,17 @@ def queue_live(profile, state):
         check("a failing step makes the queue an error result", is_error and "--- 1 click FAILED" in text, text)
         check("the steps after it do not run", "--- not run: 2 fill" in text)
         check("the report shows the page as it is now", "Agent A" in text.split("--- the page now")[-1])
+
+        # A process selects on its own the first page it lists, in Chrome's order, not the order tabs opened; of two
+        # tabs, at most one can be that page.
+        for _ in range(2):
+            slow = open_tab("<title>disabled scratch</title><button disabled>Never</button>")
+            never = uid(call(httpd, "queue", session=session, tab=slow, steps=[{"tool": "take_snapshot"}])[0], "button", "Never")
+            began = time.monotonic()
+            text, is_error = call(httpd, "queue", session=session, tab=slow, steps=[{"tool": "click", "uid": never}])
+            took = time.monotonic() - began
+            check("a click on a disabled button fails after chrome-devtools-mcp's 5s, not Puppeteer's 30s",
+                  is_error and took < 15 and "did not become interactive" in text, "%.1fs: %s" % (took, text[:120]))
 
         path = os.path.join(workdir, "steps.json")
         with open(path, "w") as handle:
