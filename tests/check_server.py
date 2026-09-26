@@ -2130,6 +2130,30 @@ def queue_live(profile, state):
             check("a click on a disabled button fails after chrome-devtools-mcp's 5s, not Puppeteer's 30s",
                   is_error and took < 15 and "did not become interactive" in text, "%.1fs: %s" % (took, text[:120]))
 
+        opener = serving(server.tab_tools(state, tabs, workers, server.queue_steps(state, tabs, workers, allowed, root)),
+                         server.NAME)
+        try:
+            text, is_error = call(opener, "tab_open", session=session, url="data:text/html," + urllib.parse.quote(same),
+                                  steps=[{"tool": "take_snapshot"}])
+            read = text.split("\n")[0].split()[0] if text else ""
+            opened.append(read)
+            check("tab_open given steps opens the tab, then runs them on it: its tab id, title and URL, then the queue's report",
+                  not is_error and text.startswith(read + "  queue scratch") and "--- 1 take_snapshot ok" in text
+                  and 'textbox "Name"' in text, text[:300])
+            check("and records them as that tab's first queue call",
+                  sorted(os.listdir(os.path.join(home, read))) == ["001-queue.json", "001-queue.txt", "001-step1-snapshot.txt"],
+                  repr(os.listdir(os.path.join(home, read))))
+            text, is_error = call(opener, "tab_open", session=session, url="data:text/html,<title>bad steps</title>",
+                                  steps=[{"tool": "new_page", "url": "about:blank"}])
+            refused = text.split("\n")[0].split()[0] if text else ""
+            opened.append(refused)
+            check("tab_open whose steps are refused still opens the tab and names it, with why they did not run",
+                  is_error and "bad steps" in text.split("\n")[0] and "the tab is open, but its steps did not run" in text
+                  and "new_page" in text, text[:300])
+        finally:
+            opener.shutdown()
+            opener.server_close()
+
         dated = open_tab("<title>date scratch</title><label for=born>Born</label><input id=born type=date>")
         text, _ = call(httpd, "queue", session=session, tab=dated, steps=[{"tool": "take_snapshot"}])
         born = uid(text, "Date", "Born")

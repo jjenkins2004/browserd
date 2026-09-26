@@ -106,7 +106,13 @@ as is. Raising `mcp.ToolError` sends the agent a readable error result; any othe
 an error result naming it, with the traceback in the log; a client dropping its connection is one
 log line. Every tool call is one log line; one a tool refuses (`ToolError`), one naming no such tool, and
 one whose params or arguments are not an object also name what they were given. `server.tab_tools(state, tabs,
-workers)` builds `session_start` and the four tab tools, `server.queue_tool` the queue; all turn `cdp.CdpError`
+workers, queue)` builds `session_start` and the four tab tools, `server.queue_tool` the queue;
+`server.queue_steps` makes the queue's body, which the queue and `tab_open` share: `tab_open`, given `steps`, runs
+them on the new tab through it (recorded as that tab's queue call), `steps.QUEUE_MOST` counted from the start of
+`tab_open`, and answers with its tab id, title and URL, then the report, or those and why its steps did not run. Agents
+read a new tab right after opening it (measured in benchmarks: most with a lone `take_snapshot` queue, and 8 of 11
+calls of a queue step's name as a top-level tool came right after `tab_open`). Without `queue` (as most checks build
+them), `tab_open` lists no `steps` argument, and ignores one given. All turn `cdp.CdpError`
 into `ToolError`, and all but `session_start` run through `_in_session`, which refuses a missing, malformed,
 unknown or closed session and moves its last call to now as the call starts and as it ends. The queue records
 into `server.CALLS/<profile>/<session>-<label>/<tab>/`, so it refuses a tab argument not shaped like a tab id

@@ -493,7 +493,7 @@ def _text(content):
     return "\n".join(item.get("text", "") for item in content if item.get("type") == "text").strip()
 
 
-def run(devtools, page_id, steps, path, restarted=False, target=None, connect=None):
+def run(devtools, page_id, steps, path, restarted=False, target=None, connect=None, began=None):
     """Run the steps in order and return an MCP result: one text report, then any images the steps returned.
 
     The result is an error when a step failed, or the queue stopped at QUEUE_MOST, so the agent cannot mistake a
@@ -508,11 +508,13 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
         target (str | None): the tab's target id, for answering a dialog the moment it opens and for a paste's key
             press; None leaves every dialog to chrome-devtools-mcp and fails every paste.
         connect (callable | None): opens a proven connection to the tab's Chrome; given with target.
+        began (float | None): time.monotonic() when the call began, if before this, so QUEUE_MOST counts from then:
+            tab_open's steps count the time it took to open the tab.
     """
     report, images, failed = [], [], False
     if restarted:
         report.append(RESTARTED)
-    started, answerer, navigated = time.monotonic(), None, None
+    started, answerer, navigated = began or time.monotonic(), None, None
     try:
         for number, step in enumerate(steps, 1):
             left = QUEUE_MOST - (time.monotonic() - started)
