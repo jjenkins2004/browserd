@@ -507,7 +507,8 @@ def _text(content):
     return "\n".join(item.get("text", "") for item in content if item.get("type") == "text").strip()
 
 
-def run(devtools, page_id, steps, path, restarted=False, target=None, connect=None, began=None, watcher=None):
+def run(devtools, page_id, steps, path, restarted=False, target=None, connect=None, began=None, watcher=None,
+        guard=None):
     """Run the steps in order and return an MCP result: one text report, then any images the steps returned.
 
     The result is an error when a step failed, or the queue stopped at QUEUE_MOST, so the agent cannot mistake a
@@ -527,6 +528,8 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             tab_open's steps count the time it took to open the tab.
         watcher (Watcher | None): the tab's downloads.Watcher, so each step's report says what it downloaded; None
             reports none.
+        guard (Guard | None): the queue's click guard, which may stop a pointer press or keys in the step's place, and
+            takes the viewport screenshots; closed as the queue ends. None checks nothing.
     """
     report, images, failed = [], [], False
     if restarted:
@@ -546,7 +549,13 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             if target and following and following["tool"] == "handle_dialog" and step["tool"] not in OWN_DIALOGS:
                 answerer = dialogs.Answerer(target, following, connect)
                 answerer.start_listening()
-            content, failed = _step(devtools, page_id, step, left, answerer, target, connect)
+            stopped = guard.before(number, step, following) if guard else None
+            if stopped is not None:
+                content, failed = stopped
+            else:
+                content, failed = _step(devtools, page_id, step, left, answerer, target, connect, guard)
+                if guard:
+                    guard.after(step, failed)
             got = watcher.take(min(DOWNLOAD_WAIT, QUEUE_MOST - (time.monotonic() - started))) if watcher else []
             if step["tool"] == "handle_dialog":
                 answerer = None
@@ -575,6 +584,8 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             if number < len(steps):
                 time.sleep(GAP)
     finally:
+        if guard:
+            guard.close()
         if answerer is not None:
             # Its step failed or the queue stopped, but it may have answered a dialog all the same.
             answered = answerer.answered(0)
@@ -592,7 +603,7 @@ def _downloaded(download):
     return "--- %s is still downloading; a later step on this tab says where it went" % download["name"]
 
 
-def _step(devtools, page_id, step, left, answerer, target, connect):
+def _step(devtools, page_id, step, left, answerer, target, connect, guard=None):
     """(content, failed) for one step: a checked step, a pointer step, a screenshot of the viewport, a dialog the
     answerer answered, a refused fill, or the tool's own."""
     if step["tool"] in checked.STEPS:
@@ -601,7 +612,7 @@ def _step(devtools, page_id, step, left, answerer, target, connect):
     if step["tool"] in pointer.STEPS:
         return pointer.run(step, target, connect)
     if screenshot.taken(step):
-        return screenshot.viewport(step, target, connect)
+        return screenshot.viewport(step, target, connect, guard)
     if step["tool"] == "handle_dialog" and answerer is not None:
         answered = answerer.answered(min(dialogs.LATE, left))
         if answered is not None:

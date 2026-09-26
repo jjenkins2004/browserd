@@ -2078,6 +2078,20 @@ PAD = ("<title>pad</title><body style='margin:0'><div id=d style='position:absol
        "kind, (e) => e.isTrusted && seen.push([kind, e.clientX, e.clientY, e.buttons]))</script></body>")
 
 
+# The click guard's page: a Buy button, a button that turns blue on hover, two fields, a div that counts double clicks,
+# and scripts that raise a modal over the page, or move the focus, a moment after they are called.
+GUARD = ("<title>guard</title><style>#h:hover{background:#00f;color:#fff}</style><body style='margin:0'>"
+         "<button id=b style='position:absolute;left:40px;top:40px;width:120px;height:40px' "
+         "onclick='clicks.push(\"b\")'>Buy</button><button id=h style='position:absolute;left:40px;top:120px;"
+         "width:120px;height:40px' onclick='clicks.push(\"h\")'>Hover</button><input id=i style='position:absolute;"
+         "left:40px;top:200px'><input id=j style='position:absolute;left:40px;top:240px'><div id=d "
+         "style='position:absolute;left:300px;top:40px;width:100px;height:40px' ondblclick='clicks.push(\"dbl\")'>"
+         "Double</div><script>window.clicks = []; window.later = (ms) => setTimeout(() => { const m = "
+         "document.createElement('div'); m.id = 'modal'; m.style.cssText = 'position:fixed;left:0;top:0;width:100%;"
+         "height:100%;background:rgba(0,0,0,.6)'; m.onclick = () => clicks.push('modal'); document.body.appendChild(m) },"
+         " ms); window.steal = (ms) => setTimeout(() => j.focus(), ms)</script></body>")
+
+
 def red_box(png, rows_most):
     """The box [left, top, right, bottom] of a PNG's red pixels in its first rows_most rows, and its size; the checks'
     own reading of a screenshot, since the standard library has no image decoder. Red is near it, not exact, as the
@@ -2576,6 +2590,7 @@ def queue_live(profile, state):
               not is_error and returned(text) == [[True, 10, 25]], text)
 
         pad = open_tab(PAD)
+        call(httpd, "queue", session=session, tab=pad, steps=[{"tool": "take_screenshot"}])
         began = time.monotonic()
         text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
             {"tool": "move_at", "x": 50, "y": 60}, {"tool": "click_down"}, {"tool": "move_at", "x": 150, "y": 160},
@@ -2599,12 +2614,58 @@ def queue_live(profile, state):
                   is_error and "as when a dialog is open on it" in text and took < 10, "%.1fs: %s" % (took, text[:300]))
         text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[{"tool": "handle_dialog", "action": "accept"}])
         check("and a handle_dialog step in the next queue answers it", not is_error, text)
+        call(httpd, "queue", session=session, tab=pad, steps=[{"tool": "take_screenshot"}])  # the button now has focus
         began = time.monotonic()
         text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
             {"tool": "click_down"}, {"tool": "click_up"}, {"tool": "handle_dialog", "action": "accept"}])
         took = time.monotonic() - began
         check("a click whose alert a handle_dialog step right after waits on is answered as it opens",
               not is_error and "was accepted as it opened" in text and took < 3, "%.1fs: %s" % (took, text))
+
+        def queued(tab, *steps_):
+            """(text, isError, image count) of one queue call."""
+            status_, answer_ = rpc(httpd, "tools/call", {"name": "queue", "arguments": {
+                "session": session, "tab": tab, "steps": list(steps_)}})
+            result_ = (answer_ or {}).get("result", {})
+            items = result_.get("content", [])
+            return (text_of(items), bool(result_.get("isError")), sum(1 for item in items if item.get("type") == "image"))
+
+        clicks = {"tool": "evaluate_script", "function": "() => clicks"}
+        press = [{"tool": "click_down"}, {"tool": "click_up"}]
+        watched = open_tab(GUARD)
+        text, is_error, shots = queued(watched, {"tool": "move_at", "x": 100, "y": 60}, *press)
+        check("the guard stops a press on a tab no viewport screenshot came back from, and sends one",
+              is_error and "take_screenshot first" in text and shots == 1, text)
+        text, is_error, _ = queued(watched, {"tool": "move_at", "x": 100, "y": 60}, *press, clicks)
+        check("then a press on a spot unchanged since that screenshot goes through", not is_error and returned(text) == ["b"],
+              text)
+        queued(watched, {"tool": "take_screenshot"})
+        text, is_error, _ = queued(watched, {"tool": "move_at", "x": 100, "y": 140}, *press, clicks)
+        check("a press on a button that changes colour on hover goes through: the check comes before the move",
+              not is_error and returned(text) == ["b", "h"], text)
+        queued(watched, {"tool": "evaluate_script", "function": "() => later(1500)"}, {"tool": "take_screenshot"})
+        time.sleep(3)  # well after the screenshot, which the reference must not show it in
+        text, is_error, shots = queued(watched, {"tool": "move_at", "x": 100, "y": 60}, *press)
+        check("a modal that opened after the screenshot stops the press, with the page now as a screenshot",
+              is_error and "Not pressed" in text and shots == 1, text)
+        text, is_error, _ = queued(watched, clicks, {"tool": "evaluate_script", "function": "() => modal.remove()"},
+                                   {"tool": "evaluate_script", "function": "() => i.focus()"}, {"tool": "take_screenshot"})
+        check("and nothing was clicked", returned(text) == ["b", "h"], text)
+        text, is_error, _ = queued(watched, {"tool": "type_text", "text": "ok"},
+                                   {"tool": "evaluate_script", "function": "() => i.value"})
+        check("keys go through where the last reply left the focus", not is_error and returned(text) == "ok", text)
+        queued(watched, {"tool": "evaluate_script", "function": "() => steal(1500)"}, {"tool": "take_screenshot"})
+        time.sleep(3)  # well after the screenshot, which the reference must not show it in
+        text, is_error, shots = queued(watched, {"tool": "type_text", "text": "no"})
+        check("keys are stopped once the focus moved since the last reply", is_error and "focus moved" in text and shots == 1,
+              text)
+        text, is_error, _ = queued(watched, {"tool": "evaluate_script", "function": "() => j.value"})
+        check("and typed nothing", returned(text) == "", text)
+        queued(watched, {"tool": "take_screenshot"})
+        text, is_error, _ = queued(watched, {"tool": "move_at", "x": 350, "y": 60}, *press,
+                                   {"tool": "click_down", "count": 2}, {"tool": "click_up", "count": 2}, clicks)
+        check("a double click's second press is not checked against its first", not is_error and "dbl" in returned(text),
+              text)
 
         text, is_error = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "new_page", "url": "about:blank"}])
         check("a tab-managing tool is refused in a queue", is_error and "new_page" in text, text)

@@ -36,6 +36,7 @@ run `npm ci`).
       downloads.py hears a tab's downloads and where each went
       screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
       pointer.py   the queue's pointer steps: move_at, click_down, click_up
+      guard.py     the click guard: a press or keys stopped when the page changed since the agent's screenshot
       record.py    one queue call's numbered files in a folder
       profiles.py  Profile (name, folder, port); what a new profile is given
       state.py     .run/state.db: the profiles, sessions and tabs
@@ -136,7 +137,8 @@ for both (measured: a fill on a date's Month part failed after 30.1s unselected,
 runs out its timeout still reports ok, on a page half loaded, so `steps.run` gives a `navigate_page` that names no
 `timeout` `steps.NAVIGATE_TIMEOUT` (30s), what it had before. The first report on a tab older than this
 server (carried over: `Workers.get`'s `made` is before `Workers.started`) also says its uids are gone, since an
-earlier server's process may have given some out. **`worker.Workers`** holds
+earlier server's process may have given some out. It also keeps the last viewport screenshots its tab's replies gave
+the agent, and where the focus was as the last one went out, for `guard.Guard`. **`worker.Workers`** holds
 one per tab id. `tab_close`, the page's Close, Close session and Close all paused, `tab_list` (for tabs found closed) and a
 queue on a tab found closed drop it;
 any other failure to reach a tab leaves its process and uids alone. `Workers.pause` stops the processes of a
@@ -346,6 +348,26 @@ same tabs under the same ids. A crash leaves the same.
   step fails saying so, and the pointer is kept where the input put it. chrome-devtools-mcp's own `click_at` (behind `--experimental-vision`, which browserd does
   not pass) cannot hover or drag: WebGames' herding needs the pointer moved over a canvas, and an agent given
   `click_at` spent 40 of them standing in for moves.
+- **The click guard stops a press, or keys, that the page changed under since the agent's last screenshot.** A point
+  read off a screenshot can meet a popup that opened while the agent thought, or one its own last click opened. Each
+  queue gets a `guard.Guard` over its tab's Worker; its reference is the last viewport screenshot a reply gave before
+  the queue arrived, each taken through `Guard.capture`, which first bumps a counter that `guard.PAGE_JS`, a
+  MutationObserver kept in the page, stamps changes with. Measured in `../findings/real-sites.md` (19 sites, 126 agent
+  runs), its setting is:
+  - **pixels (S1):** over 10% of the 24 CSS px square around the point, or 75% of its central 8 px, changed by more
+    than 64 in a channel, against a fresh capture of the same format and scale;
+  - **the page (S2):** an element added, shown or hidden around the point, or text changed within 3 levels of it;
+  - **layout (S6):** a layout shift from or onto the point;
+  - **the page itself:** a new document, a scroll or a resize, or a check that could not tell, which stops too.
+
+  The check runs before a `move_at` that a `click_down` follows, since the hover the move causes is the agent's own,
+  or before a `click_down` whose pointer an earlier queue placed; a `click_down` of count 2 or 3 goes on its first.
+  S2, S6 and the document are read again just before the input goes out (a few ms, against the check's ~100). A press
+  with no reference is stopped too. On a tab a screenshot came back from, `press_key` and `type_text` are stopped when
+  the focus is not where the last reply, key or step left it, or not in what the queue's last press hit, or when
+  something entered the top layer since the screenshot; a tab driven by snapshots alone is never read. A stopped step
+  fails, saying why, with a screenshot of the page now, saved as `<n>-step<k>-stopped.<format>` and the next
+  reference. It forgets its references when browserd restarts, so the first press after a restart is stopped.
 - **Every snapshot a queue reports is a view**: `take_snapshot`'s, `wait_for`'s, an `includeSnapshot`
   step's and the failed queue's. A reply's snapshot runs from chrome-devtools-mcp's
   `## Latest page snapshot` line to the next of the headers it can put after one
@@ -477,7 +499,9 @@ same tabs under the same ids. A crash leaves the same.
     change count, never its contents, and check nothing wrote it. Its pixel checks find a red square drawn on a
     canvas down a scrolled page in a viewport screenshot's own pixels, and click it there with `move_at`,
     `click_down` and `click_up`; its pointer checks drag across a pad that records trusted mouse events, click a
-    button whose alert holds the let-go, and then try a `move_at` and a screenshot with that alert still open.
+    button whose alert holds the let-go, and then try a `move_at` and a screenshot with that alert still open. Its
+    guard checks press with no screenshot, on an unchanged spot, on a button that turns blue on hover, under a modal
+    raised after the screenshot, and twice for a double click, and type with the focus kept and moved.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them (`queue_live`'s download checks also save two files in the real `~/Downloads`, the
     throwaway Chrome keeping Chrome's own download folder, and remove them); a tab already open is never touched. No live check moves the Mac's focus:
