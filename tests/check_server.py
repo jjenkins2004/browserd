@@ -1030,6 +1030,55 @@ def views(workdir):
                                [{"tool": "wait_for", "text": ["Slideshow"]}], lambda name: os.path.join(workdir, "009-" + name))["content"])
     check("a failed wait_for says what it matches", "accessible name is exactly one" in report, report)
 
+    # A handbook of 60 parts, each a heading and 12 lines of text, about 60,000 characters as a view.
+    rows, n = [], 1
+    for part in range(1, 61):
+        rows.append('  uid=1_%d heading "Part %d" level="2"' % (n, part))
+        rows.extend('  uid=1_%d StaticText "Row %d of part %d, with some words in it to fill a line"' % (n + k, k, part)
+                    for k in range(1, 13))
+        n += 13
+    big = "## Latest page snapshot\n" + 'uid=1_0 RootWebArea "Handbook" url="https://example.com/"\n' + "\n".join(rows)
+    path = os.path.join(workdir, "010-step1-snapshot.txt")
+    text, missing = steps.view(big, path)
+    shown = text.split("\n--- cut: ")[0]
+    note = text.split("\n--- cut: ")[1] if "\n--- cut: " in text else ""
+    last = re.findall(r"uid=(1_\d+)", shown)[-1]
+    check("a view over VIEW_MOST is cut at a line, its first line not counted",
+          not missing and len("\n".join(shown.split("\n")[2:])) <= steps.VIEW_MOST and shown.endswith('"'), len(shown))
+    check("and its note says how many lines are left, the call to read on, and names the first HEADINGS_MOST headings "
+          "below the cut, counting the rest",
+          note.startswith("%d more lines below. Read on with take_snapshot {\"after\": \"%s\"}, or from a heading" % (
+              len(rows) + 1 - len(shown.split("\n")) + 1, last))
+          and [line for line in note.split("\n") if ' heading "Part ' in line][0] == 'uid=1_144 heading "Part 12" level="2"'
+          and len([line for line in note.split("\n") if ' heading "Part ' in line]) == steps.HEADINGS_MOST
+          and note.endswith("(and 9 more headings)"), note[:300])
+    text, missing = steps.view(big, path, after=last)
+    check("after reads on from the line after that uid, with its own cut",
+          not missing and "after %s" % last in text.split("\n")[0]
+          and text.split("\n")[1].startswith("  uid=1_%d " % (int(last.split("_")[1]) + 1)) and "--- cut: " in text,
+          text[:300])
+    runs = "## Latest page snapshot\n" + "\n".join(['uid=1_0 RootWebArea "Words"', '  uid=1_1 heading "Top" level="1"'] + [
+        '  uid=1_%d StaticText "w%d"' % (k, k) for k in range(2, 7)] + ['  uid=1_7 StaticText "End of the words"'])
+    text, missing = steps.view(runs, path, after="1_4")
+    check("after takes any uid of the snapshot, one folded into a run of words included",
+          not missing and text.split("\n")[1:] == ['  uid=1_7 StaticText "End of the words"'], text)
+    text, missing = steps.view(runs, path, after="3_4")
+    check("an after uid the snapshot lacks fails the step, saying so",
+          missing and text.endswith("no element has uid=3_4 in this snapshot"), text)
+    mixed = "## Latest page snapshot\n" + "\n".join(['uid=1_0 RootWebArea "Feed"', '  uid=1_1 StaticText "Old post"',
+                                                     '  uid=2_7 StaticText "New post"', '  uid=1_2 StaticText "Footer"'])
+    text, missing = steps.view(mixed, path, after="1_1")
+    check("after goes by place, as a snapshot taken after the page changed mixes 1_x and 2_x uids",
+          not missing and text.split("\n")[1:] == ['  uid=2_7 StaticText "New post"', '  uid=1_2 StaticText "Footer"'], text)
+    text, _ = steps.view(big, path, find="Row")
+    check("the call to read on keeps the view's own options", '{"find": "Row", "after": "1_' in text, text[-400:])
+    rooted = big.replace('url="https://example.com/"', 'url="data:text/html,%s"' % ("x" * 12000))
+    text, _ = steps.view(rooted, path)
+    check("a long first line, like a data: page's url, does not eat the view",
+          text.split("\n")[1].startswith('uid=1_0 RootWebArea') and len(text.split("\n--- cut: ")[0]) > 12000 + 9000, len(text))
+    text, _ = steps.view(big, path, find=r"^\s*uid=\S+ heading")
+    check("a view within VIEW_MOST, like a find's, is not cut", "--- cut: " not in text and text.count(" heading ") == 60, text[:200])
+
 
 class Page:
     """A page whose snapshot is page(n) at its nth take_snapshot."""

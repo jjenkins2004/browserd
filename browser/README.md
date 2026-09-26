@@ -147,7 +147,7 @@ it asks once more, as each queue lets go of its tab, whether the session is paus
 
 **`steps.place_screenshots`** first gives each `take_screenshot` without a `filePath` one among the
 call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added (and
-without take_snapshot's own `under`, `full` and `find`), hands each checked step to `checked.run`, passes
+without take_snapshot's own `under`, `full`, `find` and `after`), hands each checked step to `checked.run`, passes
 every reply's text, less chrome-devtools-mcp's `## Pages` list of every tab in Chrome and its note on
 which page it now selects, and with a `Page navigated to <url>.` line cut to the url's query and fragment
 when the queue's navigation line before it named the same scheme, host and path and the url has a query
@@ -370,7 +370,21 @@ same tabs under the same ids. A crash leaves the same.
   view's header names it. take_snapshot's own `under: uid` keeps only that element and what sits under
   it, a native select there not collapsed, and fails its step when the snapshot lacks the uid;
   `full: true` gives the lines as chrome-devtools-mcp wrote them instead of a view; `find: <regex>`
-  keeps only the lines it matches, ignoring case, and its header counts them. take_snapshot's
+  keeps only the lines it matches, ignoring case, and its header counts them; `after: uid` keeps the lines after
+  that element in the saved snapshot's order, one the view leaves out or folds into a run of words included, and
+  fails its step when the snapshot has no such element. It goes by place, not by number: chrome-devtools-mcp keeps
+  an element's uid from the snapshot that first saw it, so a snapshot taken after the page changed mixes `1_x` and
+  `2_x` uids. A view, or `full`'s lines, over `steps.VIEW_MOST` (10,000 characters, the first line, a page's
+  RootWebArea with its url, not counted) is cut at a line, and a note after it gives how many lines are left, the
+  take_snapshot call that reads on (`after` the last uid shown, with the step's own `under`, `find` or `full`), and
+  the first `steps.HEADINGS_MOST` (40) headings below the cut, whose uids read from there as `after` (`under` a
+  heading gives the heading alone, its section sitting beside it). A view barely over is left whole, when the note
+  would be as long as what it cuts. 145 of 537 views were over 10,000 characters in two MCP-Universe benchmark runs,
+  and every later request of a conversation carries each one again. On a 40- or 80-section page with one fact
+  hidden in its middle, agents found it in 9 of 9 task pairs both with the cut and with views cut only at a reply's
+  `steps.REPLY_MOST` (40,000), in a mean 11.4s against 22.0s (median 12s against 17s) and with 38% fewer input
+  tokens (750k against 1,203k). A failed queue's view of the page now is cut to fit `steps.ERROR_MOST`, which is
+  under `steps.VIEW_MOST`, so it loses the note. take_snapshot's
   `filePath` is refused, since it would skip the view and the record folder. A name ends at the first
   quote followed by one of the attribute names a snapshot line can carry (`steps.ATTRIBUTES`), and a
   native select's value, its last attribute, runs to the line's end, so quotes inside either are kept.

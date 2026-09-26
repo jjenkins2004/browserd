@@ -276,7 +276,10 @@ press), and the dialog is answered the moment it opens, or up to 5s after that s
 answers its own with dialogAction (default accept), so takes none. A dialog no handle_dialog step waits on blocks
 the page: its step takes about 5s and counts as done, and a handle_dialog step in the next queue answers it.
 
-A step that loads a new page (navigate_page, a link or submit click) makes every uid new: end the queue with
+A view over 10,000 characters, full's lines included, is cut at a line, and its note gives the take_snapshot call
+that reads on and the headings below the cut: take_snapshot's after, a uid, gives the lines after that element, so a
+heading's uid reads from there. A step that loads a new page (navigate_page, a link or submit click) makes every uid
+new: end the queue with
 take_snapshot and use its uids in the next queue. navigate_page leaves a page even when the page asks to stay
 (unsaved changes); give it handleBeforeUnload "dismiss" to stay. A view shows names and values as the page has them, quotes
 and all; a spinbutton's value= is its aria-valuenow, which some pages never update, while expect reads what it holds.
