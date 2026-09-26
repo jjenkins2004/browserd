@@ -21,6 +21,7 @@ RESTARTED = ("note: this tab's chrome-devtools-mcp had stopped and was started a
 GAP = 0.1  # seconds between steps, so the page can react to one step before the next
 NAVIGATE_TIMEOUT = 30000  # ms a navigate_page that names none gives the load; README.md, "Core Abstractions & Shared Pieces"
 QUEUE_MOST = 50.0  # seconds a queue starts steps for; README.md, "Agent Gotchas & Invariants", says why
+DOWNLOAD_WAIT = 5.0  # seconds a step waits for a download it began to end; README.md, "Agent Gotchas & Invariants"
 REPLY_MOST = 40000  # characters of one step's reply a report holds; the whole reply is saved when longer
 ERROR_MOST = 9000  # characters a failed queue's report keeps under, its view of the page now cut to fit; README.md
 PAGE_NOW_LEAST = 2000  # characters of the view of the page now a failed report keeps, however much its steps took
@@ -493,7 +494,7 @@ def _text(content):
     return "\n".join(item.get("text", "") for item in content if item.get("type") == "text").strip()
 
 
-def run(devtools, page_id, steps, path, restarted=False, target=None, connect=None, began=None):
+def run(devtools, page_id, steps, path, restarted=False, target=None, connect=None, began=None, watcher=None):
     """Run the steps in order and return an MCP result: one text report, then any images the steps returned.
 
     The result is an error when a step failed, or the queue stopped at QUEUE_MOST, so the agent cannot mistake a
@@ -510,6 +511,8 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
         connect (callable | None): opens a proven connection to the tab's Chrome; given with target.
         began (float | None): time.monotonic() when the call began, if before this, so QUEUE_MOST counts from then:
             tab_open's steps count the time it took to open the tab.
+        watcher (Watcher | None): the tab's downloads.Watcher, so each step's report says what it downloaded; None
+            reports none.
     """
     report, images, failed = [], [], False
     if restarted:
@@ -530,6 +533,7 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
                 answerer = dialogs.Answerer(target, following, connect)
                 answerer.start_listening()
             content, failed = _step(devtools, page_id, step, left, answerer, target, connect)
+            got = watcher.take(min(DOWNLOAD_WAIT, QUEUE_MOST - (time.monotonic() - started))) if watcher else []
             if step["tool"] == "handle_dialog":
                 answerer = None
             took = time.monotonic() - began
@@ -549,6 +553,7 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             report.append("--- %d %s %s %.1fs" % (number, step["tool"], "FAILED" if failed else "ok", took))
             # A failed step's own reply is cut to half a failed report, so the view of the page now still fits.
             report.append(_capped(text, path("step%d-reply.txt" % number), ERROR_MOST // 2 if failed else REPLY_MOST))
+            report.extend(_downloaded(download) for download in got)
             images.extend(item for item in content if item.get("type") == "image")
             if failed:
                 report.extend(_after_stop(devtools, page_id, steps, number, path, len("\n".join(report))))
@@ -562,6 +567,15 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             if answered is not None:
                 report.append("--- %s, though its handle_dialog step did not run" % answered)
     return {"content": [{"type": "text", "text": "\n".join(report)}] + images, "isError": failed}
+
+
+def _downloaded(download):
+    """The report's line for one download a step began, or one begun earlier that has since ended."""
+    if download["state"] == "completed":
+        return "--- downloaded %s to %s" % (download["name"], download["path"])
+    if download["state"] == "canceled":
+        return "--- the download of %s was canceled or failed" % download["name"]
+    return "--- %s is still downloading; a later step on this tab says where it went" % download["name"]
 
 
 def _step(devtools, page_id, step, left, answerer, target, connect):

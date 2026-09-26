@@ -7,7 +7,7 @@ import secrets
 import threading
 import time
 
-from . import cdp
+from . import cdp, downloads
 from .devtools import Devtools
 
 PROBE_WAIT = 15.0
@@ -51,6 +51,7 @@ class Worker:
         self._devtools = None
         self._carried = carried
         self.page_id = None
+        self.watcher = None  # the tab's downloads.Watcher, from ensure until stop or pause
 
     def ensure(self):
         """(Devtools, page id, restarted): the running process, starting and pairing one when there is none.
@@ -59,6 +60,7 @@ class Worker:
         carried over from an earlier server, whose processes stopped with it.
         """
         if self._devtools is not None and self._devtools.alive():
+            self._listen()
             return self._devtools, self.page_id, False
         # The dead process stays here until a new one pairs, so this holds.
         restarted = self._devtools is not None or self._carried
@@ -72,7 +74,14 @@ class Worker:
             devtools.close()  # stored nowhere yet, so nothing else could ever stop it
             raise
         self._devtools, self._carried = devtools, False
+        self._listen()
         return devtools, self.page_id, restarted
+
+    def _listen(self):
+        """Hear the tab's downloads, starting a Watcher again if the last one ended, as one that lost the tab does."""
+        if self.watcher is None or not self.watcher.is_alive():
+            self.watcher = downloads.Watcher(self.target_id, self.connect)
+            self.watcher.start_listening()
 
     def _pair(self, devtools):
         """This tab's page id in chrome-devtools-mcp; README.md, "Agent Gotchas & Invariants", says how it is found."""
@@ -112,6 +121,9 @@ class Worker:
                            % (self.tab, "; " + "; ".join(refused) if refused else ""))
 
     def stop(self):
+        watcher, self.watcher = self.watcher, None
+        if watcher is not None:
+            watcher.stop()
         if self._devtools is not None:
             self._devtools.close()
             self._devtools = None
@@ -119,6 +131,9 @@ class Worker:
     def pause(self):
         """Stop the process to free its memory, and return whether one was running; README.md, "Core Abstractions &
         Shared Pieces", says why the dead process stays."""
+        watcher, self.watcher = self.watcher, None  # stop_all may stop it too as the server stops
+        if watcher is not None:
+            watcher.stop()
         devtools = self._devtools  # stop_all may clear it as the server stops
         if devtools is None or not devtools.alive():
             return False

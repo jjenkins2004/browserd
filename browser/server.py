@@ -325,7 +325,7 @@ def queue_steps(state, tabs, workers, allowed, calls=CALLS):
             with worker.lock:
                 devtools, page_id, restarted = worker.ensure()
                 result = steps.run(devtools, page_id, planned, call.path, restarted, worker.target_id, worker.connect,
-                                   began)
+                                   began, worker.watcher)
                 if result["isError"] and "No page found" in result["content"][0]["text"]:
                     # It renumbered its pages after reconnecting; the next queue pairs a new process and notes the
                     # restart.

@@ -24,7 +24,7 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import cdp, checked, chromes, dialogs, focus, mcp, page, profiles, record, server, service, sessions, steps
+from browser import cdp, checked, chromes, dialogs, downloads, focus, mcp, page, profiles, record, server, service, sessions, steps
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
 from browser.state import Session, State, Tab
@@ -1131,6 +1131,110 @@ def dialogs_offline():
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+class FakeDownloads:
+    """The connection a downloads.Watcher holds: it hands out the events in `events`, which a check may add to, one per
+    wait."""
+
+    def __init__(self, events=()):
+        self.events = list(events)
+
+    def call(self, method, session=None, **params):
+        return {"sessionId": "S1"} if method == "Target.attachToTarget" else {}
+
+    def next_event(self, timeout):
+        if self.events:
+            return self.events.pop(0)
+        time.sleep(0.01)
+        return None
+
+    def close(self):
+        pass
+
+
+def will_begin(guid, name, session="S1"):
+    return {"method": "Page.downloadWillBegin", "sessionId": session, "params": {"guid": guid, "suggestedFilename": name}}
+
+
+def progress(guid, state, path=None):
+    return {"method": "Browser.downloadProgress", "params": dict({"guid": guid, "state": state}, **({"filePath": path} if path else {}))}
+
+
+def downloads_offline():
+    """downloads.Watcher against a stand-in connection, and steps.run reporting what it took."""
+    connection = FakeDownloads([will_begin("G1", "note.txt"), will_begin("G2", "theirs.txt", "S2"),
+                                progress("G1", "completed", "/Users/x/Downloads/note.txt"), progress("G2", "completed", "/y")])
+    watcher = downloads.Watcher("T1", lambda: connection)
+    watcher.start_listening()
+    try:
+        time.sleep(0.1)
+        got = watcher.take(2)
+        check("a download the tab began is taken once it completes, with where it went; another tab's is not",
+              got == [{"name": "note.txt", "state": "completed", "path": "/Users/x/Downloads/note.txt"}], repr(got))
+        check("and is taken only once", watcher.take(0) == [])
+        connection.events.append(will_begin("G3", "big.zip"))
+        time.sleep(0.1)
+        started = time.monotonic()
+        got = watcher.take(0.3)
+        check("one still in progress after the wait is taken as such",
+              got == [{"name": "big.zip", "state": "inProgress", "path": None}] and time.monotonic() - started < 1, repr(got))
+        started = time.monotonic()
+        check("and a take after that neither waits for it nor takes it again",
+              watcher.take(2) == [] and time.monotonic() - started < 0.5)
+        connection.events.append(progress("G3", "canceled"))
+        time.sleep(0.1)
+        got = watcher.take(0)
+        check("it is taken again once it ends", got == [{"name": "big.zip", "state": "canceled", "path": None}], repr(got))
+    finally:
+        watcher.stop()
+    connection = FakeDownloads([created("P1", "T1"), created("P2", "P1"), created("X1", "X0"),
+                                {"method": "Browser.downloadWillBegin", "params": {"guid": "G4", "frameId": "P2", "suggestedFilename": "popped.pdf"}},
+                                {"method": "Browser.downloadWillBegin", "params": {"guid": "G5", "frameId": "X1", "suggestedFilename": "theirs.pdf"}},
+                                progress("G4", "completed", "/d/popped.pdf"), progress("G5", "completed", "/d/theirs.pdf")])
+    watcher = downloads.Watcher("T1", lambda: connection)
+    watcher.start_listening()
+    try:
+        time.sleep(0.1)
+        got = watcher.take(2)
+        check("a download begun in a page the tab opened, or one that page opened, is the tab's; another tab's popup's is not",
+              got == [{"name": "popped.pdf", "state": "completed", "path": "/d/popped.pdf"}], repr(got))
+    finally:
+        watcher.stop()
+
+    def unreachable():
+        raise cdp.CdpError("nothing is listening")
+
+    watcher = downloads.Watcher("T1", unreachable)
+    started = time.monotonic()
+    watcher.start_listening()
+    check("a watcher that cannot reach the tab ends at once, and takes nothing",
+          time.monotonic() - started < 1 and watcher.take(0) == [] and not watcher.is_alive())
+
+    class Taken:
+        def __init__(self, *takes):
+            self.takes = list(takes)
+
+        def take(self, wait):
+            return self.takes.pop(0) if self.takes else []
+
+    workdir = tempfile.mkdtemp(prefix="browser-downloads-")
+    try:
+        called = lambda name: os.path.join(workdir, "001-" + name)
+        fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False),
+                             ([{"type": "text", "text": "Successfully clicked on the element"}], False)])
+        report = text_of(steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "click", "uid": "1_2"}], called,
+                                   watcher=Taken([{"name": "note.txt", "state": "completed", "path": "/d/note.txt"},
+                                                    {"name": "big.zip", "state": "inProgress", "path": None}],
+                                                   [{"name": "big.zip", "state": "completed", "path": "/d/big.zip"}]))["content"])
+        check("a step's report says what it downloaded and where, and what is still downloading, under its own reply",
+              re.search(r"--- 1 click ok .*\nSuccessfully clicked on the element\n--- downloaded note.txt to /d/note.txt\n"
+                        r"--- big.zip is still downloading; a later step on this tab says where it went\n--- 2 click ok", report)
+              is not None, report)
+        check("and a later step's report says where one still downloading went",
+              report.endswith("--- downloaded big.zip to /d/big.zip"), report)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 class Keys:
     """A connection to a profile's Chrome that records what it is asked. Each Runtime.evaluate answers the next of
     values, an exception as a script error: by default the page handed the text, ready, one paste seen, and the text
@@ -2177,6 +2281,29 @@ def queue_live(profile, state):
             {"tool": "fill", "uid": born, "value": "1957-08-01"}, {"tool": "expect", "uid": born, "value": "1957-08-01"}])
         check("fill on the date field itself, as 1957-08-01, takes", not is_error, text)
 
+        name = "browserd-check-%d.txt" % os.getpid()
+        fetched = open_tab("<title>download scratch</title><a download=%s href='data:text/plain,hello'>Get it</a>" % name)
+        text, _ = call(httpd, "queue", session=session, tab=fetched, steps=[{"tool": "take_snapshot"}])
+        text, is_error = call(httpd, "queue", session=session, tab=fetched, steps=[{"tool": "click", "uid": uid(text, "link", "Get it")}])
+        went = re.search(r"^--- downloaded %s to (.+)$" % re.escape(name), text, re.M)
+        try:
+            check("a step that downloads a file says where it went, in the step's own report",
+                  not is_error and went is not None and open(went.group(1)).read() == "hello", text)
+        finally:
+            if went:
+                os.remove(went.group(1))  # the check's own file, in the real ~/Downloads, the throwaway Chrome's download folder
+        popping = open_tab("<title>popup download scratch</title>"
+                           "<a target=_blank href='data:application/octet-stream,hello popup'>Get it</a>")
+        text, _ = call(httpd, "queue", session=session, tab=popping, steps=[{"tool": "take_snapshot"}])
+        text, is_error = call(httpd, "queue", session=session, tab=popping, steps=[{"tool": "click", "uid": uid(text, "link", "Get it")}])
+        went = re.search(r"^--- downloaded .+ to (.+)$", text, re.M)
+        try:
+            check("and so does one begun in a popup the step opened",
+                  not is_error and went is not None and open(went.group(1)).read() == "hello popup", text)
+        finally:
+            if went:
+                os.remove(went.group(1))
+
         path = os.path.join(workdir, "steps.json")
         with open(path, "w") as handle:
             json.dump([{"tool": "fill", "uid": uid(snap_a, "textbox", "Name"), "value": "from a file"}], handle)
@@ -2277,6 +2404,8 @@ if __name__ == "__main__":
     queue_offline()
     print()
     dialogs_offline()
+    print()
+    downloads_offline()
     print()
     paste_offline()
     print()

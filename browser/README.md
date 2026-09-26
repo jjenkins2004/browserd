@@ -33,6 +33,7 @@ run `npm ci`).
       steps.py     the queue: load, check, run, report; snapshot views
       checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
+      downloads.py hears a tab's downloads and where each went
       record.py    one queue call's numbered files in a folder
       profiles.py  Profile (name, folder, port); what a new profile is given
       state.py     .run/state.db: the profiles, sessions and tabs
@@ -291,6 +292,19 @@ same tabs under the same ids. A crash leaves the same.
   `dialogAction`, `navigate_page`'s `handleBeforeUnload`, and `handle_dialog`), which answer their own.
   When a queue stops before its `handle_dialog` step runs, the report still says what the answerer
   answered.
+- **A step that begins a download says where it went.** Chrome saves a download where that Chrome's own
+  settings say (`~/Downloads` unless changed), and chrome-devtools-mcp's reply never names it; an agent told nothing
+  failed WebGames' combination-lock task in a benchmark, hunting for the file through `file://` listings. So a tab's
+  `Worker` runs a `downloads.Watcher` from `ensure` until `stop` or `pause`, on a connection of its own to the tab:
+  `Page.enable` for `Page.downloadWillBegin`, which only the tab's own downloads send; `Target.setDiscoverTargets`,
+  to follow the popups it opens, whose downloads send only `Browser.downloadWillBegin`, naming the popup; and
+  `Browser.setDownloadBehavior` with `behavior: default` and `eventsEnabled`, which keeps Chrome's own behaviour and
+  only asks for `Browser.downloadProgress`. After each step, `steps.run` waits up to `steps.DOWNLOAD_WAIT` (5s, or
+  the queue's time left) for a download the step began to end, and its report says `downloaded <name> to <path>`,
+  that it was canceled or failed, or that it is still downloading; the first step on the tab after it ends then
+  says where it went, in this queue or a later one, unless the tab's `Watcher` was stopped or started again
+  meanwhile. A download heard only after a step's reply came back lands in the next step's report, the next
+  queue's first when that step was the last.
 - **A step that opens a dialog nothing waits on counts as done.** chrome-devtools-mcp fails it after
   about 5s, with an `# Open dialog` section in its reply; `steps.run` counts it as done, so a
   `handle_dialog` step in the next queue answers it. A reply that also holds `A dialog is open (`,
@@ -413,7 +427,7 @@ same tabs under the same ids. A crash leaves the same.
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
     `tabs_offline` and `session_tools_offline` stand in for Chrome and `osascript`, with `state.db` in a
     temporary folder; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
-    `dialogs_offline` for the answerer's connection; `paste_offline` for chrome-devtools-mcp and
+    `dialogs_offline` for the answerer's connection; `downloads_offline` for the watcher's connection; `paste_offline` for chrome-devtools-mcp and
     the connection that hands the page its text and presses the paste key; `limits_offline` for a slow tool;
     `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
     and a folder's running Chrome, and `page_offline` for Chrome, `focus.bring` and each tab's Worker, with `.run/state.db` and the Google
@@ -430,7 +444,8 @@ same tabs under the same ids. A crash leaves the same.
     handle_dialog step after it, makes one click take about 5s. Its paste checks read the Mac's clipboard's
     change count, never its contents, and check nothing wrote it.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
-    them, and close them; a tab already open is never touched. No live check moves the Mac's focus:
+    them, and close them (`queue_live`'s download checks also save two files in the real `~/Downloads`, the
+    throwaway Chrome keeping Chrome's own download folder, and remove them); a tab already open is never touched. No live check moves the Mac's focus:
     `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
   - **Never automated:** `../start`, `../stop` and `../restart` are never run, since each acts on the real
     browserd: stopping quits every profile's Chrome, and restarting replaces the one running.
