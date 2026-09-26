@@ -470,12 +470,25 @@ def session_tools_offline():
         other = call(httpd, "session_start", profile="School", label="other")[0].split()[1].rstrip(",")
         text, is_error = call(httpd, "tab_list", session=other)
         check("another session's list does not show it", not is_error and opened not in text and "no open tabs" in text, text)
-        text, is_error = call(httpd, "tab_close", session=other, tab=opened)
+        text, is_error = call(httpd, "tab_close", session=other, tabs=[opened])
         check("another session cannot close it", is_error and "no tab of this session" in text, text)
         text, is_error = call(httpd, "tab_show", session=session, tab=opened)
         check("tab_show answers with the tab's id and URL", not is_error and text.split()[0] == opened, text)
         state.touch(session, 0)
-        check("tab_close closes by id", call(httpd, "tab_close", session=session, tab=opened) == ("closed %s" % opened, False))
+        check("tab_close closes by id", call(httpd, "tab_close", session=session, tabs=[opened]) == ("closed %s" % opened, False))
+        first, second = (call(httpd, "tab_open", session=session, url="https://example.com/%s" % n)[0].split()[0] for n in "de")
+        text, is_error = call(httpd, "tab_close", session=session, tabs=[first, second, first])
+        check("tab_close closes several tabs in one call, a tab named twice once",
+              (text, is_error) == ("closed %s, %s" % (first, second), False) and first not in call(httpd, "tab_list", session=session)[0],
+              text)
+        third = call(httpd, "tab_open", session=session, url="https://example.com/f")[0].split()[0]
+        text, is_error = call(httpd, "tab_close", session=session, tabs=[opened, third])
+        check("one it cannot close still lets the rest close, and makes the result an error naming it and why",
+              is_error and text == "closed %s\ncould not close %s: tab %s is closed" % (third, opened, opened), text)
+        for tabs_given in ([], opened, [""]):
+            text, is_error = call(httpd, "tab_close", session=session, tabs=tabs_given)
+            check("tab_close given tabs=%r is refused, showing a list" % (tabs_given,),
+                  is_error and 'tabs must be a list of one or more tab ids, like ["k3f9", "m2x7"]' in text, text)
         check("and any call moves the session's last call to now", time.time() - state.session(session).last_call < 5)
         state.close_all(time.time())
         text, is_error = call(httpd, "tab_list", session=session)
@@ -2052,7 +2065,7 @@ def live(profile, state):
         opened = text.split()[0] if text else ""
         check("tab_open works over HTTP against a profile's Chrome", not is_error and "over http" in text, text)
         check("tab_list over HTTP lists it", opened in call(httpd, "tab_list", session=over)[0])
-        check("tab_close over HTTP closes it", call(httpd, "tab_close", session=over, tab=opened) == ("closed %s" % opened, False))
+        check("tab_close over HTTP closes it", call(httpd, "tab_close", session=over, tabs=[opened]) == ("closed %s" % opened, False))
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -2656,7 +2669,7 @@ def queue_live(profile, state):
         check("tab_list stops the chrome-devtools-mcp of a tab closed outside the server", by_hand is not None and not by_hand.alive())
 
         process = workers.get(b, tabs.target(mine, b), profile)._devtools
-        call(httpd, "tab_close", session=session, tab=b)
+        call(httpd, "tab_close", session=session, tabs=[b])
         opened.remove(b)
         check("closing a tab stops its chrome-devtools-mcp", process is not None and not process.alive())
         text, is_error = call(httpd, "queue", session=session, tab=b, steps=[{"tool": "take_snapshot"}])
@@ -2672,7 +2685,7 @@ def queue_live(profile, state):
               numbered and total > 20 and set(os.listdir(home)) >= {a, b}, repr(os.listdir(home)))
     finally:
         for tab in opened:
-            call(httpd, "tab_close", session=session, tab=tab)
+            call(httpd, "tab_close", session=session, tabs=[tab])
         workers.stop_all()
         httpd.shutdown()
         httpd.server_close()

@@ -116,7 +116,9 @@ them on the new tab through it (recorded as that tab's queue call), `steps.QUEUE
 `tab_open`, and answers with its tab id, title and URL, then the report, or those and why its steps did not run. Agents
 read a new tab right after opening it (measured in benchmarks: most with a lone `take_snapshot` queue, and 8 of 11
 calls of a queue step's name as a top-level tool came right after `tab_open`). Without `queue` (as most checks build
-them), `tab_open` lists no `steps` argument, and ignores one given. All turn `cdp.CdpError`
+them), `tab_open` lists no `steps` argument, and ignores one given. `tab_close` takes `tabs`, a list of tab ids, and closes each
+it can in one call, naming any it could not, and why, in an error result: agents told to close the browser close their tabs
+as they finish, and one call per tab was 21 to 27% of their calls in two benchmark runs. All turn `cdp.CdpError`
 into `ToolError`, and all but `session_start` run through `_in_session`, which refuses a missing, malformed,
 unknown or closed session and moves its last call to now as the call starts and as it ends. The queue records
 into `server.CALLS/<profile>/<session>-<label>/<tab>/`, so it refuses a tab argument not shaped like a tab id

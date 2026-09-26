@@ -16,6 +16,7 @@ from .devtools import Devtools
 from .state import Session, State
 from .tabs import NOT_AN_ID, NOT_YOURS, Tabs, is_id
 from .worker import Workers
+from .ws import WebSocketError
 
 HOST = "127.0.0.1"
 PORT = 9230
@@ -157,10 +158,24 @@ def tab_tools(state, tabs, workers, queue=None):
         return _line(tab, tabs.show(session, tab))
 
     def tab_close(session, arguments):
-        tab = _text(arguments, "tab")
-        tabs.close(session, tab)
-        workers.drop(tab)
-        return "closed %s" % tab
+        wanted = arguments.get("tabs")
+        if not isinstance(wanted, list) or not wanted or not all(isinstance(tab, str) and tab for tab in wanted):
+            raise mcp.ToolError("tabs must be a list of one or more tab ids, like [\"k3f9\", \"m2x7\"]")
+        closed, refused = [], []
+        for tab in dict.fromkeys(wanted):  # a tab named twice is closed once
+            try:
+                tabs.close(session, tab)
+            except (cdp.CdpError, WebSocketError, OSError) as exc:
+                refused.append("%s: %s" % (tab, exc))  # the rest are still closed
+                if _closed(state, tab):
+                    workers.drop(tab)
+                continue
+            workers.drop(tab)
+            closed.append(tab)
+        said = "closed %s" % ", ".join(closed) if closed else "closed none"
+        if refused:  # a ToolError, so the log records what was refused and what was given
+            raise mcp.ToolError("\n".join([said] + ["could not close %s" % why for why in refused]))
+        return said
 
     session_argument = {"type": "string", "description": "your session id, from session_start"}
     opening = {"session": session_argument, "url": {"type": "string"}}
@@ -199,8 +214,13 @@ def tab_tools(state, tabs, workers, queue=None):
                         "Mac; return its tab id, title and URL.",
          "inputSchema": by_tab},
         {"name": "tab_close", "run": _refusing(_in_session(state, tab_close)),
-         "description": "Close a tab of your session by its tab id.",
-         "inputSchema": by_tab},
+         "description": "Close tabs of your session by their tab ids, every one you name in this one call: to close "
+                        "several, list them all in one tab_close, never one call per tab.",
+         "inputSchema": {"type": "object", "required": ["session", "tabs"], "additionalProperties": False,
+                         "properties": {"session": session_argument,
+                                        "tabs": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                                                 "description": "tab ids from tab_open or tab_list, like "
+                                                                "[\"k3f9\", \"m2x7\"]"}}}},
     ]
 
 
