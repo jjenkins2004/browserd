@@ -10,7 +10,7 @@ import re
 import time
 import urllib.parse
 
-from . import cdp, checked, dialogs, screenshot
+from . import cdp, checked, dialogs, pointer, screenshot
 from .devtools import may_touch
 
 # Tab tools own opening, closing and choosing tabs, and the rest profile a page, which a queue only reads and drives.
@@ -100,9 +100,9 @@ def _shape(spec):
 def describe(tools):
     """One line per tool for the steps argument's description: name(arguments), then its first sentence.
 
-    The queue's own checked steps come first.
+    The queue's own checked and pointer steps come first.
     """
-    lines = [checked.describe()]
+    lines = [checked.describe(), pointer.describe()]
     for name, tool in sorted(tools.items()):
         schema = tool.get("inputSchema", {})
         required = set(schema.get("required", []))
@@ -180,6 +180,8 @@ def check(steps, allowed):
         tool = step["tool"]
         if tool in checked.STEPS:
             wrong = checked.problem(step)
+        elif tool in pointer.STEPS:
+            wrong = pointer.problem(step)
         elif tool in LEFT_OUT:
             wrong = "%s is left out of a queue: %s" % (tool, (
                 "tab_open, tab_list, tab_show and tab_close manage tabs, and the tab argument chooses the page"
@@ -188,7 +190,7 @@ def check(steps, allowed):
             wrong = "%r is not a tool a queue can run; it runs %s (the steps argument's description gives their " \
                     "arguments; if it lacks one, your next turn has the new list, and if that still lacks it, ask " \
                     "the user to reconnect browserd with /mcp)" \
-                    % (tool, ", ".join(list(checked.STEPS) + sorted(allowed)))
+                    % (tool, ", ".join(list(checked.STEPS) + list(pointer.STEPS) + sorted(allowed)))
         else:
             wrong = _arguments_problem(step, allowed[tool])
         if wrong:
@@ -582,11 +584,13 @@ def _downloaded(download):
 
 
 def _step(devtools, page_id, step, left, answerer, target, connect):
-    """(content, failed) for one step: a checked step, a screenshot of the viewport, a dialog the answerer answered, a
-    refused fill, or the tool's own."""
+    """(content, failed) for one step: a checked step, a pointer step, a screenshot of the viewport, a dialog the
+    answerer answered, a refused fill, or the tool's own."""
     if step["tool"] in checked.STEPS:
         text, failed = checked.run(devtools, page_id, step, left, target, connect)
         return [{"type": "text", "text": text}], failed
+    if step["tool"] in pointer.STEPS:
+        return pointer.run(step, target, connect)
     if screenshot.taken(step):
         return screenshot.viewport(step, target, connect)
     if step["tool"] == "handle_dialog" and answerer is not None:

@@ -10,6 +10,7 @@ from . import cdp
 from .ws import WebSocketError
 
 FORMAT, QUALITY = "jpeg", 80  # a quarter of a PNG's bytes, which every later request of a conversation carries again
+ANSWER_WAIT = 5.0  # seconds the page has to answer before a screenshot fails, as it never does while a dialog is open
 LONGEST = 2000  # pixels on the image's longer side; Claude Code shrinks a larger image, moving every point read off it
 
 
@@ -62,7 +63,11 @@ def capture(browser, session, kind, quality):
         kind (str): png, jpeg or webp.
         quality (int): for jpeg and webp.
     """
-    metrics = browser.call("Page.getLayoutMetrics", session)
+    try:
+        metrics = browser.call("Page.getLayoutMetrics", session, ANSWER_WAIT)
+    except cdp.Late:
+        raise cdp.CdpError("the page did not answer in %gs, as when a dialog is open on it: answer it with a "
+                           "handle_dialog step first" % ANSWER_WAIT)
     css, device = metrics["cssVisualViewport"], metrics["visualViewport"]
     if css["clientWidth"] <= 0 or css["clientHeight"] <= 0:
         raise cdp.CdpError("the tab has no viewport to take a screenshot of")

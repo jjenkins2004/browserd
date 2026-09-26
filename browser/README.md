@@ -35,6 +35,7 @@ run `npm ci`).
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       downloads.py hears a tab's downloads and where each went
       screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
+      pointer.py   the queue's pointer steps: move_at, click_down, click_up
       record.py    one queue call's numbered files in a folder
       profiles.py  Profile (name, folder, port); what a new profile is given
       state.py     .run/state.db: the profiles, sessions and tabs
@@ -56,7 +57,8 @@ profile's port and folder (never Chrome's default folder, where Chrome refuses a
 Chrome profile `cdp.PROFILE` (`Default`), and Chrome's binary path. A Chrome not running at all is
 `cdp.NotRunning`, found before the folder's `Local State` is read, since a new profile's folder stays empty until its Chrome
 first starts. **`cdp.Browser`** is one browser-wide websocket; a command carries a CDP session id (`Target.attachToTarget`'s `sessionId`) to reach a tab,
-`pid` is that Chrome's, as `SystemInfo.getProcessInfo` gave it, and `profile` is whose it is.
+`pid` is that Chrome's, as `SystemInfo.getProcessInfo` gave it, and `profile` is whose it is; `call`'s `wait` gives
+one command a timeout of its own in place of `cdp.CALL_WAIT` (a pointer step's 5s).
 
 **`chromes.Chromes`** is where the server starts and quits each profile's Chrome; it keeps no list of running
 ones, asking `cdp.owner` each time. `ensure(profile)` starts a profile's
@@ -324,7 +326,25 @@ same tabs under the same ids. A crash leaves the same.
   reads (seen: 2,400 to 2,000), is shrunk to it, and the line gives the factor to multiply a point by. A
   `take_screenshot` of an element (`uid`) or the whole page (`fullPage`) is still chrome-devtools-mcp's, in device
   pixels, saved as `<n>-step<k>-screenshot.png` (or its format's) and reported by path, not as an image:
-  chrome-devtools-mcp attaches an image only when no path is given.
+  chrome-devtools-mcp attaches an image only when no path is given. A page gets `screenshot.ANSWER_WAIT` (5s) to
+  answer `Page.getLayoutMetrics`, which it never does while a dialog is open, before the step fails saying to answer
+  the dialog first.
+- **The pointer steps are a hand's three moves: `move_at x,y`, `click_down` and `click_up`.** A click is the three
+  in turn, a drag puts a second `move_at` between the press and the let-go, and a hover is a `move_at` alone, so no
+  step repeats another's work. `pointer.run` sends each as one `Input.dispatchMouseEvent` on a connection of its own
+  to the tab, at a viewport screenshot's CSS pixels, and keeps where the pointer is and which buttons it holds for
+  each tab (`pointer._pointers`, by target id), since `click_down` and `click_up` act where the pointer is; browserd
+  forgets it when it restarts, so a `click_down` or `click_up` on a tab no `move_at` has placed the pointer on since
+  browserd started is refused. A `move_at` with a button down carries it, as a drag. A pointer step whose input
+  opens an alert, confirm or prompt (most often a `click_up`, since a click fires on the let-go) is not answered
+  until the dialog is (measured: `Input.dispatchMouseEvent` waited out the 20s `cdp.CALL_WAIT`), so each pointer
+  step waits `pointer.DIALOG_WAIT` (5s) for its input to be answered, then hears the dialog on the `Page.enable` it
+  asked for and counts as done, saying so, as a chrome-devtools-mcp step does; a `handle_dialog` step right after
+  answers it as it opens. A dialog open already holds the `Page.enable` too, so the step fails after those 5s, sending
+  nothing and saying to answer it first; input a busy page has not taken after them lands once it is free, so the
+  step fails saying so, and the pointer is kept where the input put it. chrome-devtools-mcp's own `click_at` (behind `--experimental-vision`, which browserd does
+  not pass) cannot hover or drag: WebGames' herding needs the pointer moved over a canvas, and an agent given
+  `click_at` spent 40 of them standing in for moves.
 - **Every snapshot a queue reports is a view**: `take_snapshot`'s, `wait_for`'s, an `includeSnapshot`
   step's and the failed queue's. A reply's snapshot runs from chrome-devtools-mcp's
   `## Latest page snapshot` line to the next of the headers it can put after one
@@ -439,7 +459,7 @@ same tabs under the same ids. A crash leaves the same.
     temporary folder; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
     `dialogs_offline` for the answerer's connection; `downloads_offline` for the watcher's connection; `paste_offline` for chrome-devtools-mcp and
     the connection that hands the page its text and presses the paste key; `screenshot_offline` for the connection
-    a viewport screenshot is taken over; `limits_offline` for a slow tool;
+    a viewport screenshot is taken over; `pointer_offline` for the connection mouse input is sent over; `limits_offline` for a slow tool;
     `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
     and a folder's running Chrome, and `page_offline` for Chrome, `focus.bring` and each tab's Worker, with `.run/state.db` and the Google
     folder each in a temporary folder;
@@ -454,7 +474,9 @@ same tabs under the same ids. A crash leaves the same.
     it without cancelling Chrome's own insert, as Slides does, and whose Warn me confirm, clicked with no
     handle_dialog step after it, makes one click take about 5s. Its paste checks read the Mac's clipboard's
     change count, never its contents, and check nothing wrote it. Its pixel checks find a red square drawn on a
-    canvas down a scrolled page in a viewport screenshot's own pixels.
+    canvas down a scrolled page in a viewport screenshot's own pixels, and click it there with `move_at`,
+    `click_down` and `click_up`; its pointer checks drag across a pad that records trusted mouse events, click a
+    button whose alert holds the let-go, and then try a `move_at` and a screenshot with that alert still open.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them (`queue_live`'s download checks also save two files in the real `~/Downloads`, the
     throwaway Chrome keeping Chrome's own download folder, and remove them); a tab already open is never touched. No live check moves the Mac's focus:

@@ -243,6 +243,13 @@ editor's text with evaluate_script. expect after a fill or click whose result ma
 page still at work, like a resume parser after an upload: uid and value for a field it fills (passing at once if
 the field holds it already), or gone with its status text; never a setTimeout in evaluate_script.
 
+Pixels: a take_screenshot of the viewport comes back as an image, one pixel per CSS pixel unless its line gives a
+factor to multiply by. move_at moves the pointer to a point's CSS coordinates in it, and click_down and click_up press
+and let go of a button where the pointer is, as a hand does: a click is move_at, click_down, click_up; a drag,
+move_at, click_down, move_at, click_up; a double click, a click then click_down and click_up, each with count 2.
+Use them for what has no uid, like a slide, a map or a canvas, and end the queue with take_screenshot to see what
+they did.
+
 Dialogs: put a handle_dialog step right after the step that opens an alert, confirm or prompt (a click, a key
 press), and the dialog is answered the moment it opens, or up to 5s after that step for a late one; evaluate_script
 answers its own with dialogAction (default accept), so takes none. A dialog no handle_dialog step waits on blocks

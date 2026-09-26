@@ -27,8 +27,8 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import (cdp, checked, chromes, dialogs, downloads, focus, mcp, page, profiles, record, screenshot, server,
-                     service, sessions, steps)
+from browser import (cdp, checked, chromes, dialogs, downloads, focus, mcp, page, pointer, profiles, record, screenshot,
+                     server, service, sessions, steps)
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
 from browser.state import Session, State, Tab
@@ -648,7 +648,7 @@ def queue_offline():
         check("a step naming a tool the queue leaves out is refused, by number, saying why", "step 2" in said and "left out" in said, said)
         said = refusal(lambda: steps.check([{"tool": "click"}, {"tool": "frobnicate"}], {"click": {}}), steps.StepError)
         check("a step naming a tool that does not exist is refused, by number, naming the tools a queue runs",
-              "step 2" in said and "not a tool" in said and "it runs pick, expect, type, paste, wait, click" in said, said)
+              "step 2" in said and "not a tool" in said and "it runs pick, expect, type, paste, wait, move_at, click_down, click_up, click" in said, said)
         check("a step whose tool name is empty is refused", "not an object with a tool name" in load(steps=[{"tool": ""}]))
         inside = os.path.join(workdir, "resume.pdf")
         for label, step, words in (
@@ -1333,7 +1333,7 @@ class Shots:
     def __init__(self, css=(1200, 792), ratio=2, fails=False):
         self.calls, self.css, self.ratio, self.fails = [], css, ratio, fails
 
-    def call(self, method, session=None, **params):
+    def call(self, method, session=None, wait=None, **params):
         self.calls.append((method, params))
         if self.fails:
             raise cdp.CdpError("Page.captureScreenshot did not answer in time")
@@ -1389,6 +1389,103 @@ def screenshot_offline():
               fake.calls == [] and not result["isError"] and result["content"][1]["type"] == "image", repr(result))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+class Hand:
+    """A connection to a profile's Chrome that records each mouse event it is sent; with late or a dialog, each goes
+    unanswered in time (cdp.Late), and with a dialog, that dialog's event is heard; with held, a dialog open already
+    leaves Page.enable unanswered."""
+
+    def __init__(self, dialog=None, late=False, held=False):
+        self.events, self.dialog, self.late, self.held = [], dialog, late or dialog is not None, held
+
+    def call(self, method, session=None, wait=None, **params):
+        if method == "Target.attachToTarget":
+            return {"sessionId": "S1"}
+        if method == "Page.enable" and self.held:
+            raise cdp.Late("Page.enable did not answer in time")
+        if method == "Input.dispatchMouseEvent":
+            self.events.append(params)
+            if self.late:
+                raise cdp.Late("Input.dispatchMouseEvent did not answer in time")
+        return {}
+
+    def wait_for(self, event, session=None, timeout=20.0):
+        if self.dialog is None:
+            raise cdp.CdpError("%s never arrived" % event)
+        return self.dialog
+
+    def close(self):
+        pass
+
+
+def pointer_offline():
+    """pointer's steps: what they refuse, and the mouse events they send over a stand-in connection."""
+    for step, wrong in (({"tool": "move_at", "x": 10}, "move_at needs x and y"),
+                        ({"tool": "move_at", "x": -1, "y": 5}, "move_at needs x and y"),
+                        ({"tool": "move_at", "x": True, "y": 5}, "move_at needs x and y"),
+                        ({"tool": "move_at", "x": 1, "y": 5, "uid": "1_1"}, "move_at does not take uid"),
+                        ({"tool": "click_down", "button": "side"}, "click_down's button must be left, right or middle"),
+                        ({"tool": "click_up", "count": 4}, "click_up's count must be 1, 2 or 3")):
+        check("pointer refuses %s" % json.dumps(step), (pointer.problem(step) or "").startswith(wrong), pointer.problem(step))
+    check("and passes a move_at of fractional pixels and a right double click",
+          pointer.problem({"tool": "move_at", "x": 10.5, "y": 0}) is None
+          and pointer.problem({"tool": "click_down", "button": "right", "count": 2}) is None)
+    hand = Hand()
+    content, failed = pointer.run({"tool": "click_down"}, "P1", lambda: hand)
+    check("a press before the pointer is placed on the tab is refused, and sends nothing",
+          failed and "put a move_at before it" in content[0]["text"] and hand.events == [], repr(content))
+    said = []
+    for step in ({"tool": "move_at", "x": 10, "y": 20}, {"tool": "click_down"}, {"tool": "move_at", "x": 50.5, "y": 60},
+                 {"tool": "click_up"}):
+        content, failed = pointer.run(step, "P1", lambda: hand)
+        said.append((content[0]["text"], failed))
+    check("a drag is move_at, click_down, move_at, click_up: the move between carries the button held",
+          hand.events == [{"type": "mouseMoved", "x": 10, "y": 20, "buttons": 0, "button": "none"},
+                          {"type": "mousePressed", "x": 10, "y": 20, "buttons": 1, "button": "left", "clickCount": 1},
+                          {"type": "mouseMoved", "x": 50.5, "y": 60, "buttons": 1, "button": "left"},
+                          {"type": "mouseReleased", "x": 50.5, "y": 60, "buttons": 0, "button": "left", "clickCount": 1}],
+          repr(hand.events))
+    check("and each step says where the pointer is and what it holds",
+          said == [("the pointer is at 10,20", False),
+                   ("pressed the left button at 10,20; it stays down until a click_up", False),
+                   ("the pointer is at 50.5,60, the left button down", False),
+                   ("let go of the left button at 50.5,60", False)], repr(said))
+    content, failed = pointer.run({"tool": "click_up"}, "P1", lambda: hand)
+    check("a let-go of a button not down is refused", failed and "the left button is not down" in content[0]["text"])
+    pointer.run({"tool": "click_down", "button": "right", "count": 2}, "P1", lambda: hand)
+    content, failed = pointer.run({"tool": "click_down", "button": "right"}, "P1", lambda: hand)
+    check("a right press with count 2 is sent as one, and a press of a button already down is refused",
+          failed and "the right button is down already" in content[0]["text"] and hand.events[-1]["clickCount"] == 2
+          and hand.events[-1]["buttons"] == 2, repr(content))
+    content, failed = pointer.run({"tool": "move_at", "x": 1, "y": 2}, "P2", lambda: Hand({"type": "alert", "message": "hi"}))
+    check("input the page could not take for a dialog it opened counts as done, and says so",
+          not failed and 'the alert "hi" it opened blocks the page, so the step counts as done' in content[0]["text"],
+          repr(content))
+    content, failed = pointer.run({"tool": "move_at", "x": 1, "y": 2}, "P3", lambda: Hand(late=True))
+    check("input a busy page has not taken in time, with no dialog open, fails, saying it lands once the page is free",
+          failed and content[0]["text"] == "sent the input, but the page had not taken it after 5s, and takes it once "
+                                           "free", repr(content))
+    content, failed = pointer.run({"tool": "click_down"}, "P3", lambda: Hand())
+    check("and the pointer is where that input put it", not failed and "at 1,2" in content[0]["text"], repr(content))
+    hand = Hand(held=True)
+    content, failed = pointer.run({"tool": "move_at", "x": 3, "y": 4}, "P3", lambda: hand)
+    check("a page that does not answer before any input is sent, as with a dialog open, fails the step and sends nothing",
+          failed and "as when a dialog is open on it: answer it with a handle_dialog step first" in content[0]["text"]
+          and hand.events == [], repr(content))
+    try:
+        steps.check([{"tool": "move_at", "x": 1, "y": 2}, {"tool": "click_down"}, {"tool": "click_up", "count": 2}], {})
+        passed_check = True
+    except steps.StepError:
+        passed_check = False
+    check("a queue of pointer steps passes the queue's check", passed_check)
+    check("and one with a bad pointer step is refused before any step runs",
+          "step 1: move_at needs x and y" in refusal(lambda: steps.check([{"tool": "move_at"}], {}), steps.StepError))
+    check("the steps argument's description lists them", all("  %s(" % name in steps.describe({}) for name in pointer.STEPS))
+    fake = FakeDevtools([])
+    result = steps.run(fake, 7, [{"tool": "move_at", "x": 5, "y": 6}], lambda name: name, target="P4", connect=lambda: Hand())
+    check("a queue's pointer step never reaches chrome-devtools-mcp", fake.calls == [] and not result["isError"],
+          repr(result))
 
 
 def limits_offline():
@@ -1954,6 +2051,13 @@ PIXELS = ("<title>pixels</title><body style='margin:0;height:3000px'><canvas id=
           "(e) => hits.push([e.isTrusted, e.offsetX, e.offsetY]))</script></body>")
 
 
+# A pad that records each trusted mouse event on it, and a Warn button whose click opens an alert.
+PAD = ("<title>pad</title><body style='margin:0'><div id=d style='position:absolute;left:0;top:0;width:400px;height:300px'>"
+       "</div><button style='position:absolute;left:500px;top:50px;width:80px;height:40px' onclick='alert(\"hi\")'>Warn"
+       "</button><script>window.seen = []; for (const kind of ['mousedown', 'mousemove', 'mouseup']) d.addEventListener("
+       "kind, (e) => e.isTrusted && seen.push([kind, e.clientX, e.clientY, e.buttons]))</script></body>")
+
+
 def red_box(png, rows_most):
     """The box [left, top, right, bottom] of a PNG's red pixels in its first rows_most rows, and its size; the checks'
     own reading of a screenshot, since the standard library has no image decoder. Red is near it, not exact, as the
@@ -2445,6 +2549,42 @@ def queue_live(profile, state):
         check("a viewport screenshot comes back as an image of the visible viewport (no scrollbar), one pixel per CSS pixel, the scroll offset included",
               images and images[0]["mimeType"] == "image/png" and shape == tuple(size or ()) and box == [300, 200, 339, 239],
               "%r %r %r" % (size, shape, box))
+        text, is_error = call(httpd, "queue", session=session, tab=drawn, steps=[
+            {"tool": "move_at", "x": 310, "y": 225}, {"tool": "click_down"}, {"tool": "click_up"},
+            {"tool": "evaluate_script", "function": "() => hits"}])
+        check("move_at, click_down and click_up at a point read off that screenshot click there, with trusted input",
+              not is_error and returned(text) == [[True, 10, 25]], text)
+
+        pad = open_tab(PAD)
+        began = time.monotonic()
+        text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
+            {"tool": "move_at", "x": 50, "y": 60}, {"tool": "click_down"}, {"tool": "move_at", "x": 150, "y": 160},
+            {"tool": "click_up"}, {"tool": "evaluate_script", "function": "() => seen"}])
+        took = time.monotonic() - began
+        check("a drag is a press at one point, a move holding the button, and a let-go at another",
+              not is_error and returned(text) == [["mousemove", 50, 60, 0], ["mousedown", 50, 60, 1],
+                                                  ["mousemove", 150, 160, 1], ["mouseup", 150, 160, 0]], text)
+        check("and its four pointer steps take under 2s", took < 2, "%.1fs" % took)
+        began = time.monotonic()
+        text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
+            {"tool": "move_at", "x": 540, "y": 70}, {"tool": "click_down"}, {"tool": "click_up"}])
+        took = time.monotonic() - began
+        check("a click that opens an alert nothing waits on counts as done after about 5s, naming it",
+              not is_error and 'the alert "hi" it opened blocks the page' in text and 4 < took < 10, "%.1fs: %s" % (took, text))
+        for step in ({"tool": "move_at", "x": 540, "y": 70}, {"tool": "take_screenshot"}):
+            began = time.monotonic()
+            text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[step])
+            took = time.monotonic() - began
+            check("with it open, a %s fails after about 5s, saying to answer it first" % step["tool"],
+                  is_error and "as when a dialog is open on it" in text and took < 10, "%.1fs: %s" % (took, text[:300]))
+        text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[{"tool": "handle_dialog", "action": "accept"}])
+        check("and a handle_dialog step in the next queue answers it", not is_error, text)
+        began = time.monotonic()
+        text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
+            {"tool": "click_down"}, {"tool": "click_up"}, {"tool": "handle_dialog", "action": "accept"}])
+        took = time.monotonic() - began
+        check("a click whose alert a handle_dialog step right after waits on is answered as it opens",
+              not is_error and "was accepted as it opened" in text and took < 3, "%.1fs: %s" % (took, text))
 
         text, is_error = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "new_page", "url": "about:blank"}])
         check("a tab-managing tool is refused in a queue", is_error and "new_page" in text, text)
@@ -2536,6 +2676,8 @@ if __name__ == "__main__":
     paste_offline()
     print()
     screenshot_offline()
+    print()
+    pointer_offline()
     print()
     limits_offline()
     print()
