@@ -21,8 +21,8 @@ def taken(step):
 
 
 def viewport(step, target, connect):
-    """(content, failed): the viewport at one pixel per CSS pixel (fewer past LONGEST), saved to the step's filePath,
-    and returned as a line saying so and the image.
+    """(content, failed): the viewport at one pixel per CSS pixel (fewer past LONGEST, times the step's scale), saved to
+    the step's filePath, and returned as a line saying so and the image.
 
     Args:
         step (dict): a take_screenshot that taken passes, its filePath placed by steps.place_screenshots.
@@ -36,7 +36,7 @@ def viewport(step, target, connect):
         browser = connect()
         try:
             session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
-            data, css, fit = capture(browser, session, kind, step.get("quality", QUALITY))
+            data, css, fit = capture(browser, session, kind, step.get("quality", QUALITY), step.get("scale", 1))
         finally:
             browser.close()
         with open(step["filePath"], "wb") as handle:
@@ -47,21 +47,22 @@ def viewport(step, target, connect):
     if fit == 1:
         scale = "one pixel per CSS pixel, so a point's pixel coordinates are its CSS coordinates as they are"
     else:
-        scale = ("each pixel %.3g CSS pixels, as the viewport is %dx%d, so multiply a point's pixel coordinates by %.3g "
+        scale = ("each pixel %.4g CSS pixels (the viewport is %dx%d), so multiply a point's pixel coordinates by %.4g "
                  "for its CSS coordinates" % (1 / fit, css["clientWidth"], css["clientHeight"], 1 / fit))
     text = "Took a screenshot of the viewport, %dx%d px, %s.\nSaved screenshot to %s." % (
         width, height, scale, step["filePath"])
     return [{"type": "text", "text": text}, {"type": "image", "data": data, "mimeType": "image/" + kind}], False
 
 
-def capture(browser, session, kind, quality):
-    """(base64 data, the CSS viewport, fit): the viewport at one pixel per CSS pixel, fewer past LONGEST.
+def capture(browser, session, kind, quality, scale):
+    """(base64 data, the CSS viewport, fit): the viewport at one pixel per CSS pixel, fewer past LONGEST, times scale.
 
     Args:
         browser (cdp.Browser): a connection to the tab's Chrome.
         session (str): its CDP session on the tab.
         kind (str): png, jpeg or webp.
         quality (int): for jpeg and webp.
+        scale (float): multiplies the image's sides, above 0, up to 1.
     """
     try:
         metrics = browser.call("Page.getLayoutMetrics", session, ANSWER_WAIT)
@@ -71,7 +72,7 @@ def capture(browser, session, kind, quality):
     css, device = metrics["cssVisualViewport"], metrics["visualViewport"]
     if css["clientWidth"] <= 0 or css["clientHeight"] <= 0:
         raise cdp.CdpError("the tab has no viewport to take a screenshot of")
-    fit = min(1.0, LONGEST / max(css["clientWidth"], css["clientHeight"]))
+    fit = min(1.0, LONGEST / max(css["clientWidth"], css["clientHeight"])) * scale
     # A clip sits in the document, so a scrolled page's starts at its scroll offset. Its scale counts device pixels,
     # so dividing by the device pixel ratio (2 on a Retina Mac) makes one image pixel a CSS pixel.
     clip = {"x": css["pageX"], "y": css["pageY"], "width": css["clientWidth"], "height": css["clientHeight"],

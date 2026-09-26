@@ -323,9 +323,10 @@ same tabs under the same ids. A crash leaves the same.
   then the image, so no Read is needed to see it. It is a JPEG at quality 80 unless the step asks otherwise: a quarter
   of a PNG's bytes (measured on Google Maps: 156KB against 616KB), and every later request of a conversation carries
   the image again. A viewport over `screenshot.LONGEST` (2,000) on a side, past which Claude Code shrinks an image it
-  reads (seen: 2,400 to 2,000), is shrunk to it, and the line gives the factor to multiply a point by. A
-  `take_screenshot` of an element (`uid`) or the whole page (`fullPage`) is still chrome-devtools-mcp's, in device
-  pixels, saved as `<n>-step<k>-screenshot.png` (or its format's) and reported by path, not as an image:
+  reads (seen: 2,400 to 2,000), is shrunk to it, and a step's own `scale` (above 0, up to 1; refused with `uid` or
+  `fullPage`) shrinks it by that factor more, for fewer image tokens; the line gives the factor to multiply a point
+  by. A `take_screenshot` of an element (`uid`) or the whole page (`fullPage`) is still chrome-devtools-mcp's, in
+  device pixels, saved as `<n>-step<k>-screenshot.png` (or its format's) and reported by path, not as an image:
   chrome-devtools-mcp attaches an image only when no path is given. A page gets `screenshot.ANSWER_WAIT` (5s) to
   answer `Page.getLayoutMetrics`, which it never does while a dialog is open, before the step fails saying to answer
   the dialog first.

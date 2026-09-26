@@ -1374,6 +1374,26 @@ def screenshot_offline():
               and "2000x1125 px, each pixel 1.28 CSS pixels" in content[0]["text"]
               and "multiply a point's pixel coordinates by 1.28" in content[0]["text"], content[0]["text"])
         check("a PNG is asked for with no quality", "quality" not in captured[0] and content[1]["mimeType"] == "image/png")
+        shots = Shots()
+        content, failed_ = screenshot.viewport({"tool": "take_screenshot", "scale": 0.5, "filePath": path}, "T1",
+                                               lambda: shots)
+        captured = [params for method, params in shots.calls if method == "Page.captureScreenshot"]
+        check("a scale of 0.5 takes the viewport at half an image pixel per CSS pixel, and the line gives the factor of 2",
+              not failed_ and captured[0]["clip"]["scale"] == 0.25 and "600x396 px, each pixel 2 CSS pixels" in content[0]["text"]
+              and "multiply a point's pixel coordinates by 2 " in content[0]["text"], content[0]["text"])
+        screenshot_tool = {"take_screenshot": {"inputSchema": {"properties": {
+            "pageId": {"type": "number"}, "uid": {"type": "string"}, "fullPage": {"type": "boolean"},
+            "format": {"type": "string"}, "filePath": {"type": "string"}}}}}
+        for step, wrong in (({"tool": "take_screenshot", "scale": 0}, "take_screenshot's scale must be a number above 0"),
+                            ({"tool": "take_screenshot", "scale": 2}, "take_screenshot's scale must be a number above 0"),
+                            ({"tool": "take_screenshot", "scale": 0.5, "fullPage": True}, "take_screenshot's scale is for a screenshot of the viewport"),
+                            ({"tool": "take_screenshot", "scale": 0.5, "uid": "1_1"}, "take_screenshot's scale is for a screenshot of the viewport")):
+            check("a queue refuses %s" % json.dumps(step),
+                  wrong in refusal(lambda: steps.check([dict(step)], screenshot_tool), steps.StepError))
+        check("and passes a viewport screenshot's scale of 0.5, listed in the steps argument's description",
+              refusal(lambda: steps.check([{"tool": "take_screenshot", "scale": 0.5}], screenshot_tool), steps.StepError) == ""
+              and "take_screenshot(uid?: string, fullPage?: boolean, format?: string, filePath?: string, scale?: number)"
+              in steps.describe(screenshot_tool), steps.describe(screenshot_tool))
         content, failed_ = screenshot.viewport({"tool": "take_screenshot", "filePath": path}, "T1", lambda: Shots(fails=True))
         check("a screenshot Chrome does not answer fails its step, saying why",
               failed_ and content == [{"type": "text", "text": "could not take the screenshot: Page.captureScreenshot did "

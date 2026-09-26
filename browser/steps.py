@@ -45,6 +45,7 @@ TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool,
 
 SNAPSHOT = "## Latest page snapshot"  # the header chrome-devtools-mcp puts over a snapshot in its reply
 VIEW_OPTIONS = ("under", "full", "find")  # take_snapshot's own options here, never sent on to chrome-devtools-mcp
+OWN_OPTIONS = {"take_snapshot": VIEW_OPTIONS, "take_screenshot": ("scale",)}  # each tool's options the queue takes itself
 UID_NUMBER = re.compile(r"(\d+)_(\d+)")  # a uid: its snapshot's number, then its own
 UID_RANGE = re.compile(r"(\d+_\d+)\.\.\d+")  # a view's run of words, uid=5_1..25; a step given it acts on the first
 WAIT_FOR_MISSED = ("\n(wait_for finds page text holding one of its strings, or an element whose accessible name is "
@@ -109,7 +110,8 @@ def describe(tools):
         arguments = ", ".join(
             "%s%s: %s" % (key, "" if key in required else "?", _shape(spec))
             for key, spec in schema.get("properties", {}).items() if key in _takes(name, schema)
-        ) + (", under?: string, full?: boolean, find?: string" if name == "take_snapshot" else "")
+        ) + {"take_snapshot": ", under?: string, full?: boolean, find?: string",
+             "take_screenshot": ", scale?: number"}.get(name, "")
         summary = (tool.get("description") or "").strip().split("\n")[0].split(". ")[0].rstrip(".")
         lines.append("  %s(%s) - %s" % (name, arguments, summary))
     return "\n".join(lines)
@@ -239,13 +241,20 @@ def _arguments_problem(step, tool):
                 re.compile(step["find"])
             except re.error as exc:
                 return "take_snapshot's find is not a regex: %s" % exc
+    if name == "take_screenshot" and "scale" in step:
+        scale = step["scale"]
+        if not screenshot.taken(step):
+            return "take_screenshot's scale is for a screenshot of the viewport, not of an element (uid) or the whole " \
+                   "page (fullPage)"
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not 0 < scale <= 1:
+            return "take_screenshot's scale must be a number above 0, up to 1, like 0.5"
     schema = tool.get("inputSchema", {})
     properties = {key: spec for key, spec in schema.get("properties", {}).items() if key != "pageId"}
-    given = {key: value for key, value in step.items()
-             if key != "tool" and not (name == "take_snapshot" and key in VIEW_OPTIONS)}
+    own = OWN_OPTIONS.get(name, ())
+    given = {key: value for key, value in step.items() if key != "tool" and key not in own}
     unknown = sorted(set(given) - set(properties))
     if unknown:
-        takes = _takes(name, schema) + (list(VIEW_OPTIONS) if name == "take_snapshot" else [])
+        takes = _takes(name, schema) + list(own)
         return "%s does not take %s; it takes %s" % (name, ", ".join(unknown), ", ".join(takes) or "nothing")
     missing = [key for key in schema.get("required", []) if key in properties and key not in given]
     if missing:
