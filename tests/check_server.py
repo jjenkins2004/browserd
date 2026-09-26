@@ -923,6 +923,20 @@ def views(workdir):
               '[selected in the DevTools Elements panel]\n    uid=1_2 option "Canada" selectable selected value="Canada"')
     text, _ = steps.view("## Latest page snapshot\n" + marked, path)
     check("a collapsed select keeps its value when DevTools has it selected", '= "Canada" (1 options)' in text, text)
+    dated = "\n".join(['uid=1_0 RootWebArea "D"', '  uid=1_1 StaticText "Birthday"',
+                       '  uid=1_2 Date "Birthday" value="1957-08-01"',
+                       '    uid=1_3 spinbutton "Month Month" value="8" valuemax="12" valuemin="1" valuetext=""',
+                       '    uid=1_4 StaticText "/"',
+                       '    uid=1_5 button "Show date picker Show date picker" haspopup="menu"',
+                       '  uid=1_6 InputTime "Start"', '    uid=1_7 spinbutton "Hours Hours" value="0"',
+                       '  uid=1_8 DateTime "Month"', '    uid=1_9 spinbutton "Year Year" value="0"'])
+    text, _ = steps.view("## Latest page snapshot\n" + dated, path)
+    check("a date, time or month field is one line in a view, its parts and picker button left out",
+          text.split("\n")[1:] == ['uid=1_0 RootWebArea "D"', '  uid=1_1 StaticText "Birthday"',
+                                   '  uid=1_2 Date "Birthday" value="1957-08-01"', '  uid=1_6 InputTime "Start"',
+                                   '  uid=1_8 DateTime "Month"'], text)
+    text, _ = steps.view("## Latest page snapshot\n" + dated, path, under="1_2")
+    check("and a view under its uid shows its parts", 'uid=1_3 spinbutton "Month Month"' in text, text)
     fake = FakeDevtools([([{"type": "text", "text": "## Latest page snapshot\n" + 'uid=1_0 RootWebArea "P"\n  uid=1_1 textbox "Notes" multiline value="a\n## Pages\nb"'}], False)])
     report = text_of(steps.run(fake, 3, [{"tool": "take_snapshot"}], lambda name: os.path.join(workdir, "006-" + name))["content"])
     check("a value's own ## Pages line inside a snapshot is kept", "## Pages" in report, report)
@@ -1228,13 +1242,26 @@ def limits_offline():
                 ("a read-only box", {"kind": "box", "readonly": True}, "x", "is read-only, and fill would empty it"),
                 ("a checkbox given words", {"kind": "toggle"}, "yes", 'with "true" or "false"'),
                 ("a select given text none of its options has", {"kind": "select", "options": ["Canada"]}, "Atlantis",
-                 'no option of the select 1_4 is exactly "Atlantis"')):
+                 'no option of the select 1_4 is exactly "Atlantis"'),
+                ("a part of a date field", {"kind": "datepart", "type": "date"}, "08",
+                 "one part of the date field on the Date line above it (fill that line"),
+                ("a part of a disabled date field, whose line the snapshot lacks",
+                 {"kind": "datepart", "type": "date", "disabled": True}, "08", "is disabled"),
+                ("a date Chrome would leave empty", {"kind": "date", "type": "date", "takes": False}, "08/01/1957",
+                 'leaves empty given "08/01/1957"; it takes only a real one as YYYY-MM-DD, like 1957-08-01'),
+                ("a time Chrome would leave empty", {"kind": "date", "type": "time", "takes": False}, "2:30 PM",
+                 "HH:MM on a 24-hour clock"),
+                ("a disabled date field", {"kind": "date", "type": "date", "disabled": True, "takes": True},
+                 "1957-08-01", "is disabled")):
             said = checked._unfillable(found, "1_4", value)
             check("fill refuses %s" % label, said is not None and words in said, repr(said))
         check("fill takes a select's option exactly as labelled, a checkbox's true, and a plain box",
               checked._unfillable({"kind": "select", "options": ["United States"]}, "1_4", "United States") is None
               and checked._unfillable({"kind": "toggle"}, "1_4", "true") is None
               and checked._unfillable({"kind": "box"}, "1_4", "x") is None)
+        check("fill takes a date or time field given a value Chrome takes",
+              all(checked._unfillable({"kind": "date", "type": kind, "takes": True}, "1_4", "x") is None
+                  for kind in checked.DATE_VALUES))
         check("fill refuses a select's option with spacing its label lacks, which chrome-devtools-mcp would not match",
               checked._unfillable({"kind": "select", "options": ["United States"]}, "1_4", " United  States ") is not None)
         said = refusal(lambda: steps.check([{"tool": "wait_for", "text": "x", "timeout": 60000}], SCHEMAS), steps.StepError)
@@ -2102,6 +2129,29 @@ def queue_live(profile, state):
             took = time.monotonic() - began
             check("a click on a disabled button fails after chrome-devtools-mcp's 5s, not Puppeteer's 30s",
                   is_error and took < 15 and "did not become interactive" in text, "%.1fs: %s" % (took, text[:120]))
+
+        dated = open_tab("<title>date scratch</title><label for=born>Born</label><input id=born type=date>")
+        text, _ = call(httpd, "queue", session=session, tab=dated, steps=[{"tool": "take_snapshot"}])
+        born = uid(text, "Date", "Born")
+        check("a date field is one line in a view, with no Month, Day or Year part to fill",
+              bool(born) and "spinbutton" not in text, text)
+        full, _ = call(httpd, "queue", session=session, tab=dated, steps=[{"tool": "take_snapshot", "full": True}])
+        began = time.monotonic()
+        text, is_error = call(httpd, "queue", session=session, tab=dated, steps=[
+            {"tool": "fill", "uid": uid(full, "spinbutton", "Month"), "value": "08"}])
+        check("fill on a date's Month part is refused at once, naming the field to fill",
+              is_error and time.monotonic() - began < 3 and "the Date line above it" in text, text[:300])
+        text, is_error = call(httpd, "queue", session=session, tab=dated, steps=[
+            {"tool": "fill", "uid": born, "value": "08/01/1957"}])
+        check("fill on a date given as 08/01/1957 is refused, since chrome-devtools-mcp would leave it empty",
+              is_error and "YYYY-MM-DD" in text, text[:300])
+        text, is_error = call(httpd, "queue", session=session, tab=dated, steps=[
+            {"tool": "fill", "uid": born, "value": "1957-02-29"}])
+        check("and so is one in the right form for a day that does not exist, which Chrome leaves empty too",
+              is_error and 'leaves empty given "1957-02-29"' in text, text[:300])
+        text, is_error = call(httpd, "queue", session=session, tab=dated, steps=[
+            {"tool": "fill", "uid": born, "value": "1957-08-01"}, {"tool": "expect", "uid": born, "value": "1957-08-01"}])
+        check("fill on the date field itself, as 1957-08-01, takes", not is_error, text)
 
         path = os.path.join(workdir, "steps.json")
         with open(path, "w") as handle:

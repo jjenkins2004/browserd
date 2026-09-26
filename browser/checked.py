@@ -19,6 +19,13 @@ APPEAR_WAIT = 3.0  # seconds a wait's gone gives its text to show, since a page 
 WAIT_TIMEOUT = 30000  # ms a wait step gives its condition by default
 WAIT_MOST = 45000  # ms, the longest a step may wait (a wait's or chrome-devtools-mcp tool's timeout, pick's wait)
 SHOWN_OPTIONS = 12
+# How each date or time input type takes its value, in words for fill's refusal; README.md, "Agent Gotchas &
+# Invariants", says how fill_refused asks Chrome whether it takes one.
+DATE_VALUES = {"date": "YYYY-MM-DD, like 1957-08-01", "time": "HH:MM on a 24-hour clock, like 14:30",
+               "datetime-local": "YYYY-MM-DDTHH:MM, like 1957-08-01T14:30", "month": "YYYY-MM, like 1957-08",
+               "week": "YYYY-Www, like 1957-W31"}
+DATE_ROLE = {"date": "Date", "time": "InputTime", "datetime-local": "DateTime", "month": "DateTime",
+             "week": "DateTime"}  # the role of each type's snapshot line
 # An option line ends with value="<its name>" (chrome-devtools-mcp sets it), which is what bounds a name that
 # holds quotes; a line without one falls back to the first quote followed by an attribute-like word.
 OPTION = re.compile(r'uid=(\S+) option "(.*)" .*value="\2"(?: \[selected in the DevTools Elements panel\])?$')
@@ -158,7 +165,18 @@ HAND_JS = r"""(text) => {
 }"""
 # What fill_refused reads first; README.md, "Agent Gotchas & Invariants", says why. A dropdown's option labels are
 # its options' accessible names, which chrome-devtools-mcp matches exactly; a <select multiple> matches by value.
-FILL_JS = r"""(el) => {
+FILL_JS = r"""(el, value) => {
+  const dates = ['date', 'time', 'datetime-local', 'month', 'week'];
+  const host = el.getRootNode().host;  // a date or time input's parts sit in its own shadow root
+  if (host && host.tagName === 'INPUT' && dates.includes(host.type)) {
+    return {kind: 'datepart', type: host.type, disabled: host.matches(':disabled')};
+  }
+  if (el.tagName === 'INPUT' && dates.includes(el.type)) {
+    const copy = document.createElement('input');  // Chrome's own parser: a value it will not take leaves it empty
+    copy.type = el.type;
+    copy.value = value;
+    return {kind: 'date', type: el.type, disabled: el.disabled, readonly: el.readOnly, takes: !value || copy.value !== ''};
+  }
   if (el.tagName === 'SELECT' && !el.multiple && el.size <= 1) {
     return {kind: 'select', disabled: el.disabled, options: [...el.options].map(o => o.label)};
   }
@@ -526,7 +544,8 @@ def fill_refused(devtools, page_id, step):
     """
     for element in step["elements"] if step["tool"] == "fill_form" else [step]:
         try:
-            found = returned(_script(devtools, page_id, FILL_JS, element["uid"]))
+            found = returned(_script(devtools, page_id, "(el) => (%s)(el, %s)" % (FILL_JS, json.dumps(element["value"])),
+                                     element["uid"]))
         except cdp.CdpError:
             return None  # fill itself says what is wrong, like an unknown uid or an open dialog
         why = _unfillable(found, element["uid"], element["value"])
@@ -540,10 +559,16 @@ def _unfillable(found, uid, value):
         return None
     if found.get("disabled"):
         return "element %s is disabled" % uid
+    if found.get("kind") == "datepart":
+        return ("element %s is one part of the %s field on the %s line above it (fill that line, with its whole value "
+                "as %s)" % (uid, found["type"], DATE_ROLE[found["type"]], DATE_VALUES[found["type"]]))
     if found.get("readonly"):
         return "element %s is read-only, and fill would empty it" % uid
     if found.get("kind") == "toggle" and value not in ("true", "false"):
         return 'element %s is a checkbox, radio or switch, which fill sets with "true" or "false"' % uid
+    if found.get("kind") == "date" and not found.get("takes"):
+        return "element %s is a %s field, which Chrome leaves empty given %s; it takes only a real one as %s" % (
+            uid, found["type"], json.dumps(value), DATE_VALUES[found["type"]])
     if found.get("kind") == "select" and value not in found.get("options", []):
         return "no option of the select %s is exactly %s (take_snapshot under %s lists them)" % (
             uid, json.dumps(value), uid)

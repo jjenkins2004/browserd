@@ -122,7 +122,7 @@ reach the tab. `Worker.ensure()` starts and pairs
 the process on the tab's first queue, and again after it dies, then selects the tab's page there (`select_page` without
 `bringToFront`): chrome-devtools-mcp sets its own timeouts on a page only once it is selected, 5s for a click or fill
 to finish, its wait for the element included, and 10s for a navigation, and one it never selected keeps Puppeteer's 30s
-for both (measured: a fill on a date's month field failed after 30.1s unselected, 5.1s selected). A navigation that
+for both (measured: a fill on a date's Month part failed after 30.1s unselected, 5.1s selected). A navigation that
 runs out its timeout still reports ok, on a page half loaded, so `steps.run` gives a `navigate_page` that names no
 `timeout` `steps.NAVIGATE_TIMEOUT` (30s), what it had before. The first report on a tab older than this
 server (carried over: `Workers.get`'s `made` is before `Workers.started`) also says its uids are gone, since an
@@ -304,7 +304,11 @@ same tabs under the same ids. A crash leaves the same.
   snapshot's `InlineTextBox` lines, which copy the text above them under shared uids. A native select, a
   combobox with options and no other control under it, becomes
   `combobox "<name>" = "<value>" <attributes> (<n> options)`; a custom multi-select, with a search box
-  or remove buttons among its options, stays whole. A run of `steps.WORD_RUN_LEAST` (3) or more
+  or remove buttons among its options, stays whole. A date, datetime-local, month, week or time input
+  (`steps.DATE_ROLES`: `Date`, `DateTime`, `InputTime`) is its own line alone, its value on it once it has one, unless
+  the view is under its uid: its parts (spinbuttons, like a date's Month, Day and Year) and picker button are left out,
+  since `fill` cannot take a part (measured: 20 of 50 FormFactory benchmark runs filled a Month spinbutton, and every
+  such fill failed). A run of `steps.WORD_RUN_LEAST` (3) or more
   `StaticText` siblings, each one word and nothing else, whose uids count up by one, as a canvas app
   like Slides draws its words, becomes one line, `uid=5_1..25 StaticText "<the words, joined by
   spaces>"`, and word k keeps its uid, `5_(1+k)`. A gap in the numbering, a line of more than one
@@ -378,7 +382,13 @@ same tabs under the same ids. A crash leaves the same.
     "true" or "false", or a dropdown select given text none of its options' labels is exactly (a
     `<select multiple>` takes an option's value, so is not checked). chrome-devtools-mcp's own `fill`
     empties a read-only box and reports success, fails a disabled box after 5s, and fails the other two
-    at once, each with a message that names none of them.
+    at once, each with a message that names none of them. `fill` and `fill_form` also fail a part of a date or time
+    input (an element in the input's own shadow root, which chrome-devtools-mcp's `fill` fails after 5s), naming the
+    role of the input's line (`Date`, `DateTime` or `InputTime`) to fill instead, and a date or time input given a
+    value Chrome would not take, which chrome-devtools-mcp's `fill` leaves empty and reports as a success.
+    `checked.FILL_JS` sets the value on a copy of the input, Chrome's own parser, so a form but the type's own
+    (`checked.DATE_VALUES`: 1957-08-01 for a date) and a day that does not exist (1957-02-29) both fail; an empty
+    value, which clears the input, passes.
 - **Element uids come from `take_snapshot` and live in that tab's process.** They stay valid
   across queue calls until the page navigates or the element goes away. When the process died and
   was restarted, the next report opens with a note that they are gone. A step failing with

@@ -71,6 +71,7 @@ CONTROLS = {"button", "checkbox", "ColorWell", "combobox", "Date", "DateTime", "
             "menuitem", "menuitemcheckbox", "menuitemradio", "option", "radio", "searchbox", "slider", "spinbutton",
             "switch", "tab", "textbox", "treeitem"}
 SELECT_LEFT_OFF = {"disableable", "expandable", "focusable", "haspopup"}  # left off a collapsed select; they tell nothing
+DATE_ROLES = {"Date", "DateTime", "InputTime"}  # a date, datetime-local, month, week or time input: one line in a view
 
 
 class StepError(Exception):
@@ -365,7 +366,8 @@ def _word_run(nodes, at):
 def _view(nodes, depth, under, out):
     """Append the lines that carry words, and every control, indented one level per kept line they sit under.
 
-    A native select collapses to one line, unless the view is under its uid; so does a run of words.
+    A native select or a date or time input collapses to one line, unless the view is under its uid; a run of words
+    always does.
     """
     at = 0
     while at < len(nodes):
@@ -380,6 +382,8 @@ def _view(nodes, depth, under, out):
             continue  # a verbose snapshot's copy of the text line above it, under a uid it shares with others
         if options:
             out.append("  " * depth + _collapsed(node, options))
+        elif node["role"] in DATE_ROLES and node["uid"] != under:
+            out.append("  " * depth + node["line"])  # its parts and picker button, which fill cannot take, left out
         elif node["role"] in CONTROLS or _carries_words(node):
             out.append("  " * depth + node["line"])
             _view(node["children"], depth + 1, under, out)

@@ -212,7 +212,9 @@ STEPS_HELP = """The steps, in order: each {"tool": <name>, ...its arguments}, ch
 step runs. ? marks an optional argument.
 
 When to use which. pick for any dropdown you type into (react-select, an autocomplete). fill for a native select,
-with an option's exact text, which take_snapshot under the select's uid lists. type for text of 100 characters or
+with an option's exact text, which take_snapshot under the select's uid lists; and for a date or time field, on its
+own line, in its own form: a Date line as 1957-08-01, an InputTime line as 14:30, a DateTime line as 1957-08-01T14:30
+(a month's as 1957-08, a week's as 1957-W31). type for text of 100 characters or
 more. paste for text an editor changes as it is typed (Slides curls quotes, a code editor closes brackets and
 indents): click into the editor and select what it replaces (Meta+A) first, or give a text box's uid; never set an
 editor's text with evaluate_script. expect after a fill or click whose result matters. wait for a
