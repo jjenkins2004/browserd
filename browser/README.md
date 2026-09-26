@@ -33,6 +33,10 @@ run `npm ci`).
       steps.py     the queue: load, check, run, report; snapshot views
       checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
+      downloads.py hears a tab's downloads and where each went
+      screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
+      pointer.py   the queue's pointer steps: move_at, click_down, click_up
+      guard.py     the click guard: a press or keys stopped when the page changed since the agent's screenshot
       record.py    one queue call's numbered files in a folder
       profiles.py  Profile (name, folder, port); what a new profile is given
       state.py     .run/state.db: the profiles, sessions and tabs
@@ -54,7 +58,8 @@ profile's port and folder (never Chrome's default folder, where Chrome refuses a
 Chrome profile `cdp.PROFILE` (`Default`), and Chrome's binary path. A Chrome not running at all is
 `cdp.NotRunning`, found before the folder's `Local State` is read, since a new profile's folder stays empty until its Chrome
 first starts. **`cdp.Browser`** is one browser-wide websocket; a command carries a CDP session id (`Target.attachToTarget`'s `sessionId`) to reach a tab,
-`pid` is that Chrome's, as `SystemInfo.getProcessInfo` gave it, and `profile` is whose it is.
+`pid` is that Chrome's, as `SystemInfo.getProcessInfo` gave it, and `profile` is whose it is; `call`'s `wait` gives
+one command a timeout of its own in place of `cdp.CALL_WAIT` (a pointer step's 5s).
 
 **`chromes.Chromes`** is where the server starts and quits each profile's Chrome; it keeps no list of running
 ones, asking `cdp.owner` each time. `ensure(profile)` starts a profile's
@@ -106,7 +111,13 @@ as is. Raising `mcp.ToolError` sends the agent a readable error result; any othe
 an error result naming it, with the traceback in the log; a client dropping its connection is one
 log line. Every tool call is one log line; one a tool refuses (`ToolError`), one naming no such tool, and
 one whose params or arguments are not an object also name what they were given. `server.tab_tools(state, tabs,
-workers)` builds `session_start` and the four tab tools, `server.queue_tool` the queue; all turn `cdp.CdpError`
+workers, queue)` builds `session_start` and the four tab tools, `server.queue_tool` the queue;
+`server.queue_steps` makes the queue's body, which the queue and `tab_open` share: `tab_open`, given `steps`, runs
+them on the new tab through it (recorded as that tab's queue call), `steps.QUEUE_MOST` counted from the start of
+`tab_open`, and answers with its tab id, title and URL, then the report, or those and why its steps did not run. Agents
+read a new tab right after opening it (measured in benchmarks: most with a lone `take_snapshot` queue, and 8 of 11
+calls of a queue step's name as a top-level tool came right after `tab_open`). Without `queue` (as most checks build
+them), `tab_open` lists no `steps` argument, and ignores one given. All turn `cdp.CdpError`
 into `ToolError`, and all but `session_start` run through `_in_session`, which refuses a missing, malformed,
 unknown or closed session and moves its last call to now as the call starts and as it ends. The queue records
 into `server.CALLS/<profile>/<session>-<label>/<tab>/`, so it refuses a tab argument not shaped like a tab id
@@ -119,9 +130,15 @@ the steps it runs, and what came back is written through `_recorded`, a refusal 
 so one tab's queues run in turn and different tabs run at once. The process is pointed at the tab's
 profile's Chrome (`--browser-url`), and `Worker.connect` is how the queue's dialog answerer and paste
 reach the tab. `Worker.ensure()` starts and pairs
-the process on the tab's first queue, and again after it dies; the first report on a tab older than this
+the process on the tab's first queue, and again after it dies, then selects the tab's page there (`select_page` without
+`bringToFront`): chrome-devtools-mcp sets its own timeouts on a page only once it is selected, 5s for a click or fill
+to finish, its wait for the element included, and 10s for a navigation, and one it never selected keeps Puppeteer's 30s
+for both (measured: a fill on a date's Month part failed after 30.1s unselected, 5.1s selected). A navigation that
+runs out its timeout still reports ok, on a page half loaded, so `steps.run` gives a `navigate_page` that names no
+`timeout` `steps.NAVIGATE_TIMEOUT` (30s), what it had before. The first report on a tab older than this
 server (carried over: `Workers.get`'s `made` is before `Workers.started`) also says its uids are gone, since an
-earlier server's process may have given some out. **`worker.Workers`** holds
+earlier server's process may have given some out. It also keeps the last viewport screenshots its tab's replies gave
+the agent, and where the focus was as the last one went out, for `guard.Guard`. **`worker.Workers`** holds
 one per tab id. `tab_close`, the page's Close, Close session and Close all paused, `tab_list` (for tabs found closed) and a
 queue on a tab found closed drop it;
 any other failure to reach a tab leaves its process and uids alone. `Workers.pause` stops the processes of a
@@ -270,7 +287,7 @@ same tabs under the same ids. A crash leaves the same.
   `timeout` over `checked.WAIT_MOST` (45,000 ms), a `wait`'s or a chrome-devtools-mcp tool's, or a
   `pick` `wait` over 45s, is refused.
 - **A dialog a `handle_dialog` step waits on is answered the moment it opens.** chrome-devtools-mcp
-  blocks about 30s on a step whose dialog it was not told to answer. So when a `handle_dialog` step
+  blocks about 5s on a step whose dialog it was not told to answer. So when a `handle_dialog` step
   follows a step, `steps.run` first starts a `dialogs.Answerer` on a connection of its own to the tab
   (`Page.enable`, then `Page.javascriptDialogOpening`), which answers the dialog as that step asks,
   and the `handle_dialog` step waits up to `dialogs.LATE` (5s) after the step before for one that
@@ -280,16 +297,77 @@ same tabs under the same ids. A crash leaves the same.
   `dialogAction`, `navigate_page`'s `handleBeforeUnload`, and `handle_dialog`), which answer their own.
   When a queue stops before its `handle_dialog` step runs, the report still says what the answerer
   answered.
+- **A step that begins a download says where it went.** Chrome saves a download where that Chrome's own
+  settings say (`~/Downloads` unless changed), and chrome-devtools-mcp's reply never names it; an agent told nothing
+  failed WebGames' combination-lock task in a benchmark, hunting for the file through `file://` listings. So a tab's
+  `Worker` runs a `downloads.Watcher` from `ensure` until `stop` or `pause`, on a connection of its own to the tab:
+  `Page.enable` for `Page.downloadWillBegin`, which only the tab's own downloads send; `Target.setDiscoverTargets`,
+  to follow the popups it opens, whose downloads send only `Browser.downloadWillBegin`, naming the popup; and
+  `Browser.setDownloadBehavior` with `behavior: default` and `eventsEnabled`, which keeps Chrome's own behaviour and
+  only asks for `Browser.downloadProgress`. After each step, `steps.run` waits up to `steps.DOWNLOAD_WAIT` (5s, or
+  the queue's time left) for a download the step began to end, and its report says `downloaded <name> to <path>`,
+  that it was canceled or failed, or that it is still downloading; the first step on the tab after it ends then
+  says where it went, in this queue or a later one, unless the tab's `Watcher` was stopped or started again
+  meanwhile. A download heard only after a step's reply came back lands in the next step's report, the next
+  queue's first when that step was the last.
 - **A step that opens a dialog nothing waits on counts as done.** chrome-devtools-mcp fails it after
-  about 30s, with an `# Open dialog` section in its reply; `steps.run` counts it as done, so a
+  about 5s, with an `# Open dialog` section in its reply; `steps.run` counts it as done, so a
   `handle_dialog` step in the next queue answers it. A reply that also holds `A dialog is open (`,
   chrome-devtools-mcp's refusal of a step begun while a dialog was open, still fails, as does a
   checked step, whose read-back never ran, and a tool in `steps.UNBLOCKED`, which runs with a dialog
   open.
-- **A queue's `take_screenshot` without `filePath` is saved in the tab's record folder as `<n>-step<k>-screenshot.png`**
-  (`.jpeg` or `.webp` for those formats), and the report gives that path, not an image:
-  chrome-devtools-mcp attaches an image only when no path is given, and even then saves one of 2MB
-  or more to a temporary file instead.
+- **A queue's `take_screenshot` of the viewport is browserd's own, one image pixel per CSS pixel, and comes back as an
+  image.** chrome-devtools-mcp's is in device pixels, twice CSS pixels on a Retina Mac, while the page's own
+  coordinates are CSS pixels, so every point read off its image would be twice its place. `screenshot.viewport` asks
+  `Page.getLayoutMetrics` for the viewport, clips `Page.captureScreenshot` to it at its scroll offset (a clip sits in
+  the document) at a scale of one over the device pixel ratio, saves it in the tab's record folder as
+  `<n>-step<k>-screenshot.jpeg` (`.png` or `.webp` for those formats), and returns a line giving its size and path,
+  then the image, so no Read is needed to see it. It is a JPEG at quality 80 unless the step asks otherwise: a quarter
+  of a PNG's bytes (measured on Google Maps: 156KB against 616KB), and every later request of a conversation carries
+  the image again. A viewport over `screenshot.LONGEST` (2,000) on a side, past which Claude Code shrinks an image it
+  reads (seen: 2,400 to 2,000), is shrunk to it, and a step's own `scale` (above 0, up to 1; refused with `uid` or
+  `fullPage`) shrinks it by that factor more, for fewer image tokens; the line gives the factor to multiply a point
+  by. A `take_screenshot` of an element (`uid`) or the whole page (`fullPage`) is still chrome-devtools-mcp's, in
+  device pixels, saved as `<n>-step<k>-screenshot.png` (or its format's) and reported by path, not as an image:
+  chrome-devtools-mcp attaches an image only when no path is given. A page gets `screenshot.ANSWER_WAIT` (5s) to
+  answer `Page.getLayoutMetrics`, which it never does while a dialog is open, before the step fails saying to answer
+  the dialog first.
+- **The pointer steps are a hand's three moves: `move_at x,y`, `click_down` and `click_up`.** A click is the three
+  in turn, a drag puts a second `move_at` between the press and the let-go, and a hover is a `move_at` alone, so no
+  step repeats another's work. `pointer.run` sends each as one `Input.dispatchMouseEvent` on a connection of its own
+  to the tab, at a viewport screenshot's CSS pixels, and keeps where the pointer is and which buttons it holds for
+  each tab (`pointer._pointers`, by target id), since `click_down` and `click_up` act where the pointer is; browserd
+  forgets it when it restarts, so a `click_down` or `click_up` on a tab no `move_at` has placed the pointer on since
+  browserd started is refused. A `move_at` with a button down carries it, as a drag. A pointer step whose input
+  opens an alert, confirm or prompt (most often a `click_up`, since a click fires on the let-go) is not answered
+  until the dialog is (measured: `Input.dispatchMouseEvent` waited out the 20s `cdp.CALL_WAIT`), so each pointer
+  step waits `pointer.DIALOG_WAIT` (5s) for its input to be answered, then hears the dialog on the `Page.enable` it
+  asked for and counts as done, saying so, as a chrome-devtools-mcp step does; a `handle_dialog` step right after
+  answers it as it opens. A dialog open already holds the `Page.enable` too, so the step fails after those 5s, sending
+  nothing and saying to answer it first; input a busy page has not taken after them lands once it is free, so the
+  step fails saying so, and the pointer is kept where the input put it. chrome-devtools-mcp's own `click_at` (behind `--experimental-vision`, which browserd does
+  not pass) cannot hover or drag: WebGames' herding needs the pointer moved over a canvas, and an agent given
+  `click_at` spent 40 of them standing in for moves.
+- **The click guard stops a press, or keys, that the page changed under since the agent's last screenshot.** A point
+  read off a screenshot can meet a popup that opened while the agent thought, or one its own last click opened. Each
+  queue gets a `guard.Guard` over its tab's Worker; its reference is the last viewport screenshot a reply gave before
+  the queue arrived, each taken through `Guard.capture`, which first bumps a counter that `guard.PAGE_JS`, a
+  MutationObserver kept in the page, stamps changes with. Measured in `../findings/real-sites.md` (19 sites, 126 agent
+  runs), its setting is:
+  - **pixels (S1):** over 10% of the 24 CSS px square around the point, or 75% of its central 8 px, changed by more
+    than 64 in a channel, against a fresh capture of the same format and scale;
+  - **the page (S2):** an element added, shown or hidden around the point, or text changed within 3 levels of it;
+  - **layout (S6):** a layout shift from or onto the point;
+  - **the page itself:** a new document, a scroll or a resize, or a check that could not tell, which stops too.
+
+  The check runs before a `move_at` that a `click_down` follows, since the hover the move causes is the agent's own,
+  or before a `click_down` whose pointer an earlier queue placed; a `click_down` of count 2 or 3 goes on its first.
+  S2, S6 and the document are read again just before the input goes out (a few ms, against the check's ~100). A press
+  with no reference is stopped too. On a tab a screenshot came back from, `press_key` and `type_text` are stopped when
+  the focus is not where the last reply, key or step left it, or not in what the queue's last press hit, or when
+  something entered the top layer since the screenshot; a tab driven by snapshots alone is never read. A stopped step
+  fails, saying why, with a screenshot of the page now, saved as `<n>-step<k>-stopped.<format>` and the next
+  reference. It forgets its references when browserd restarts, so the first press after a restart is stopped.
 - **Every snapshot a queue reports is a view**: `take_snapshot`'s, `wait_for`'s, an `includeSnapshot`
   step's and the failed queue's. A reply's snapshot runs from chrome-devtools-mcp's
   `## Latest page snapshot` line to the next of the headers it can put after one
@@ -299,7 +377,11 @@ same tabs under the same ids. A crash leaves the same.
   snapshot's `InlineTextBox` lines, which copy the text above them under shared uids. A native select, a
   combobox with options and no other control under it, becomes
   `combobox "<name>" = "<value>" <attributes> (<n> options)`; a custom multi-select, with a search box
-  or remove buttons among its options, stays whole. A run of `steps.WORD_RUN_LEAST` (3) or more
+  or remove buttons among its options, stays whole. A date, datetime-local, month, week or time input
+  (`steps.DATE_ROLES`: `Date`, `DateTime`, `InputTime`) is its own line alone, its value on it once it has one, unless
+  the view is under its uid: its parts (spinbuttons, like a date's Month, Day and Year) and picker button are left out,
+  since `fill` cannot take a part (measured: 20 of 50 FormFactory benchmark runs filled a Month spinbutton, and every
+  such fill failed). A run of `steps.WORD_RUN_LEAST` (3) or more
   `StaticText` siblings, each one word and nothing else, whose uids count up by one, as a canvas app
   like Slides draws its words, becomes one line, `uid=5_1..25 StaticText "<the words, joined by
   spaces>"`, and word k keeps its uid, `5_(1+k)`. A gap in the numbering, a line of more than one
@@ -373,7 +455,13 @@ same tabs under the same ids. A crash leaves the same.
     "true" or "false", or a dropdown select given text none of its options' labels is exactly (a
     `<select multiple>` takes an option's value, so is not checked). chrome-devtools-mcp's own `fill`
     empties a read-only box and reports success, fails a disabled box after 5s, and fails the other two
-    at once, each with a message that names none of them.
+    at once, each with a message that names none of them. `fill` and `fill_form` also fail a part of a date or time
+    input (an element in the input's own shadow root, which chrome-devtools-mcp's `fill` fails after 5s), naming the
+    role of the input's line (`Date`, `DateTime` or `InputTime`) to fill instead, and a date or time input given a
+    value Chrome would not take, which chrome-devtools-mcp's `fill` leaves empty and reports as a success.
+    `checked.FILL_JS` sets the value on a copy of the input, Chrome's own parser, so a form but the type's own
+    (`checked.DATE_VALUES`: 1957-08-01 for a date) and a day that does not exist (1957-02-29) both fail; an empty
+    value, which clears the input, passes.
 - **Element uids come from `take_snapshot` and live in that tab's process.** They stay valid
   across queue calls until the page navigates or the element goes away. When the process died and
   was restarted, the next report opens with a note that they are gone. A step failing with
@@ -392,8 +480,9 @@ same tabs under the same ids. A crash leaves the same.
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
     `tabs_offline` and `session_tools_offline` stand in for Chrome and `osascript`, with `state.db` in a
     temporary folder; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
-    `dialogs_offline` for the answerer's connection; `paste_offline` for chrome-devtools-mcp and
-    the connection that hands the page its text and presses the paste key; `limits_offline` for a slow tool;
+    `dialogs_offline` for the answerer's connection; `downloads_offline` for the watcher's connection; `paste_offline` for chrome-devtools-mcp and
+    the connection that hands the page its text and presses the paste key; `screenshot_offline` for the connection
+    a viewport screenshot is taken over; `pointer_offline` for the connection mouse input is sent over; `limits_offline` for a slow tool;
     `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
     and a folder's running Chrome, and `page_offline` for Chrome, `focus.bring` and each tab's Worker, with `.run/state.db` and the Google
     folder each in a temporary folder;
@@ -406,10 +495,16 @@ same tabs under the same ids. A crash leaves the same.
     dropdowns and one textarea take only trusted input, whose Parse resume button runs a stand-in resume parser,
     whose Quoted editor curls quotes as they are typed, whose Stopper editor puts a paste in itself and stops
     it without cancelling Chrome's own insert, as Slides does, and whose Warn me confirm, clicked with no
-    handle_dialog step after it, makes one click take about 30s. Its paste checks read the Mac's clipboard's
-    change count, never its contents, and check nothing wrote it.
+    handle_dialog step after it, makes one click take about 5s. Its paste checks read the Mac's clipboard's
+    change count, never its contents, and check nothing wrote it. Its pixel checks find a red square drawn on a
+    canvas down a scrolled page in a viewport screenshot's own pixels, and click it there with `move_at`,
+    `click_down` and `click_up`; its pointer checks drag across a pad that records trusted mouse events, click a
+    button whose alert holds the let-go, and then try a `move_at` and a screenshot with that alert still open. Its
+    guard checks press with no screenshot, on an unchanged spot, on a button that turns blue on hover, under a modal
+    raised after the screenshot, and twice for a double click, and type with the focus kept and moved.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
-    them, and close them; a tab already open is never touched. No live check moves the Mac's focus:
+    them, and close them (`queue_live`'s download checks also save two files in the real `~/Downloads`, the
+    throwaway Chrome keeping Chrome's own download folder, and remove them); a tab already open is never touched. No live check moves the Mac's focus:
     `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
   - **Never automated:** `../start`, `../stop` and `../restart` are never run, since each acts on the real
     browserd: stopping quits every profile's Chrome, and restarting replaces the one running.

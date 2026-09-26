@@ -7,7 +7,7 @@ import secrets
 import threading
 import time
 
-from . import cdp
+from . import cdp, downloads
 from .devtools import Devtools
 
 PROBE_WAIT = 15.0
@@ -51,6 +51,18 @@ class Worker:
         self._devtools = None
         self._carried = carried
         self.page_id = None
+        self.watcher = None  # the tab's downloads.Watcher, from ensure until stop or pause
+        self._shots = []  # (returned at, capture): the viewport screenshots this tab's replies gave, for the guard
+        self.focus_mark = None  # the guard's counter as the last reply went out: where the keys' focus should be
+
+    def keep_reference(self, capture, returned):
+        """Keep a viewport screenshot a reply gave the agent (guard.Guard.capture's), and when the reply went out."""
+        self._shots = self._shots[-4:] + [(returned, capture)]
+
+    def reference_before(self, arrived):
+        """The last viewport screenshot a reply gave the agent before a queue's request arrived, or None."""
+        given = [capture for returned, capture in self._shots if returned < arrived]
+        return given[-1] if given else None
 
     def ensure(self):
         """(Devtools, page id, restarted): the running process, starting and pairing one when there is none.
@@ -59,17 +71,28 @@ class Worker:
         carried over from an earlier server, whose processes stopped with it.
         """
         if self._devtools is not None and self._devtools.alive():
+            self._listen()
             return self._devtools, self.page_id, False
         # The dead process stays here until a new one pairs, so this holds.
         restarted = self._devtools is not None or self._carried
         devtools = Devtools(os.path.join(self._log_dir, "devtools-%s.log" % self.tab), self.profile.endpoint)
         try:
             self.page_id = self._pair(devtools)
+            # README.md, "Core Abstractions & Shared Pieces", says why the page is selected. Never bringToFront, which
+            # would take the Mac's focus.
+            devtools.text("select_page", {"pageId": self.page_id})
         except Exception:
             devtools.close()  # stored nowhere yet, so nothing else could ever stop it
             raise
         self._devtools, self._carried = devtools, False
+        self._listen()
         return devtools, self.page_id, restarted
+
+    def _listen(self):
+        """Hear the tab's downloads, starting a Watcher again if the last one ended, as one that lost the tab does."""
+        if self.watcher is None or not self.watcher.is_alive():
+            self.watcher = downloads.Watcher(self.target_id, self.connect)
+            self.watcher.start_listening()
 
     def _pair(self, devtools):
         """This tab's page id in chrome-devtools-mcp; README.md, "Agent Gotchas & Invariants", says how it is found."""
@@ -109,6 +132,9 @@ class Worker:
                            % (self.tab, "; " + "; ".join(refused) if refused else ""))
 
     def stop(self):
+        watcher, self.watcher = self.watcher, None
+        if watcher is not None:
+            watcher.stop()
         if self._devtools is not None:
             self._devtools.close()
             self._devtools = None
@@ -116,6 +142,9 @@ class Worker:
     def pause(self):
         """Stop the process to free its memory, and return whether one was running; README.md, "Core Abstractions &
         Shared Pieces", says why the dead process stays."""
+        watcher, self.watcher = self.watcher, None  # stop_all may stop it too as the server stops
+        if watcher is not None:
+            watcher.stop()
         devtools = self._devtools  # stop_all may clear it as the server stops
         if devtools is None or not devtools.alive():
             return False

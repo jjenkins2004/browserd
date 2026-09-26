@@ -179,13 +179,13 @@ class Browser:
                                                      profile.name, profile.name))
         self.pid = answered[0]
 
-    def call(self, method, session=None, **params):
+    def call(self, method, session=None, wait=None, **params):
         self._last += 1
         message_id = self._last
         message = {"id": message_id, "method": method, "params": params}
         if session:
             message["sessionId"] = session
-        self._ws.settimeout(CALL_WAIT)  # whatever a wait_for or next_event before it left
+        self._ws.settimeout(wait or CALL_WAIT)  # whatever a wait_for or next_event before it left
         self._ws.send(json.dumps(message))
         while True:
             try:

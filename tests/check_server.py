@@ -5,6 +5,7 @@ browser/README.md, "Agent Gotchas & Invariants", "Checks", says what each group 
     python3 tests/check_server.py
 """
 
+import base64
 import contextlib
 import http.client
 import io
@@ -14,17 +15,20 @@ import os
 import re
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 import threading
 import time
 import urllib.parse
+import zlib
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import cdp, checked, chromes, dialogs, focus, mcp, page, profiles, record, server, service, sessions, steps
+from browser import (cdp, checked, chromes, dialogs, downloads, focus, mcp, page, pointer, profiles, record, screenshot,
+                     server, service, sessions, steps)
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
 from browser.state import Session, State, Tab
@@ -644,7 +648,7 @@ def queue_offline():
         check("a step naming a tool the queue leaves out is refused, by number, saying why", "step 2" in said and "left out" in said, said)
         said = refusal(lambda: steps.check([{"tool": "click"}, {"tool": "frobnicate"}], {"click": {}}), steps.StepError)
         check("a step naming a tool that does not exist is refused, by number, naming the tools a queue runs",
-              "step 2" in said and "not a tool" in said and "it runs pick, expect, type, paste, wait, click" in said, said)
+              "step 2" in said and "not a tool" in said and "it runs pick, expect, type, paste, wait, move_at, click_down, click_up, click" in said, said)
         check("a step whose tool name is empty is refused", "not an object with a tool name" in load(steps=[{"tool": ""}]))
         inside = os.path.join(workdir, "resume.pdf")
         for label, step, words in (
@@ -733,13 +737,16 @@ def queue_offline():
               placed[1] == {"tool": "take_screenshot", "fullPage": True, "filePath": "/job/run/004-step2-screenshot.png"}, repr(placed))
         check("with the extension its format asks for", placed[2].get("filePath") == "/job/run/004-step3-screenshot.jpeg", repr(placed))
         check("a filePath the step gives, and every other step, is left as it is", placed[0] == planned[0] and placed[3] == planned[3])
+        placed = steps.place_screenshots([{"tool": "take_screenshot"}], lambda name: "/job/run/004-" + name)
+        check("a screenshot of the viewport with no format is saved as browserd takes it, a JPEG",
+              placed[0].get("filePath") == "/job/run/004-step1-screenshot.jpeg", repr(placed))
         check("the tab-managing tools are left out of a queue",
               steps.LEFT_OUT >= {"new_page", "close_page", "select_page", "list_pages"})
 
         image = {"type": "image", "data": "AAAA", "mimeType": "image/png"}
         fake = FakeDevtools([([{"type": "text", "text": "Filled"}], False), ([{"type": "text", "text": "shot"}, image], False),
                              ([{"type": "text", "text": "Element uid 9_9 not found"}], True)])
-        planned = [{"tool": "fill", "uid": "1_2", "value": "x"}, {"tool": "take_screenshot"},
+        planned = [{"tool": "fill", "uid": "1_2", "value": "x"}, {"tool": "take_screenshot", "fullPage": True},
                    {"tool": "click", "uid": "9_9"}, {"tool": "fill", "uid": "1_3", "value": "y"}]
         called = lambda name: os.path.join(workdir, "004-" + name)
         result = steps.run(fake, 7, planned, called)
@@ -923,6 +930,20 @@ def views(workdir):
               '[selected in the DevTools Elements panel]\n    uid=1_2 option "Canada" selectable selected value="Canada"')
     text, _ = steps.view("## Latest page snapshot\n" + marked, path)
     check("a collapsed select keeps its value when DevTools has it selected", '= "Canada" (1 options)' in text, text)
+    dated = "\n".join(['uid=1_0 RootWebArea "D"', '  uid=1_1 StaticText "Birthday"',
+                       '  uid=1_2 Date "Birthday" value="1957-08-01"',
+                       '    uid=1_3 spinbutton "Month Month" value="8" valuemax="12" valuemin="1" valuetext=""',
+                       '    uid=1_4 StaticText "/"',
+                       '    uid=1_5 button "Show date picker Show date picker" haspopup="menu"',
+                       '  uid=1_6 InputTime "Start"', '    uid=1_7 spinbutton "Hours Hours" value="0"',
+                       '  uid=1_8 DateTime "Month"', '    uid=1_9 spinbutton "Year Year" value="0"'])
+    text, _ = steps.view("## Latest page snapshot\n" + dated, path)
+    check("a date, time or month field is one line in a view, its parts and picker button left out",
+          text.split("\n")[1:] == ['uid=1_0 RootWebArea "D"', '  uid=1_1 StaticText "Birthday"',
+                                   '  uid=1_2 Date "Birthday" value="1957-08-01"', '  uid=1_6 InputTime "Start"',
+                                   '  uid=1_8 DateTime "Month"'], text)
+    text, _ = steps.view("## Latest page snapshot\n" + dated, path, under="1_2")
+    check("and a view under its uid shows its parts", 'uid=1_3 spinbutton "Month Month"' in text, text)
     fake = FakeDevtools([([{"type": "text", "text": "## Latest page snapshot\n" + 'uid=1_0 RootWebArea "P"\n  uid=1_1 textbox "Notes" multiline value="a\n## Pages\nb"'}], False)])
     report = text_of(steps.run(fake, 3, [{"tool": "take_snapshot"}], lambda name: os.path.join(workdir, "006-" + name))["content"])
     check("a value's own ## Pages line inside a snapshot is kept", "## Pages" in report, report)
@@ -1117,6 +1138,110 @@ def dialogs_offline():
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+class FakeDownloads:
+    """The connection a downloads.Watcher holds: it hands out the events in `events`, which a check may add to, one per
+    wait."""
+
+    def __init__(self, events=()):
+        self.events = list(events)
+
+    def call(self, method, session=None, **params):
+        return {"sessionId": "S1"} if method == "Target.attachToTarget" else {}
+
+    def next_event(self, timeout):
+        if self.events:
+            return self.events.pop(0)
+        time.sleep(0.01)
+        return None
+
+    def close(self):
+        pass
+
+
+def will_begin(guid, name, session="S1"):
+    return {"method": "Page.downloadWillBegin", "sessionId": session, "params": {"guid": guid, "suggestedFilename": name}}
+
+
+def progress(guid, state, path=None):
+    return {"method": "Browser.downloadProgress", "params": dict({"guid": guid, "state": state}, **({"filePath": path} if path else {}))}
+
+
+def downloads_offline():
+    """downloads.Watcher against a stand-in connection, and steps.run reporting what it took."""
+    connection = FakeDownloads([will_begin("G1", "note.txt"), will_begin("G2", "theirs.txt", "S2"),
+                                progress("G1", "completed", "/Users/x/Downloads/note.txt"), progress("G2", "completed", "/y")])
+    watcher = downloads.Watcher("T1", lambda: connection)
+    watcher.start_listening()
+    try:
+        time.sleep(0.1)
+        got = watcher.take(2)
+        check("a download the tab began is taken once it completes, with where it went; another tab's is not",
+              got == [{"name": "note.txt", "state": "completed", "path": "/Users/x/Downloads/note.txt"}], repr(got))
+        check("and is taken only once", watcher.take(0) == [])
+        connection.events.append(will_begin("G3", "big.zip"))
+        time.sleep(0.1)
+        started = time.monotonic()
+        got = watcher.take(0.3)
+        check("one still in progress after the wait is taken as such",
+              got == [{"name": "big.zip", "state": "inProgress", "path": None}] and time.monotonic() - started < 1, repr(got))
+        started = time.monotonic()
+        check("and a take after that neither waits for it nor takes it again",
+              watcher.take(2) == [] and time.monotonic() - started < 0.5)
+        connection.events.append(progress("G3", "canceled"))
+        time.sleep(0.1)
+        got = watcher.take(0)
+        check("it is taken again once it ends", got == [{"name": "big.zip", "state": "canceled", "path": None}], repr(got))
+    finally:
+        watcher.stop()
+    connection = FakeDownloads([created("P1", "T1"), created("P2", "P1"), created("X1", "X0"),
+                                {"method": "Browser.downloadWillBegin", "params": {"guid": "G4", "frameId": "P2", "suggestedFilename": "popped.pdf"}},
+                                {"method": "Browser.downloadWillBegin", "params": {"guid": "G5", "frameId": "X1", "suggestedFilename": "theirs.pdf"}},
+                                progress("G4", "completed", "/d/popped.pdf"), progress("G5", "completed", "/d/theirs.pdf")])
+    watcher = downloads.Watcher("T1", lambda: connection)
+    watcher.start_listening()
+    try:
+        time.sleep(0.1)
+        got = watcher.take(2)
+        check("a download begun in a page the tab opened, or one that page opened, is the tab's; another tab's popup's is not",
+              got == [{"name": "popped.pdf", "state": "completed", "path": "/d/popped.pdf"}], repr(got))
+    finally:
+        watcher.stop()
+
+    def unreachable():
+        raise cdp.CdpError("nothing is listening")
+
+    watcher = downloads.Watcher("T1", unreachable)
+    started = time.monotonic()
+    watcher.start_listening()
+    check("a watcher that cannot reach the tab ends at once, and takes nothing",
+          time.monotonic() - started < 1 and watcher.take(0) == [] and not watcher.is_alive())
+
+    class Taken:
+        def __init__(self, *takes):
+            self.takes = list(takes)
+
+        def take(self, wait):
+            return self.takes.pop(0) if self.takes else []
+
+    workdir = tempfile.mkdtemp(prefix="browser-downloads-")
+    try:
+        called = lambda name: os.path.join(workdir, "001-" + name)
+        fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False),
+                             ([{"type": "text", "text": "Successfully clicked on the element"}], False)])
+        report = text_of(steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "click", "uid": "1_2"}], called,
+                                   watcher=Taken([{"name": "note.txt", "state": "completed", "path": "/d/note.txt"},
+                                                    {"name": "big.zip", "state": "inProgress", "path": None}],
+                                                   [{"name": "big.zip", "state": "completed", "path": "/d/big.zip"}]))["content"])
+        check("a step's report says what it downloaded and where, and what is still downloading, under its own reply",
+              re.search(r"--- 1 click ok .*\nSuccessfully clicked on the element\n--- downloaded note.txt to /d/note.txt\n"
+                        r"--- big.zip is still downloading; a later step on this tab says where it went\n--- 2 click ok", report)
+              is not None, report)
+        check("and a later step's report says where one still downloading went",
+              report.endswith("--- downloaded big.zip to /d/big.zip"), report)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 class Keys:
     """A connection to a profile's Chrome that records what it is asked. Each Runtime.evaluate answers the next of
     values, an exception as a script error: by default the page handed the text, ready, one paste seen, and the text
@@ -1201,6 +1326,188 @@ def paste_offline():
     check("paste with a uid reads the text box back", said == 'pasted 3 characters; the field holds "a\\nb"', said)
 
 
+class Shots:
+    """A connection to a profile's Chrome whose tab has a viewport of css CSS pixels at a device pixel ratio, scrolled
+    down 300; it records what it is asked, and answers a screenshot with the bytes b"img"."""
+
+    def __init__(self, css=(1200, 792), ratio=2, fails=False):
+        self.calls, self.css, self.ratio, self.fails = [], css, ratio, fails
+
+    def call(self, method, session=None, wait=None, **params):
+        self.calls.append((method, params))
+        if self.fails:
+            raise cdp.CdpError("Page.captureScreenshot did not answer in time")
+        if method == "Target.attachToTarget":
+            return {"sessionId": "S1"}
+        if method == "Page.getLayoutMetrics":
+            width, height = self.css
+            return {"cssVisualViewport": {"pageX": 0, "pageY": 300, "clientWidth": width, "clientHeight": height},
+                    "visualViewport": {"clientWidth": width * self.ratio, "clientHeight": height * self.ratio}}
+        return {"data": base64.b64encode(b"img").decode()}
+
+    def close(self):
+        pass
+
+
+def screenshot_offline():
+    """screenshot.viewport, and a queue's viewport take_screenshot, with a stand-in for the connection to the tab."""
+    workdir = tempfile.mkdtemp(prefix="browser-shot-")
+    try:
+        path = os.path.join(workdir, "001-step1-screenshot.jpeg")
+        shots = Shots()
+        content, failed_ = screenshot.viewport({"tool": "take_screenshot", "filePath": path}, "T1", lambda: shots)
+        captured = [params for method, params in shots.calls if method == "Page.captureScreenshot"]
+        check("a viewport screenshot is clipped to the scrolled viewport at one pixel per CSS pixel, as a JPEG",
+              not failed_ and captured == [{"format": "jpeg", "quality": screenshot.QUALITY, "clip": {
+                  "x": 0, "y": 300, "width": 1200, "height": 792, "scale": 0.5}}], repr(shots.calls))
+        check("it is saved to the step's filePath", open(path, "rb").read() == b"img")
+        check("and sent back as an image after a line giving its size in CSS pixels and where it is saved",
+              content[1:] == [{"type": "image", "data": base64.b64encode(b"img").decode(), "mimeType": "image/jpeg"}]
+              and "1200x792 px, one pixel per CSS pixel" in content[0]["text"]
+              and content[0]["text"].endswith("Saved screenshot to %s." % path), repr(content))
+        shots = Shots(css=(2560, 1440), ratio=1)
+        content, failed_ = screenshot.viewport({"tool": "take_screenshot", "format": "png", "filePath": path}, "T1",
+                                               lambda: shots)
+        captured = [params for method, params in shots.calls if method == "Page.captureScreenshot"]
+        check("a viewport wider than LONGEST is shrunk to it, and the line gives the factor to multiply a point by",
+              not failed_ and captured[0]["clip"]["scale"] == screenshot.LONGEST / 2560
+              and "2000x1125 px, each pixel 1.28 CSS pixels" in content[0]["text"]
+              and "multiply a point's pixel coordinates by 1.28" in content[0]["text"], content[0]["text"])
+        check("a PNG is asked for with no quality", "quality" not in captured[0] and content[1]["mimeType"] == "image/png")
+        shots = Shots()
+        content, failed_ = screenshot.viewport({"tool": "take_screenshot", "scale": 0.5, "filePath": path}, "T1",
+                                               lambda: shots)
+        captured = [params for method, params in shots.calls if method == "Page.captureScreenshot"]
+        check("a scale of 0.5 takes the viewport at half an image pixel per CSS pixel, and the line gives the factor of 2",
+              not failed_ and captured[0]["clip"]["scale"] == 0.25 and "600x396 px, each pixel 2 CSS pixels" in content[0]["text"]
+              and "multiply a point's pixel coordinates by 2 " in content[0]["text"], content[0]["text"])
+        screenshot_tool = {"take_screenshot": {"inputSchema": {"properties": {
+            "pageId": {"type": "number"}, "uid": {"type": "string"}, "fullPage": {"type": "boolean"},
+            "format": {"type": "string"}, "filePath": {"type": "string"}}}}}
+        for step, wrong in (({"tool": "take_screenshot", "scale": 0}, "take_screenshot's scale must be a number above 0"),
+                            ({"tool": "take_screenshot", "scale": 2}, "take_screenshot's scale must be a number above 0"),
+                            ({"tool": "take_screenshot", "scale": 0.5, "fullPage": True}, "take_screenshot's scale is for a screenshot of the viewport"),
+                            ({"tool": "take_screenshot", "scale": 0.5, "uid": "1_1"}, "take_screenshot's scale is for a screenshot of the viewport")):
+            check("a queue refuses %s" % json.dumps(step),
+                  wrong in refusal(lambda: steps.check([dict(step)], screenshot_tool), steps.StepError))
+        check("and passes a viewport screenshot's scale of 0.5, listed in the steps argument's description",
+              refusal(lambda: steps.check([{"tool": "take_screenshot", "scale": 0.5}], screenshot_tool), steps.StepError) == ""
+              and "take_screenshot(uid?: string, fullPage?: boolean, format?: string, filePath?: string, scale?: number)"
+              in steps.describe(screenshot_tool), steps.describe(screenshot_tool))
+        content, failed_ = screenshot.viewport({"tool": "take_screenshot", "filePath": path}, "T1", lambda: Shots(fails=True))
+        check("a screenshot Chrome does not answer fails its step, saying why",
+              failed_ and content == [{"type": "text", "text": "could not take the screenshot: Page.captureScreenshot did "
+                                                               "not answer in time"}], repr(content))
+        check("browserd takes only the viewport's screenshot, leaving an element's and the whole page's to "
+              "chrome-devtools-mcp", screenshot.taken({"tool": "take_screenshot"})
+              and not screenshot.taken({"tool": "take_screenshot", "uid": "1_1"})
+              and not screenshot.taken({"tool": "take_screenshot", "fullPage": True}))
+        fake, shots = FakeDevtools([]), Shots()
+        result = steps.run(fake, 7, [{"tool": "take_screenshot", "filePath": path}], lambda name: os.path.join(workdir, name),
+                           target="T1", connect=lambda: shots)
+        check("a queue's viewport screenshot never reaches chrome-devtools-mcp, and its image comes back",
+              fake.calls == [] and not result["isError"] and result["content"][1]["type"] == "image", repr(result))
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+class Hand:
+    """A connection to a profile's Chrome that records each mouse event it is sent; with late or a dialog, each goes
+    unanswered in time (cdp.Late), and with a dialog, that dialog's event is heard; with held, a dialog open already
+    leaves Page.enable unanswered."""
+
+    def __init__(self, dialog=None, late=False, held=False):
+        self.events, self.dialog, self.late, self.held = [], dialog, late or dialog is not None, held
+
+    def call(self, method, session=None, wait=None, **params):
+        if method == "Target.attachToTarget":
+            return {"sessionId": "S1"}
+        if method == "Page.enable" and self.held:
+            raise cdp.Late("Page.enable did not answer in time")
+        if method == "Input.dispatchMouseEvent":
+            self.events.append(params)
+            if self.late:
+                raise cdp.Late("Input.dispatchMouseEvent did not answer in time")
+        return {}
+
+    def wait_for(self, event, session=None, timeout=20.0):
+        if self.dialog is None:
+            raise cdp.CdpError("%s never arrived" % event)
+        return self.dialog
+
+    def close(self):
+        pass
+
+
+def pointer_offline():
+    """pointer's steps: what they refuse, and the mouse events they send over a stand-in connection."""
+    for step, wrong in (({"tool": "move_at", "x": 10}, "move_at needs x and y"),
+                        ({"tool": "move_at", "x": -1, "y": 5}, "move_at needs x and y"),
+                        ({"tool": "move_at", "x": True, "y": 5}, "move_at needs x and y"),
+                        ({"tool": "move_at", "x": 1, "y": 5, "uid": "1_1"}, "move_at does not take uid"),
+                        ({"tool": "click_down", "button": "side"}, "click_down's button must be left, right or middle"),
+                        ({"tool": "click_up", "count": 4}, "click_up's count must be 1, 2 or 3")):
+        check("pointer refuses %s" % json.dumps(step), (pointer.problem(step) or "").startswith(wrong), pointer.problem(step))
+    check("and passes a move_at of fractional pixels and a right double click",
+          pointer.problem({"tool": "move_at", "x": 10.5, "y": 0}) is None
+          and pointer.problem({"tool": "click_down", "button": "right", "count": 2}) is None)
+    hand = Hand()
+    content, failed = pointer.run({"tool": "click_down"}, "P1", lambda: hand)
+    check("a press before the pointer is placed on the tab is refused, and sends nothing",
+          failed and "put a move_at before it" in content[0]["text"] and hand.events == [], repr(content))
+    said = []
+    for step in ({"tool": "move_at", "x": 10, "y": 20}, {"tool": "click_down"}, {"tool": "move_at", "x": 50.5, "y": 60},
+                 {"tool": "click_up"}):
+        content, failed = pointer.run(step, "P1", lambda: hand)
+        said.append((content[0]["text"], failed))
+    check("a drag is move_at, click_down, move_at, click_up: the move between carries the button held",
+          hand.events == [{"type": "mouseMoved", "x": 10, "y": 20, "buttons": 0, "button": "none"},
+                          {"type": "mousePressed", "x": 10, "y": 20, "buttons": 1, "button": "left", "clickCount": 1},
+                          {"type": "mouseMoved", "x": 50.5, "y": 60, "buttons": 1, "button": "left"},
+                          {"type": "mouseReleased", "x": 50.5, "y": 60, "buttons": 0, "button": "left", "clickCount": 1}],
+          repr(hand.events))
+    check("and each step says where the pointer is and what it holds",
+          said == [("the pointer is at 10,20", False),
+                   ("pressed the left button at 10,20; it stays down until a click_up", False),
+                   ("the pointer is at 50.5,60, the left button down", False),
+                   ("let go of the left button at 50.5,60", False)], repr(said))
+    content, failed = pointer.run({"tool": "click_up"}, "P1", lambda: hand)
+    check("a let-go of a button not down is refused", failed and "the left button is not down" in content[0]["text"])
+    pointer.run({"tool": "click_down", "button": "right", "count": 2}, "P1", lambda: hand)
+    content, failed = pointer.run({"tool": "click_down", "button": "right"}, "P1", lambda: hand)
+    check("a right press with count 2 is sent as one, and a press of a button already down is refused",
+          failed and "the right button is down already" in content[0]["text"] and hand.events[-1]["clickCount"] == 2
+          and hand.events[-1]["buttons"] == 2, repr(content))
+    content, failed = pointer.run({"tool": "move_at", "x": 1, "y": 2}, "P2", lambda: Hand({"type": "alert", "message": "hi"}))
+    check("input the page could not take for a dialog it opened counts as done, and says so",
+          not failed and 'the alert "hi" it opened blocks the page, so the step counts as done' in content[0]["text"],
+          repr(content))
+    content, failed = pointer.run({"tool": "move_at", "x": 1, "y": 2}, "P3", lambda: Hand(late=True))
+    check("input a busy page has not taken in time, with no dialog open, fails, saying it lands once the page is free",
+          failed and content[0]["text"] == "sent the input, but the page had not taken it after 5s, and takes it once "
+                                           "free", repr(content))
+    content, failed = pointer.run({"tool": "click_down"}, "P3", lambda: Hand())
+    check("and the pointer is where that input put it", not failed and "at 1,2" in content[0]["text"], repr(content))
+    hand = Hand(held=True)
+    content, failed = pointer.run({"tool": "move_at", "x": 3, "y": 4}, "P3", lambda: hand)
+    check("a page that does not answer before any input is sent, as with a dialog open, fails the step and sends nothing",
+          failed and "as when a dialog is open on it: answer it with a handle_dialog step first" in content[0]["text"]
+          and hand.events == [], repr(content))
+    try:
+        steps.check([{"tool": "move_at", "x": 1, "y": 2}, {"tool": "click_down"}, {"tool": "click_up", "count": 2}], {})
+        passed_check = True
+    except steps.StepError:
+        passed_check = False
+    check("a queue of pointer steps passes the queue's check", passed_check)
+    check("and one with a bad pointer step is refused before any step runs",
+          "step 1: move_at needs x and y" in refusal(lambda: steps.check([{"tool": "move_at"}], {}), steps.StepError))
+    check("the steps argument's description lists them", all("  %s(" % name in steps.describe({}) for name in pointer.STEPS))
+    fake = FakeDevtools([])
+    result = steps.run(fake, 7, [{"tool": "move_at", "x": 5, "y": 6}], lambda name: name, target="P4", connect=lambda: Hand())
+    check("a queue's pointer step never reaches chrome-devtools-mcp", fake.calls == [] and not result["isError"],
+          repr(result))
+
+
 def limits_offline():
     """What a queue refuses or stops for: its time, a fill that would do harm, a chrome-devtools-mcp timeout too long."""
     workdir = tempfile.mkdtemp(prefix="browser-limits-")
@@ -1228,13 +1535,26 @@ def limits_offline():
                 ("a read-only box", {"kind": "box", "readonly": True}, "x", "is read-only, and fill would empty it"),
                 ("a checkbox given words", {"kind": "toggle"}, "yes", 'with "true" or "false"'),
                 ("a select given text none of its options has", {"kind": "select", "options": ["Canada"]}, "Atlantis",
-                 'no option of the select 1_4 is exactly "Atlantis"')):
+                 'no option of the select 1_4 is exactly "Atlantis"'),
+                ("a part of a date field", {"kind": "datepart", "type": "date"}, "08",
+                 "one part of the date field on the Date line above it (fill that line"),
+                ("a part of a disabled date field, whose line the snapshot lacks",
+                 {"kind": "datepart", "type": "date", "disabled": True}, "08", "is disabled"),
+                ("a date Chrome would leave empty", {"kind": "date", "type": "date", "takes": False}, "08/01/1957",
+                 'leaves empty given "08/01/1957"; it takes only a real one as YYYY-MM-DD, like 1957-08-01'),
+                ("a time Chrome would leave empty", {"kind": "date", "type": "time", "takes": False}, "2:30 PM",
+                 "HH:MM on a 24-hour clock"),
+                ("a disabled date field", {"kind": "date", "type": "date", "disabled": True, "takes": True},
+                 "1957-08-01", "is disabled")):
             said = checked._unfillable(found, "1_4", value)
             check("fill refuses %s" % label, said is not None and words in said, repr(said))
         check("fill takes a select's option exactly as labelled, a checkbox's true, and a plain box",
               checked._unfillable({"kind": "select", "options": ["United States"]}, "1_4", "United States") is None
               and checked._unfillable({"kind": "toggle"}, "1_4", "true") is None
               and checked._unfillable({"kind": "box"}, "1_4", "x") is None)
+        check("fill takes a date or time field given a value Chrome takes",
+              all(checked._unfillable({"kind": "date", "type": kind, "takes": True}, "1_4", "x") is None
+                  for kind in checked.DATE_VALUES))
         check("fill refuses a select's option with spacing its label lacks, which chrome-devtools-mcp would not match",
               checked._unfillable({"kind": "select", "options": ["United States"]}, "1_4", " United  States ") is not None)
         said = refusal(lambda: steps.check([{"tool": "wait_for", "text": "x", "timeout": 60000}], SCHEMAS), steps.StepError)
@@ -1244,6 +1564,12 @@ def limits_offline():
         steps.run(fake, 7, [{"tool": "wait_for", "text": ["x"], "timeout": 40000}], called)
         check("a chrome-devtools-mcp timeout is cut to the time the queue has left",
               fake.calls[0][1]["timeout"] <= steps.QUEUE_MOST * 1000, repr(fake.calls[0]))
+        fake = FakeDevtools([([{"type": "text", "text": "Successfully navigated"}], False)] * 2)
+        steps.run(fake, 7, [{"tool": "navigate_page", "url": "https://example.com/"},
+                            {"tool": "navigate_page", "type": "reload", "timeout": 5000}], called)
+        check("a navigate_page that names no timeout is given NAVIGATE_TIMEOUT, and one that names its own keeps it",
+              [arguments.get("timeout") for tool, arguments in fake.calls if tool == "navigate_page"]
+              == [steps.NAVIGATE_TIMEOUT, 5000], repr(fake.calls))
         long_json = "Script ran on page and returned:\n```json\n" + "x" * (steps.REPLY_MOST + 10) + "\n```"
         report = text_of(steps.run(FakeDevtools([([{"type": "text", "text": long_json}], False)]), 3,
                                    [{"tool": "evaluate_script"}], lambda name: os.path.join(workdir, "007-" + name))["content"])
@@ -1356,7 +1682,7 @@ def recording_offline():
             asked = json.load(handle)
         check("the record holds the tab and the steps read from the tab's record folder, the screenshot given its path",
               asked == {"session": session.id, "tab": "zzzz", "steps": [{"tool": "take_snapshot"},
-                                                 {"tool": "take_screenshot", "filePath": os.path.join(folder, "003-step2-screenshot.png")}]},
+                                                 {"tool": "take_screenshot", "filePath": os.path.join(folder, "003-step2-screenshot.jpeg")}]},
               repr(asked))
         with open(os.path.join(folder, "bad.json"), "w") as handle:
             json.dump([{"tool": "new_page"}], handle)
@@ -1738,6 +2064,69 @@ FRAMED = ("<title>framed</title><iframe src=\"data:text/html,%s\"></iframe>"
           % urllib.parse.quote("<label for=x>Inside</label><input id=x>"))
 
 
+# A red square drawn on a canvas 700px down a page taller than any window, which records each trusted click on it.
+PIXELS = ("<title>pixels</title><body style='margin:0;height:3000px'><canvas id=c width=40 height=40 "
+          "style='position:absolute;left:300px;top:700px'></canvas><script>const g = c.getContext('2d'); "
+          "g.fillStyle = '#f00'; g.fillRect(0, 0, 40, 40); window.hits = []; c.addEventListener('click', "
+          "(e) => hits.push([e.isTrusted, e.offsetX, e.offsetY]))</script></body>")
+
+
+# A pad that records each trusted mouse event on it, and a Warn button whose click opens an alert.
+PAD = ("<title>pad</title><body style='margin:0'><div id=d style='position:absolute;left:0;top:0;width:400px;height:300px'>"
+       "</div><button style='position:absolute;left:500px;top:50px;width:80px;height:40px' onclick='alert(\"hi\")'>Warn"
+       "</button><script>window.seen = []; for (const kind of ['mousedown', 'mousemove', 'mouseup']) d.addEventListener("
+       "kind, (e) => e.isTrusted && seen.push([kind, e.clientX, e.clientY, e.buttons]))</script></body>")
+
+
+# The click guard's page: a Buy button, a button that turns blue on hover, two fields, a div that counts double clicks,
+# and scripts that raise a modal over the page, or move the focus, a moment after they are called.
+GUARD = ("<title>guard</title><style>#h:hover{background:#00f;color:#fff}</style><body style='margin:0'>"
+         "<button id=b style='position:absolute;left:40px;top:40px;width:120px;height:40px' "
+         "onclick='clicks.push(\"b\")'>Buy</button><button id=h style='position:absolute;left:40px;top:120px;"
+         "width:120px;height:40px' onclick='clicks.push(\"h\")'>Hover</button><input id=i style='position:absolute;"
+         "left:40px;top:200px'><input id=j style='position:absolute;left:40px;top:240px'><div id=d "
+         "style='position:absolute;left:300px;top:40px;width:100px;height:40px' ondblclick='clicks.push(\"dbl\")'>"
+         "Double</div><script>window.clicks = []; window.later = (ms) => setTimeout(() => { const m = "
+         "document.createElement('div'); m.id = 'modal'; m.style.cssText = 'position:fixed;left:0;top:0;width:100%;"
+         "height:100%;background:rgba(0,0,0,.6)'; m.onclick = () => clicks.push('modal'); document.body.appendChild(m) },"
+         " ms); window.steal = (ms) => setTimeout(() => j.focus(), ms)</script></body>")
+
+
+def red_box(png, rows_most):
+    """The box [left, top, right, bottom] of a PNG's red pixels in its first rows_most rows, and its size; the checks'
+    own reading of a screenshot, since the standard library has no image decoder. Red is near it, not exact, as the
+    Mac's colour profile shifts #f00."""
+    at, packed, width, height, channels = 8, b"", 0, 0, 4
+    while at < len(png):
+        length, kind = struct.unpack(">I4s", png[at:at + 8])
+        body = png[at + 8:at + 8 + length]
+        if kind == b"IHDR":
+            width, height, _, color = struct.unpack(">IIBB", body[:10])
+            channels = {2: 3, 6: 4}[color]
+        elif kind == b"IDAT":
+            packed += body
+        at += 12 + length
+    raw, stride, previous, found = zlib.decompress(packed), width * channels, bytearray(width * channels), None
+    for y in range(min(height, rows_most)):
+        # Undo each row's PNG filter (none, sub, up, average, Paeth) against the row before it.
+        kind, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            left, up = line[i - channels] if i >= channels else 0, previous[i]
+            corner = previous[i - channels] if i >= channels else 0
+            guess = {0: 0, 1: left, 2: up, 3: (left + up) // 2}.get(kind)
+            if guess is None:
+                p = left + up - corner
+                guess = left if abs(p - left) <= abs(p - up) and abs(p - left) <= abs(p - corner) else \
+                    up if abs(p - up) <= abs(p - corner) else corner
+            line[i] = (line[i] + guess) & 255
+        for x in range(width):
+            red, green, blue = line[x * channels:x * channels + 3]
+            if red > 200 and green < 100 and blue < 100:
+                found = [x, y, x, y] if found is None else [min(found[0], x), found[1], max(found[2], x), y]
+        previous = line
+    return found, (width, height)
+
+
 def uid(snapshot, role, label):
     found = re.search(r'uid=(\S+) %s "%s' % (role, re.escape(label)), snapshot)
     return found.group(1) if found else ""
@@ -1959,8 +2348,8 @@ def checked_live(httpd, tabs, opened, session):
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": field("button", "Warn me")}, {"tool": "handle_dialog", "action": "accept"}, warned])
     took = re.search(r"^--- 1 click ok ([\d.]+)s$", text, re.M)
-    check("a confirm a handle_dialog step waits on is answered as it opens, so its click takes no 30s",
-          not is_error and took is not None and float(took.group(1)) < 10
+    check("a confirm a handle_dialog step waits on is answered as it opens, so its click takes no 5s",
+          not is_error and took is not None and float(took.group(1)) < 3
           and 'the confirm "Sure?" was accepted as it opened' in text and returned(text.split("--- 3")[-1]) == "confirmed"
           and "## Pages" not in text, text)
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
@@ -2086,6 +2475,87 @@ def queue_live(profile, state):
         check("the steps after it do not run", "--- not run: 2 fill" in text)
         check("the report shows the page as it is now", "Agent A" in text.split("--- the page now")[-1])
 
+        # A process selects on its own the first page it lists, in Chrome's order, not the order tabs opened; of two
+        # tabs, at most one can be that page.
+        for _ in range(2):
+            slow = open_tab("<title>disabled scratch</title><button disabled>Never</button>")
+            never = uid(call(httpd, "queue", session=session, tab=slow, steps=[{"tool": "take_snapshot"}])[0], "button", "Never")
+            began = time.monotonic()
+            text, is_error = call(httpd, "queue", session=session, tab=slow, steps=[{"tool": "click", "uid": never}])
+            took = time.monotonic() - began
+            check("a click on a disabled button fails after chrome-devtools-mcp's 5s, not Puppeteer's 30s",
+                  is_error and took < 15 and "did not become interactive" in text, "%.1fs: %s" % (took, text[:120]))
+
+        opener = serving(server.tab_tools(state, tabs, workers, server.queue_steps(state, tabs, workers, allowed, root)),
+                         server.NAME)
+        try:
+            text, is_error = call(opener, "tab_open", session=session, url="data:text/html," + urllib.parse.quote(same),
+                                  steps=[{"tool": "take_snapshot"}])
+            read = text.split("\n")[0].split()[0] if text else ""
+            opened.append(read)
+            check("tab_open given steps opens the tab, then runs them on it: its tab id, title and URL, then the queue's report",
+                  not is_error and text.startswith(read + "  queue scratch") and "--- 1 take_snapshot ok" in text
+                  and 'textbox "Name"' in text, text[:300])
+            check("and records them as that tab's first queue call",
+                  sorted(os.listdir(os.path.join(home, read))) == ["001-queue.json", "001-queue.txt", "001-step1-snapshot.txt"],
+                  repr(os.listdir(os.path.join(home, read))))
+            text, is_error = call(opener, "tab_open", session=session, url="data:text/html,<title>bad steps</title>",
+                                  steps=[{"tool": "new_page", "url": "about:blank"}])
+            refused = text.split("\n")[0].split()[0] if text else ""
+            opened.append(refused)
+            check("tab_open whose steps are refused still opens the tab and names it, with why they did not run",
+                  is_error and "bad steps" in text.split("\n")[0] and "the tab is open, but its steps did not run" in text
+                  and "new_page" in text, text[:300])
+        finally:
+            opener.shutdown()
+            opener.server_close()
+
+        dated = open_tab("<title>date scratch</title><label for=born>Born</label><input id=born type=date>")
+        text, _ = call(httpd, "queue", session=session, tab=dated, steps=[{"tool": "take_snapshot"}])
+        born = uid(text, "Date", "Born")
+        check("a date field is one line in a view, with no Month, Day or Year part to fill",
+              bool(born) and "spinbutton" not in text, text)
+        full, _ = call(httpd, "queue", session=session, tab=dated, steps=[{"tool": "take_snapshot", "full": True}])
+        began = time.monotonic()
+        text, is_error = call(httpd, "queue", session=session, tab=dated, steps=[
+            {"tool": "fill", "uid": uid(full, "spinbutton", "Month"), "value": "08"}])
+        check("fill on a date's Month part is refused at once, naming the field to fill",
+              is_error and time.monotonic() - began < 3 and "the Date line above it" in text, text[:300])
+        text, is_error = call(httpd, "queue", session=session, tab=dated, steps=[
+            {"tool": "fill", "uid": born, "value": "08/01/1957"}])
+        check("fill on a date given as 08/01/1957 is refused, since chrome-devtools-mcp would leave it empty",
+              is_error and "YYYY-MM-DD" in text, text[:300])
+        text, is_error = call(httpd, "queue", session=session, tab=dated, steps=[
+            {"tool": "fill", "uid": born, "value": "1957-02-29"}])
+        check("and so is one in the right form for a day that does not exist, which Chrome leaves empty too",
+              is_error and 'leaves empty given "1957-02-29"' in text, text[:300])
+        text, is_error = call(httpd, "queue", session=session, tab=dated, steps=[
+            {"tool": "fill", "uid": born, "value": "1957-08-01"}, {"tool": "expect", "uid": born, "value": "1957-08-01"}])
+        check("fill on the date field itself, as 1957-08-01, takes", not is_error, text)
+
+        name = "browserd-check-%d.txt" % os.getpid()
+        fetched = open_tab("<title>download scratch</title><a download=%s href='data:text/plain,hello'>Get it</a>" % name)
+        text, _ = call(httpd, "queue", session=session, tab=fetched, steps=[{"tool": "take_snapshot"}])
+        text, is_error = call(httpd, "queue", session=session, tab=fetched, steps=[{"tool": "click", "uid": uid(text, "link", "Get it")}])
+        went = re.search(r"^--- downloaded %s to (.+)$" % re.escape(name), text, re.M)
+        try:
+            check("a step that downloads a file says where it went, in the step's own report",
+                  not is_error and went is not None and open(went.group(1)).read() == "hello", text)
+        finally:
+            if went:
+                os.remove(went.group(1))  # the check's own file, in the real ~/Downloads, the throwaway Chrome's download folder
+        popping = open_tab("<title>popup download scratch</title>"
+                           "<a target=_blank href='data:application/octet-stream,hello popup'>Get it</a>")
+        text, _ = call(httpd, "queue", session=session, tab=popping, steps=[{"tool": "take_snapshot"}])
+        text, is_error = call(httpd, "queue", session=session, tab=popping, steps=[{"tool": "click", "uid": uid(text, "link", "Get it")}])
+        went = re.search(r"^--- downloaded .+ to (.+)$", text, re.M)
+        try:
+            check("and so does one begun in a popup the step opened",
+                  not is_error and went is not None and open(went.group(1)).read() == "hello popup", text)
+        finally:
+            if went:
+                os.remove(went.group(1))
+
         path = os.path.join(workdir, "steps.json")
         with open(path, "w") as handle:
             json.dump([{"tool": "fill", "uid": uid(snap_a, "textbox", "Name"), "value": "from a file"}], handle)
@@ -2101,6 +2571,101 @@ def queue_live(profile, state):
         check("a take_screenshot is saved in the tab's record folder",
               os.path.realpath(os.path.dirname(where)) == os.path.realpath(os.path.join(home, a)) and os.path.getsize(where) > 0, text)
         check("and not sent back as an image", all(item.get("type") == "text" for item in content), repr([i.get("type") for i in content]))
+
+        drawn = open_tab(PIXELS)
+        status, answer = rpc(httpd, "tools/call", {"name": "queue", "arguments": {"session": session, "tab": drawn, "steps": [
+            {"tool": "evaluate_script", "function": "() => { scrollTo(0, 500); return [Math.round(visualViewport.width), Math.round(visualViewport.height)] }"},
+            {"tool": "take_screenshot", "format": "png"}]}})
+        content = (answer or {}).get("result", {}).get("content", [])
+        size = returned(text_of(content))
+        images = [item for item in content if item.get("type") == "image"]
+        box, shape = red_box(base64.b64decode(images[0]["data"]), 300) if images else (None, None)
+        check("a viewport screenshot comes back as an image of the visible viewport (no scrollbar), one pixel per CSS pixel, the scroll offset included",
+              images and images[0]["mimeType"] == "image/png" and shape == tuple(size or ()) and box == [300, 200, 339, 239],
+              "%r %r %r" % (size, shape, box))
+        text, is_error = call(httpd, "queue", session=session, tab=drawn, steps=[
+            {"tool": "move_at", "x": 310, "y": 225}, {"tool": "click_down"}, {"tool": "click_up"},
+            {"tool": "evaluate_script", "function": "() => hits"}])
+        check("move_at, click_down and click_up at a point read off that screenshot click there, with trusted input",
+              not is_error and returned(text) == [[True, 10, 25]], text)
+
+        pad = open_tab(PAD)
+        call(httpd, "queue", session=session, tab=pad, steps=[{"tool": "take_screenshot"}])
+        began = time.monotonic()
+        text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
+            {"tool": "move_at", "x": 50, "y": 60}, {"tool": "click_down"}, {"tool": "move_at", "x": 150, "y": 160},
+            {"tool": "click_up"}, {"tool": "evaluate_script", "function": "() => seen"}])
+        took = time.monotonic() - began
+        check("a drag is a press at one point, a move holding the button, and a let-go at another",
+              not is_error and returned(text) == [["mousemove", 50, 60, 0], ["mousedown", 50, 60, 1],
+                                                  ["mousemove", 150, 160, 1], ["mouseup", 150, 160, 0]], text)
+        check("and its four pointer steps take under 2s", took < 2, "%.1fs" % took)
+        began = time.monotonic()
+        text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
+            {"tool": "move_at", "x": 540, "y": 70}, {"tool": "click_down"}, {"tool": "click_up"}])
+        took = time.monotonic() - began
+        check("a click that opens an alert nothing waits on counts as done after about 5s, naming it",
+              not is_error and 'the alert "hi" it opened blocks the page' in text and 4 < took < 10, "%.1fs: %s" % (took, text))
+        for step in ({"tool": "move_at", "x": 540, "y": 70}, {"tool": "take_screenshot"}):
+            began = time.monotonic()
+            text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[step])
+            took = time.monotonic() - began
+            check("with it open, a %s fails after about 5s, saying to answer it first" % step["tool"],
+                  is_error and "as when a dialog is open on it" in text and took < 10, "%.1fs: %s" % (took, text[:300]))
+        text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[{"tool": "handle_dialog", "action": "accept"}])
+        check("and a handle_dialog step in the next queue answers it", not is_error, text)
+        call(httpd, "queue", session=session, tab=pad, steps=[{"tool": "take_screenshot"}])  # the button now has focus
+        began = time.monotonic()
+        text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
+            {"tool": "click_down"}, {"tool": "click_up"}, {"tool": "handle_dialog", "action": "accept"}])
+        took = time.monotonic() - began
+        check("a click whose alert a handle_dialog step right after waits on is answered as it opens",
+              not is_error and "was accepted as it opened" in text and took < 3, "%.1fs: %s" % (took, text))
+
+        def queued(tab, *steps_):
+            """(text, isError, image count) of one queue call."""
+            status_, answer_ = rpc(httpd, "tools/call", {"name": "queue", "arguments": {
+                "session": session, "tab": tab, "steps": list(steps_)}})
+            result_ = (answer_ or {}).get("result", {})
+            items = result_.get("content", [])
+            return (text_of(items), bool(result_.get("isError")), sum(1 for item in items if item.get("type") == "image"))
+
+        clicks = {"tool": "evaluate_script", "function": "() => clicks"}
+        press = [{"tool": "click_down"}, {"tool": "click_up"}]
+        watched = open_tab(GUARD)
+        text, is_error, shots = queued(watched, {"tool": "move_at", "x": 100, "y": 60}, *press)
+        check("the guard stops a press on a tab no viewport screenshot came back from, and sends one",
+              is_error and "take_screenshot first" in text and shots == 1, text)
+        text, is_error, _ = queued(watched, {"tool": "move_at", "x": 100, "y": 60}, *press, clicks)
+        check("then a press on a spot unchanged since that screenshot goes through", not is_error and returned(text) == ["b"],
+              text)
+        queued(watched, {"tool": "take_screenshot"})
+        text, is_error, _ = queued(watched, {"tool": "move_at", "x": 100, "y": 140}, *press, clicks)
+        check("a press on a button that changes colour on hover goes through: the check comes before the move",
+              not is_error and returned(text) == ["b", "h"], text)
+        queued(watched, {"tool": "evaluate_script", "function": "() => later(1500)"}, {"tool": "take_screenshot"})
+        time.sleep(3)  # well after the screenshot, which the reference must not show it in
+        text, is_error, shots = queued(watched, {"tool": "move_at", "x": 100, "y": 60}, *press)
+        check("a modal that opened after the screenshot stops the press, with the page now as a screenshot",
+              is_error and "Not pressed" in text and shots == 1, text)
+        text, is_error, _ = queued(watched, clicks, {"tool": "evaluate_script", "function": "() => modal.remove()"},
+                                   {"tool": "evaluate_script", "function": "() => i.focus()"}, {"tool": "take_screenshot"})
+        check("and nothing was clicked", returned(text) == ["b", "h"], text)
+        text, is_error, _ = queued(watched, {"tool": "type_text", "text": "ok"},
+                                   {"tool": "evaluate_script", "function": "() => i.value"})
+        check("keys go through where the last reply left the focus", not is_error and returned(text) == "ok", text)
+        queued(watched, {"tool": "evaluate_script", "function": "() => steal(1500)"}, {"tool": "take_screenshot"})
+        time.sleep(3)  # well after the screenshot, which the reference must not show it in
+        text, is_error, shots = queued(watched, {"tool": "type_text", "text": "no"})
+        check("keys are stopped once the focus moved since the last reply", is_error and "focus moved" in text and shots == 1,
+              text)
+        text, is_error, _ = queued(watched, {"tool": "evaluate_script", "function": "() => j.value"})
+        check("and typed nothing", returned(text) == "", text)
+        queued(watched, {"tool": "take_screenshot"})
+        text, is_error, _ = queued(watched, {"tool": "move_at", "x": 350, "y": 60}, *press,
+                                   {"tool": "click_down", "count": 2}, {"tool": "click_up", "count": 2}, clicks)
+        check("a double click's second press is not checked against its first", not is_error and "dbl" in returned(text),
+              text)
 
         text, is_error = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "new_page", "url": "about:blank"}])
         check("a tab-managing tool is refused in a queue", is_error and "new_page" in text, text)
@@ -2187,7 +2752,13 @@ if __name__ == "__main__":
     print()
     dialogs_offline()
     print()
+    downloads_offline()
+    print()
     paste_offline()
+    print()
+    screenshot_offline()
+    print()
+    pointer_offline()
     print()
     limits_offline()
     print()

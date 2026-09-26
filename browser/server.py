@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import time
 
-from . import cdp, mcp, page, record, sessions, steps
+from . import cdp, guard, mcp, page, record, sessions, steps
 from .chromes import Chromes
 from .devtools import Devtools
 from .state import Session, State
@@ -96,13 +96,15 @@ it. A session closes only when the user closes it on the browserd page or browse
 closed session's id is refused, so start a new one and open its tabs again."""
 
 
-def tab_tools(state, tabs, workers):
+def tab_tools(state, tabs, workers, queue=None):
     """The session_start, tab_open, tab_list, tab_show and tab_close tools.
 
     Args:
         state (State): the profiles, sessions and tabs.
         tabs (Tabs): holds the tab ids the tools hand out and accept.
         workers (Workers): each tab's Worker, dropped when its tab is closed.
+        queue (callable | None): the queue's body, from queue_steps, which runs tab_open's steps on the new tab;
+            without it, tab_open lists no steps argument and ignores one given.
     """
     def session_start(arguments):
         name, label = _text(arguments, "profile"), arguments.get("label")
@@ -128,7 +130,18 @@ def tab_tools(state, tabs, workers):
                 "session's first tab." % (session.id, profile.name, session.id))
 
     def tab_open(session, arguments):
-        return _line(*tabs.open(session, _text(arguments, "url")))
+        began = time.monotonic()
+        tab, info = tabs.open(session, _text(arguments, "url"))
+        line = _line(tab, info)
+        if queue is None or arguments.get("steps") is None:
+            return line
+        try:
+            result = queue(session, {"session": session.id, "tab": tab, "steps": arguments["steps"]}, began)
+        except (mcp.ToolError, cdp.CdpError, OSError) as exc:
+            return {"content": [{"type": "text", "text": "%s\nthe tab is open, but its steps did not run: %s"
+                                 % (line, exc)}], "isError": True}
+        first = result["content"][0]
+        return dict(result, content=[dict(first, text=line + "\n" + first["text"])] + result["content"][1:])
 
     def tab_list(session, arguments):
         found, outside = tabs.list(session)
@@ -150,6 +163,13 @@ def tab_tools(state, tabs, workers):
         return "closed %s" % tab
 
     session_argument = {"type": "string", "description": "your session id, from session_start"}
+    opening = {"session": session_argument, "url": {"type": "string"}}
+    if queue is not None:
+        opening["steps"] = {"type": "array", "items": {"type": "object"},
+                            "description": "steps to run on the new tab as tab_open returns it, loaded or still "
+                                           "loading, as queue's steps argument takes them, like "
+                                           "[{\"tool\": \"take_snapshot\"}] to read it in this call; the reply is "
+                                           "its tab id, title and URL, then the queue's report"}
     by_tab = {"type": "object", "required": ["session", "tab"], "additionalProperties": False,
               "properties": {"session": session_argument,
                              "tab": {"type": "string", "description": "a tab id from tab_open or tab_list"}}}
@@ -164,9 +184,11 @@ def tab_tools(state, tabs, workers):
         {"name": "tab_open", "run": _refusing(_in_session(state, tab_open)),
          "description": "Open a URL in a new background tab of your session's profile's Chrome, starting that Chrome "
                         "first if it is not running; wait for the tab to load (up to about 30s), and return its tab "
-                        "id, title and URL; a page still loading is returned as it is. The Mac's focus does not move.",
+                        "id, title and URL; a page still loading is returned as it is. The Mac's focus does not move."
+                        + (" Given steps, it then runs them on the new tab in this same call, as queue would."
+                           if queue else ""),
          "inputSchema": {"type": "object", "required": ["session", "url"], "additionalProperties": False,
-                         "properties": {"session": session_argument, "url": {"type": "string"}}}},
+                         "properties": opening}},
         {"name": "tab_list", "run": _refusing(_in_session(state, tab_list)),
          "description": "Every open tab of your session as: tab id, title, URL. A tab one of its pages opened (a "
                         "popup, a target=_blank link) is your session's too, and gets its id here.",
@@ -203,7 +225,7 @@ The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A fa
 names the steps not run, and ends with a view of the page now. A step's reply over %d characters is cut, the
 whole of it saved. Each call is recorded in the tab's record folder, %s/<profile>/<session>-<label>/<tab>/:
 001-queue.json the steps,
-001-queue.txt the report. A take_screenshot with no filePath is saved there too; the report gives its path. A
+001-queue.txt the report. A take_screenshot is saved there too, and the viewport's comes back as an image. A
 step's file paths (filePath, filePaths) must be absolute and sit inside ~/Desktop, /tmp, $TMPDIR or browserd's
 folder. After %gs a queue starts no more steps and names them, as Claude Code drops a reply after about 60s.
 """
@@ -212,17 +234,27 @@ STEPS_HELP = """The steps, in order: each {"tool": <name>, ...its arguments}, ch
 step runs. ? marks an optional argument.
 
 When to use which. pick for any dropdown you type into (react-select, an autocomplete). fill for a native select,
-with an option's exact text, which take_snapshot under the select's uid lists. type for text of 100 characters or
+with an option's exact text, which take_snapshot under the select's uid lists; and for a date or time field, on its
+own line, in its own form: a Date line as 1957-08-01, an InputTime line as 14:30, a DateTime line as 1957-08-01T14:30
+(a month's as 1957-08, a week's as 1957-W31). type for text of 100 characters or
 more. paste for text an editor changes as it is typed (Slides curls quotes, a code editor closes brackets and
 indents): click into the editor and select what it replaces (Meta+A) first, or give a text box's uid; never set an
 editor's text with evaluate_script. expect after a fill or click whose result matters. wait for a
 page still at work, like a resume parser after an upload: uid and value for a field it fills (passing at once if
 the field holds it already), or gone with its status text; never a setTimeout in evaluate_script.
 
+Pixels: a take_screenshot of the viewport comes back as an image, one pixel per CSS pixel unless its line gives a
+factor to multiply by. move_at moves the pointer to a point's CSS coordinates in it, and click_down and click_up press
+and let go of a button where the pointer is, as a hand does: a click is move_at, click_down, click_up; a drag,
+move_at, click_down, move_at, click_up; a double click, a click then click_down and click_up, each with count 2.
+Use them for what has no uid, like a slide, a map or a canvas, and end the queue with take_screenshot to see what
+they did. take_screenshot with scale 0.5 costs a quarter of the tokens: use it to see what is where, and no scale to
+read small text or aim at anything under about 16 CSS pixels.
+
 Dialogs: put a handle_dialog step right after the step that opens an alert, confirm or prompt (a click, a key
 press), and the dialog is answered the moment it opens, or up to 5s after that step for a late one; evaluate_script
 answers its own with dialogAction (default accept), so takes none. A dialog no handle_dialog step waits on blocks
-the page: its step takes about 30s and counts as done, and a handle_dialog step in the next queue answers it.
+the page: its step takes about 5s and counts as done, and a handle_dialog step in the next queue answers it.
 
 A step that loads a new page (navigate_page, a link or submit click) makes every uid new: end the queue with
 take_snapshot and use its uids in the next queue. navigate_page leaves a page even when the page asks to stay
@@ -258,8 +290,9 @@ def _recorded(call, run):
     return result
 
 
-def queue_tool(state, tabs, workers, allowed, calls=CALLS):
-    """The queue tool: run a list of chrome-devtools-mcp steps on a session's tab through that tab's own process.
+def queue_steps(state, tabs, workers, allowed, calls=CALLS):
+    """The queue's body, queue(session, arguments, began=None): run a list of steps on a session's tab through that
+    tab's own process, and record the call in the tab's record folder; began is steps.run's.
 
     Args:
         state (State): the sessions and tabs.
@@ -269,7 +302,8 @@ def queue_tool(state, tabs, workers, allowed, calls=CALLS):
         calls (str): holds each tab's record folder, <calls>/<profile>/<session>-<label>/<tab>/; the checks pass one
             of their own.
     """
-    def queue(session, arguments):
+    def queue(session, arguments, began=None):
+        arrived = time.time()  # before the tab's lock: the guard's reference is what a reply gave before this
         tab = _text(arguments, "tab")
         if not is_id(tab):  # it names a folder, so "../x" must not reach os.path.join
             raise mcp.ToolError(NOT_AN_ID % tab)
@@ -299,7 +333,8 @@ def queue_tool(state, tabs, workers, allowed, calls=CALLS):
             worker = _worker(state, tabs, workers, session, tab)
             with worker.lock:
                 devtools, page_id, restarted = worker.ensure()
-                result = steps.run(devtools, page_id, planned, call.path, restarted, worker.target_id, worker.connect)
+                result = steps.run(devtools, page_id, planned, call.path, restarted, worker.target_id, worker.connect,
+                                   began, worker.watcher, guard.Guard(worker, arrived, call.path))
                 if result["isError"] and "No page found" in result["content"][0]["text"]:
                     # It renumbered its pages after reconnecting; the next queue pairs a new process and notes the
                     # restart.
@@ -308,8 +343,13 @@ def queue_tool(state, tabs, workers, allowed, calls=CALLS):
 
         return _recorded(call, run)
 
+    return queue
+
+
+def queue_tool(state, tabs, workers, allowed, calls=CALLS):
+    """The queue tool: the queue's body, from queue_steps, served as an MCP tool; it takes queue_steps' Args."""
     return {
-        "name": "queue", "run": _refusing(_in_session(state, queue)),
+        "name": "queue", "run": _refusing(_in_session(state, queue_steps(state, tabs, workers, allowed, calls))),
         "description": QUEUE_HELP % (steps.REPLY_MOST, calls, steps.QUEUE_MOST),
         "inputSchema": {
             "type": "object", "required": ["session", "tab"], "additionalProperties": False,
@@ -356,7 +396,9 @@ def serve():
     os.makedirs(RUN, exist_ok=True)
     state, chromes = State(STATE_FILE), Chromes()
     tabs, workers = Tabs(state, cdp.Browser, chromes.ensure), Workers(RUN)
-    tools = tab_tools(state, tabs, workers) + [queue_tool(state, tabs, workers, _allowed_tools())]
+    allowed = _allowed_tools()
+    tools = tab_tools(state, tabs, workers, queue_steps(state, tabs, workers, allowed)) + [
+        queue_tool(state, tabs, workers, allowed)]
     # A port another program holds fails the start here, before the pid file is written.
     server = mcp.Server(HOST, PORT, tools, NAME)
     page_server = page.Page(HOST, page.PORT, state, (PORT, page.PORT), chromes, tabs, workers)

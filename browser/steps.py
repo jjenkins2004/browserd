@@ -10,7 +10,7 @@ import re
 import time
 import urllib.parse
 
-from . import cdp, checked, dialogs
+from . import cdp, checked, dialogs, pointer, screenshot
 from .devtools import may_touch
 
 # Tab tools own opening, closing and choosing tabs, and the rest profile a page, which a queue only reads and drives.
@@ -19,7 +19,9 @@ LEFT_OUT = PAGE_TOOLS | {"lighthouse_audit", "take_heapsnapshot"}
 RESTARTED = ("note: this tab's chrome-devtools-mcp had stopped and was started again, so element uids from before "
              "are gone; take a new snapshot")
 GAP = 0.1  # seconds between steps, so the page can react to one step before the next
+NAVIGATE_TIMEOUT = 30000  # ms a navigate_page that names none gives the load; README.md, "Core Abstractions & Shared Pieces"
 QUEUE_MOST = 50.0  # seconds a queue starts steps for; README.md, "Agent Gotchas & Invariants", says why
+DOWNLOAD_WAIT = 5.0  # seconds a step waits for a download it began to end; README.md, "Agent Gotchas & Invariants"
 REPLY_MOST = 40000  # characters of one step's reply a report holds; the whole reply is saved when longer
 ERROR_MOST = 9000  # characters a failed queue's report keeps under, its view of the page now cut to fit; README.md
 PAGE_NOW_LEAST = 2000  # characters of the view of the page now a failed report keeps, however much its steps took
@@ -43,6 +45,7 @@ TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool,
 
 SNAPSHOT = "## Latest page snapshot"  # the header chrome-devtools-mcp puts over a snapshot in its reply
 VIEW_OPTIONS = ("under", "full", "find")  # take_snapshot's own options here, never sent on to chrome-devtools-mcp
+OWN_OPTIONS = {"take_snapshot": VIEW_OPTIONS, "take_screenshot": ("scale",)}  # each tool's options the queue takes itself
 UID_NUMBER = re.compile(r"(\d+)_(\d+)")  # a uid: its snapshot's number, then its own
 UID_RANGE = re.compile(r"(\d+_\d+)\.\.\d+")  # a view's run of words, uid=5_1..25; a step given it acts on the first
 WAIT_FOR_MISSED = ("\n(wait_for finds page text holding one of its strings, or an element whose accessible name is "
@@ -70,6 +73,7 @@ CONTROLS = {"button", "checkbox", "ColorWell", "combobox", "Date", "DateTime", "
             "menuitem", "menuitemcheckbox", "menuitemradio", "option", "radio", "searchbox", "slider", "spinbutton",
             "switch", "tab", "textbox", "treeitem"}
 SELECT_LEFT_OFF = {"disableable", "expandable", "focusable", "haspopup"}  # left off a collapsed select; they tell nothing
+DATE_ROLES = {"Date", "DateTime", "InputTime"}  # a date, datetime-local, month, week or time input: one line in a view
 
 
 class StepError(Exception):
@@ -97,16 +101,17 @@ def _shape(spec):
 def describe(tools):
     """One line per tool for the steps argument's description: name(arguments), then its first sentence.
 
-    The queue's own checked steps come first.
+    The queue's own checked and pointer steps come first.
     """
-    lines = [checked.describe()]
+    lines = [checked.describe(), pointer.describe()]
     for name, tool in sorted(tools.items()):
         schema = tool.get("inputSchema", {})
         required = set(schema.get("required", []))
         arguments = ", ".join(
             "%s%s: %s" % (key, "" if key in required else "?", _shape(spec))
             for key, spec in schema.get("properties", {}).items() if key in _takes(name, schema)
-        ) + (", under?: string, full?: boolean, find?: string" if name == "take_snapshot" else "")
+        ) + {"take_snapshot": ", under?: string, full?: boolean, find?: string",
+             "take_screenshot": ", scale?: number"}.get(name, "")
         summary = (tool.get("description") or "").strip().split("\n")[0].split(". ")[0].rstrip(".")
         lines.append("  %s(%s) - %s" % (name, arguments, summary))
     return "\n".join(lines)
@@ -177,6 +182,8 @@ def check(steps, allowed):
         tool = step["tool"]
         if tool in checked.STEPS:
             wrong = checked.problem(step)
+        elif tool in pointer.STEPS:
+            wrong = pointer.problem(step)
         elif tool in LEFT_OUT:
             wrong = "%s is left out of a queue: %s" % (tool, (
                 "tab_open, tab_list, tab_show and tab_close manage tabs, and the tab argument chooses the page"
@@ -185,7 +192,7 @@ def check(steps, allowed):
             wrong = "%r is not a tool a queue can run; it runs %s (the steps argument's description gives their " \
                     "arguments; if it lacks one, your next turn has the new list, and if that still lacks it, ask " \
                     "the user to reconnect browserd with /mcp)" \
-                    % (tool, ", ".join(list(checked.STEPS) + sorted(allowed)))
+                    % (tool, ", ".join(list(checked.STEPS) + list(pointer.STEPS) + sorted(allowed)))
         else:
             wrong = _arguments_problem(step, allowed[tool])
         if wrong:
@@ -234,13 +241,20 @@ def _arguments_problem(step, tool):
                 re.compile(step["find"])
             except re.error as exc:
                 return "take_snapshot's find is not a regex: %s" % exc
+    if name == "take_screenshot" and "scale" in step:
+        scale = step["scale"]
+        if not screenshot.taken(step):
+            return "take_screenshot's scale is for a screenshot of the viewport, not of an element (uid) or the whole " \
+                   "page (fullPage)"
+        if isinstance(scale, bool) or not isinstance(scale, (int, float)) or not 0 < scale <= 1:
+            return "take_screenshot's scale must be a number above 0, up to 1, like 0.5"
     schema = tool.get("inputSchema", {})
     properties = {key: spec for key, spec in schema.get("properties", {}).items() if key != "pageId"}
-    given = {key: value for key, value in step.items()
-             if key != "tool" and not (name == "take_snapshot" and key in VIEW_OPTIONS)}
+    own = OWN_OPTIONS.get(name, ())
+    given = {key: value for key, value in step.items() if key != "tool" and key not in own}
     unknown = sorted(set(given) - set(properties))
     if unknown:
-        takes = _takes(name, schema) + (list(VIEW_OPTIONS) if name == "take_snapshot" else [])
+        takes = _takes(name, schema) + list(own)
         return "%s does not take %s; it takes %s" % (name, ", ".join(unknown), ", ".join(takes) or "nothing")
     missing = [key for key in schema.get("required", []) if key in properties and key not in given]
     if missing:
@@ -263,7 +277,8 @@ def _arguments_problem(step, tool):
 
 
 def place_screenshots(steps, path):
-    """The steps, with each take_screenshot that gives no filePath given one, so its image is saved, not sent back.
+    """The steps, with each take_screenshot that gives no filePath given one in the tab's record folder, so its image
+    is saved there.
 
     Args:
         steps (list[dict]): checked by load and check.
@@ -272,7 +287,8 @@ def place_screenshots(steps, path):
     saved = []
     for number, step in enumerate(steps, 1):
         if step["tool"] == "take_screenshot" and "filePath" not in step:
-            extension = {"jpeg": ".jpeg", "webp": ".webp"}.get(step.get("format"), ".png")
+            kind = step.get("format", screenshot.FORMAT if screenshot.taken(step) else "png")
+            extension = {"jpeg": ".jpeg", "webp": ".webp"}.get(kind, ".png")
             step = dict(step, filePath=path("step%d-screenshot%s" % (number, extension)))
         saved.append(step)
     return saved
@@ -364,7 +380,8 @@ def _word_run(nodes, at):
 def _view(nodes, depth, under, out):
     """Append the lines that carry words, and every control, indented one level per kept line they sit under.
 
-    A native select collapses to one line, unless the view is under its uid; so does a run of words.
+    A native select or a date or time input collapses to one line, unless the view is under its uid; a run of words
+    always does.
     """
     at = 0
     while at < len(nodes):
@@ -379,6 +396,8 @@ def _view(nodes, depth, under, out):
             continue  # a verbose snapshot's copy of the text line above it, under a uid it shares with others
         if options:
             out.append("  " * depth + _collapsed(node, options))
+        elif node["role"] in DATE_ROLES and node["uid"] != under:
+            out.append("  " * depth + node["line"])  # its parts and picker button, which fill cannot take, left out
         elif node["role"] in CONTROLS or _carries_words(node):
             out.append("  " * depth + node["line"])
             _view(node["children"], depth + 1, under, out)
@@ -488,7 +507,8 @@ def _text(content):
     return "\n".join(item.get("text", "") for item in content if item.get("type") == "text").strip()
 
 
-def run(devtools, page_id, steps, path, restarted=False, target=None, connect=None):
+def run(devtools, page_id, steps, path, restarted=False, target=None, connect=None, began=None, watcher=None,
+        guard=None):
     """Run the steps in order and return an MCP result: one text report, then any images the steps returned.
 
     The result is an error when a step failed, or the queue stopped at QUEUE_MOST, so the agent cannot mistake a
@@ -500,14 +520,21 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
         steps (list[dict]): checked by load and check.
         path (callable): the full path for a file name, like record.Call.path; it names where each whole snapshot goes.
         restarted (bool): the process was started again after dying, so the report says old uids are gone.
-        target (str | None): the tab's target id, for answering a dialog the moment it opens and for a paste's key
-            press; None leaves every dialog to chrome-devtools-mcp and fails every paste.
+        target (str | None): the tab's target id, for answering a dialog the moment it opens, a paste's key press
+            and a screenshot of the viewport; None leaves every dialog to chrome-devtools-mcp and fails every paste
+            and screenshot of the viewport.
         connect (callable | None): opens a proven connection to the tab's Chrome; given with target.
+        began (float | None): time.monotonic() when the call began, if before this, so QUEUE_MOST counts from then:
+            tab_open's steps count the time it took to open the tab.
+        watcher (Watcher | None): the tab's downloads.Watcher, so each step's report says what it downloaded; None
+            reports none.
+        guard (Guard | None): the queue's click guard, which may stop a pointer press or keys in the step's place, and
+            takes the viewport screenshots; closed as the queue ends. None checks nothing.
     """
     report, images, failed = [], [], False
     if restarted:
         report.append(RESTARTED)
-    started, answerer, navigated = time.monotonic(), None, None
+    started, answerer, navigated = began or time.monotonic(), None, None
     try:
         for number, step in enumerate(steps, 1):
             left = QUEUE_MOST - (time.monotonic() - started)
@@ -522,7 +549,14 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             if target and following and following["tool"] == "handle_dialog" and step["tool"] not in OWN_DIALOGS:
                 answerer = dialogs.Answerer(target, following, connect)
                 answerer.start_listening()
-            content, failed = _step(devtools, page_id, step, left, answerer, target, connect)
+            stopped = guard.before(number, step, following) if guard else None
+            if stopped is not None:
+                content, failed = stopped
+            else:
+                content, failed = _step(devtools, page_id, step, left, answerer, target, connect, guard)
+                if guard:
+                    guard.after(step, failed)
+            got = watcher.take(min(DOWNLOAD_WAIT, QUEUE_MOST - (time.monotonic() - started))) if watcher else []
             if step["tool"] == "handle_dialog":
                 answerer = None
             took = time.monotonic() - began
@@ -530,10 +564,10 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
                                                  None if step["tool"] == "navigate_page" else navigated)
             dialog = OPEN_DIALOG in text and DIALOG_BEFORE not in text
             if failed and dialog and step["tool"] not in checked.STEPS and step["tool"] not in UNBLOCKED:
-                # The action opened a dialog, which blocks the page, so the action itself ran out its 30s timeout.
+                # The action opened a dialog, which blocks the page, so the action itself ran out its 5s timeout.
                 failed = False
                 text += ("\n(a dialog opened during this step and blocked the page, so the step counts as done; answer "
-                         "it with a handle_dialog step, and put one right after such a step to skip this 30s)")
+                         "it with a handle_dialog step, and put one right after such a step to skip this 5s)")
             if failed and step["tool"] == "wait_for" and WAIT_FOR_TIMEOUT.search(text):
                 text += WAIT_FOR_MISSED
             view_options = {key: step[key] for key in VIEW_OPTIONS if key in step and step["tool"] == "take_snapshot"}
@@ -542,6 +576,7 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             report.append("--- %d %s %s %.1fs" % (number, step["tool"], "FAILED" if failed else "ok", took))
             # A failed step's own reply is cut to half a failed report, so the view of the page now still fits.
             report.append(_capped(text, path("step%d-reply.txt" % number), ERROR_MOST // 2 if failed else REPLY_MOST))
+            report.extend(_downloaded(download) for download in got)
             images.extend(item for item in content if item.get("type") == "image")
             if failed:
                 report.extend(_after_stop(devtools, page_id, steps, number, path, len("\n".join(report))))
@@ -549,6 +584,8 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             if number < len(steps):
                 time.sleep(GAP)
     finally:
+        if guard:
+            guard.close()
         if answerer is not None:
             # Its step failed or the queue stopped, but it may have answered a dialog all the same.
             answered = answerer.answered(0)
@@ -557,11 +594,25 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
     return {"content": [{"type": "text", "text": "\n".join(report)}] + images, "isError": failed}
 
 
-def _step(devtools, page_id, step, left, answerer, target, connect):
-    """(content, failed) for one step: a checked step, a dialog the answerer answered, a refused fill, or the tool's own."""
+def _downloaded(download):
+    """The report's line for one download a step began, or one begun earlier that has since ended."""
+    if download["state"] == "completed":
+        return "--- downloaded %s to %s" % (download["name"], download["path"])
+    if download["state"] == "canceled":
+        return "--- the download of %s was canceled or failed" % download["name"]
+    return "--- %s is still downloading; a later step on this tab says where it went" % download["name"]
+
+
+def _step(devtools, page_id, step, left, answerer, target, connect, guard=None):
+    """(content, failed) for one step: a checked step, a pointer step, a screenshot of the viewport, a dialog the
+    answerer answered, a refused fill, or the tool's own."""
     if step["tool"] in checked.STEPS:
         text, failed = checked.run(devtools, page_id, step, left, target, connect)
         return [{"type": "text", "text": text}], failed
+    if step["tool"] in pointer.STEPS:
+        return pointer.run(step, target, connect)
+    if screenshot.taken(step):
+        return screenshot.viewport(step, target, connect, guard)
     if step["tool"] == "handle_dialog" and answerer is not None:
         answered = answerer.answered(min(dialogs.LATE, left))
         if answered is not None:
@@ -573,6 +624,8 @@ def _step(devtools, page_id, step, left, answerer, target, connect):
     arguments = {key: value for key, value in step.items()
                  if key != "tool" and not (step["tool"] == "take_snapshot" and key in VIEW_OPTIONS)}
     arguments["pageId"] = page_id
+    if step["tool"] == "navigate_page":
+        arguments.setdefault("timeout", NAVIGATE_TIMEOUT)
     if isinstance(arguments.get("timeout"), (int, float)) and arguments["timeout"] > left * 1000:
         arguments["timeout"] = max(1, int(left * 1000))  # a chrome-devtools-mcp wait, cut as checked.run cuts its own
     try:
