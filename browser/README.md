@@ -34,6 +34,7 @@ run `npm ci`).
       checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       downloads.py hears a tab's downloads and where each went
+      screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
       record.py    one queue call's numbered files in a folder
       profiles.py  Profile (name, folder, port); what a new profile is given
       state.py     .run/state.db: the profiles, sessions and tabs
@@ -311,10 +312,19 @@ same tabs under the same ids. A crash leaves the same.
   chrome-devtools-mcp's refusal of a step begun while a dialog was open, still fails, as does a
   checked step, whose read-back never ran, and a tool in `steps.UNBLOCKED`, which runs with a dialog
   open.
-- **A queue's `take_screenshot` without `filePath` is saved in the tab's record folder as `<n>-step<k>-screenshot.png`**
-  (`.jpeg` or `.webp` for those formats), and the report gives that path, not an image:
-  chrome-devtools-mcp attaches an image only when no path is given, and even then saves one of 2MB
-  or more to a temporary file instead.
+- **A queue's `take_screenshot` of the viewport is browserd's own, one image pixel per CSS pixel, and comes back as an
+  image.** chrome-devtools-mcp's is in device pixels, twice CSS pixels on a Retina Mac, while the page's own
+  coordinates are CSS pixels, so every point read off its image would be twice its place. `screenshot.viewport` asks
+  `Page.getLayoutMetrics` for the viewport, clips `Page.captureScreenshot` to it at its scroll offset (a clip sits in
+  the document) at a scale of one over the device pixel ratio, saves it in the tab's record folder as
+  `<n>-step<k>-screenshot.jpeg` (`.png` or `.webp` for those formats), and returns a line giving its size and path,
+  then the image, so no Read is needed to see it. It is a JPEG at quality 80 unless the step asks otherwise: a quarter
+  of a PNG's bytes (measured on Google Maps: 156KB against 616KB), and every later request of a conversation carries
+  the image again. A viewport over `screenshot.LONGEST` (2,000) on a side, past which Claude Code shrinks an image it
+  reads (seen: 2,400 to 2,000), is shrunk to it, and the line gives the factor to multiply a point by. A
+  `take_screenshot` of an element (`uid`) or the whole page (`fullPage`) is still chrome-devtools-mcp's, in device
+  pixels, saved as `<n>-step<k>-screenshot.png` (or its format's) and reported by path, not as an image:
+  chrome-devtools-mcp attaches an image only when no path is given.
 - **Every snapshot a queue reports is a view**: `take_snapshot`'s, `wait_for`'s, an `includeSnapshot`
   step's and the failed queue's. A reply's snapshot runs from chrome-devtools-mcp's
   `## Latest page snapshot` line to the next of the headers it can put after one
@@ -428,7 +438,8 @@ same tabs under the same ids. A crash leaves the same.
     `tabs_offline` and `session_tools_offline` stand in for Chrome and `osascript`, with `state.db` in a
     temporary folder; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
     `dialogs_offline` for the answerer's connection; `downloads_offline` for the watcher's connection; `paste_offline` for chrome-devtools-mcp and
-    the connection that hands the page its text and presses the paste key; `limits_offline` for a slow tool;
+    the connection that hands the page its text and presses the paste key; `screenshot_offline` for the connection
+    a viewport screenshot is taken over; `limits_offline` for a slow tool;
     `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
     and a folder's running Chrome, and `page_offline` for Chrome, `focus.bring` and each tab's Worker, with `.run/state.db` and the Google
     folder each in a temporary folder;
@@ -442,7 +453,8 @@ same tabs under the same ids. A crash leaves the same.
     whose Quoted editor curls quotes as they are typed, whose Stopper editor puts a paste in itself and stops
     it without cancelling Chrome's own insert, as Slides does, and whose Warn me confirm, clicked with no
     handle_dialog step after it, makes one click take about 5s. Its paste checks read the Mac's clipboard's
-    change count, never its contents, and check nothing wrote it.
+    change count, never its contents, and check nothing wrote it. Its pixel checks find a red square drawn on a
+    canvas down a scrolled page in a viewport screenshot's own pixels.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them (`queue_live`'s download checks also save two files in the real `~/Downloads`, the
     throwaway Chrome keeping Chrome's own download folder, and remove them); a tab already open is never touched. No live check moves the Mac's focus:

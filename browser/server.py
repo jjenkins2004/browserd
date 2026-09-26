@@ -225,7 +225,7 @@ The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A fa
 names the steps not run, and ends with a view of the page now. A step's reply over %d characters is cut, the
 whole of it saved. Each call is recorded in the tab's record folder, %s/<profile>/<session>-<label>/<tab>/:
 001-queue.json the steps,
-001-queue.txt the report. A take_screenshot with no filePath is saved there too; the report gives its path. A
+001-queue.txt the report. A take_screenshot is saved there too, and the viewport's comes back as an image. A
 step's file paths (filePath, filePaths) must be absolute and sit inside ~/Desktop, /tmp, $TMPDIR or browserd's
 folder. After %gs a queue starts no more steps and names them, as Claude Code drops a reply after about 60s.
 """

@@ -10,7 +10,7 @@ import re
 import time
 import urllib.parse
 
-from . import cdp, checked, dialogs
+from . import cdp, checked, dialogs, screenshot
 from .devtools import may_touch
 
 # Tab tools own opening, closing and choosing tabs, and the rest profile a page, which a queue only reads and drives.
@@ -266,7 +266,8 @@ def _arguments_problem(step, tool):
 
 
 def place_screenshots(steps, path):
-    """The steps, with each take_screenshot that gives no filePath given one, so its image is saved, not sent back.
+    """The steps, with each take_screenshot that gives no filePath given one in the tab's record folder, so its image
+    is saved there.
 
     Args:
         steps (list[dict]): checked by load and check.
@@ -275,7 +276,8 @@ def place_screenshots(steps, path):
     saved = []
     for number, step in enumerate(steps, 1):
         if step["tool"] == "take_screenshot" and "filePath" not in step:
-            extension = {"jpeg": ".jpeg", "webp": ".webp"}.get(step.get("format"), ".png")
+            kind = step.get("format", screenshot.FORMAT if screenshot.taken(step) else "png")
+            extension = {"jpeg": ".jpeg", "webp": ".webp"}.get(kind, ".png")
             step = dict(step, filePath=path("step%d-screenshot%s" % (number, extension)))
         saved.append(step)
     return saved
@@ -506,8 +508,9 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
         steps (list[dict]): checked by load and check.
         path (callable): the full path for a file name, like record.Call.path; it names where each whole snapshot goes.
         restarted (bool): the process was started again after dying, so the report says old uids are gone.
-        target (str | None): the tab's target id, for answering a dialog the moment it opens and for a paste's key
-            press; None leaves every dialog to chrome-devtools-mcp and fails every paste.
+        target (str | None): the tab's target id, for answering a dialog the moment it opens, a paste's key press
+            and a screenshot of the viewport; None leaves every dialog to chrome-devtools-mcp and fails every paste
+            and screenshot of the viewport.
         connect (callable | None): opens a proven connection to the tab's Chrome; given with target.
         began (float | None): time.monotonic() when the call began, if before this, so QUEUE_MOST counts from then:
             tab_open's steps count the time it took to open the tab.
@@ -579,10 +582,13 @@ def _downloaded(download):
 
 
 def _step(devtools, page_id, step, left, answerer, target, connect):
-    """(content, failed) for one step: a checked step, a dialog the answerer answered, a refused fill, or the tool's own."""
+    """(content, failed) for one step: a checked step, a screenshot of the viewport, a dialog the answerer answered, a
+    refused fill, or the tool's own."""
     if step["tool"] in checked.STEPS:
         text, failed = checked.run(devtools, page_id, step, left, target, connect)
         return [{"type": "text", "text": text}], failed
+    if screenshot.taken(step):
+        return screenshot.viewport(step, target, connect)
     if step["tool"] == "handle_dialog" and answerer is not None:
         answered = answerer.answered(min(dialogs.LATE, left))
         if answered is not None:

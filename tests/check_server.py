@@ -5,6 +5,7 @@ browser/README.md, "Agent Gotchas & Invariants", "Checks", says what each group 
     python3 tests/check_server.py
 """
 
+import base64
 import contextlib
 import http.client
 import io
@@ -14,17 +15,20 @@ import os
 import re
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 import threading
 import time
 import urllib.parse
+import zlib
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import cdp, checked, chromes, dialogs, downloads, focus, mcp, page, profiles, record, server, service, sessions, steps
+from browser import (cdp, checked, chromes, dialogs, downloads, focus, mcp, page, profiles, record, screenshot, server,
+                     service, sessions, steps)
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
 from browser.state import Session, State, Tab
@@ -733,13 +737,16 @@ def queue_offline():
               placed[1] == {"tool": "take_screenshot", "fullPage": True, "filePath": "/job/run/004-step2-screenshot.png"}, repr(placed))
         check("with the extension its format asks for", placed[2].get("filePath") == "/job/run/004-step3-screenshot.jpeg", repr(placed))
         check("a filePath the step gives, and every other step, is left as it is", placed[0] == planned[0] and placed[3] == planned[3])
+        placed = steps.place_screenshots([{"tool": "take_screenshot"}], lambda name: "/job/run/004-" + name)
+        check("a screenshot of the viewport with no format is saved as browserd takes it, a JPEG",
+              placed[0].get("filePath") == "/job/run/004-step1-screenshot.jpeg", repr(placed))
         check("the tab-managing tools are left out of a queue",
               steps.LEFT_OUT >= {"new_page", "close_page", "select_page", "list_pages"})
 
         image = {"type": "image", "data": "AAAA", "mimeType": "image/png"}
         fake = FakeDevtools([([{"type": "text", "text": "Filled"}], False), ([{"type": "text", "text": "shot"}, image], False),
                              ([{"type": "text", "text": "Element uid 9_9 not found"}], True)])
-        planned = [{"tool": "fill", "uid": "1_2", "value": "x"}, {"tool": "take_screenshot"},
+        planned = [{"tool": "fill", "uid": "1_2", "value": "x"}, {"tool": "take_screenshot", "fullPage": True},
                    {"tool": "click", "uid": "9_9"}, {"tool": "fill", "uid": "1_3", "value": "y"}]
         called = lambda name: os.path.join(workdir, "004-" + name)
         result = steps.run(fake, 7, planned, called)
@@ -1319,6 +1326,71 @@ def paste_offline():
     check("paste with a uid reads the text box back", said == 'pasted 3 characters; the field holds "a\\nb"', said)
 
 
+class Shots:
+    """A connection to a profile's Chrome whose tab has a viewport of css CSS pixels at a device pixel ratio, scrolled
+    down 300; it records what it is asked, and answers a screenshot with the bytes b"img"."""
+
+    def __init__(self, css=(1200, 792), ratio=2, fails=False):
+        self.calls, self.css, self.ratio, self.fails = [], css, ratio, fails
+
+    def call(self, method, session=None, **params):
+        self.calls.append((method, params))
+        if self.fails:
+            raise cdp.CdpError("Page.captureScreenshot did not answer in time")
+        if method == "Target.attachToTarget":
+            return {"sessionId": "S1"}
+        if method == "Page.getLayoutMetrics":
+            width, height = self.css
+            return {"cssVisualViewport": {"pageX": 0, "pageY": 300, "clientWidth": width, "clientHeight": height},
+                    "visualViewport": {"clientWidth": width * self.ratio, "clientHeight": height * self.ratio}}
+        return {"data": base64.b64encode(b"img").decode()}
+
+    def close(self):
+        pass
+
+
+def screenshot_offline():
+    """screenshot.viewport, and a queue's viewport take_screenshot, with a stand-in for the connection to the tab."""
+    workdir = tempfile.mkdtemp(prefix="browser-shot-")
+    try:
+        path = os.path.join(workdir, "001-step1-screenshot.jpeg")
+        shots = Shots()
+        content, failed_ = screenshot.viewport({"tool": "take_screenshot", "filePath": path}, "T1", lambda: shots)
+        captured = [params for method, params in shots.calls if method == "Page.captureScreenshot"]
+        check("a viewport screenshot is clipped to the scrolled viewport at one pixel per CSS pixel, as a JPEG",
+              not failed_ and captured == [{"format": "jpeg", "quality": screenshot.QUALITY, "clip": {
+                  "x": 0, "y": 300, "width": 1200, "height": 792, "scale": 0.5}}], repr(shots.calls))
+        check("it is saved to the step's filePath", open(path, "rb").read() == b"img")
+        check("and sent back as an image after a line giving its size in CSS pixels and where it is saved",
+              content[1:] == [{"type": "image", "data": base64.b64encode(b"img").decode(), "mimeType": "image/jpeg"}]
+              and "1200x792 px, one pixel per CSS pixel" in content[0]["text"]
+              and content[0]["text"].endswith("Saved screenshot to %s." % path), repr(content))
+        shots = Shots(css=(2560, 1440), ratio=1)
+        content, failed_ = screenshot.viewport({"tool": "take_screenshot", "format": "png", "filePath": path}, "T1",
+                                               lambda: shots)
+        captured = [params for method, params in shots.calls if method == "Page.captureScreenshot"]
+        check("a viewport wider than LONGEST is shrunk to it, and the line gives the factor to multiply a point by",
+              not failed_ and captured[0]["clip"]["scale"] == screenshot.LONGEST / 2560
+              and "2000x1125 px, each pixel 1.28 CSS pixels" in content[0]["text"]
+              and "multiply a point's pixel coordinates by 1.28" in content[0]["text"], content[0]["text"])
+        check("a PNG is asked for with no quality", "quality" not in captured[0] and content[1]["mimeType"] == "image/png")
+        content, failed_ = screenshot.viewport({"tool": "take_screenshot", "filePath": path}, "T1", lambda: Shots(fails=True))
+        check("a screenshot Chrome does not answer fails its step, saying why",
+              failed_ and content == [{"type": "text", "text": "could not take the screenshot: Page.captureScreenshot did "
+                                                               "not answer in time"}], repr(content))
+        check("browserd takes only the viewport's screenshot, leaving an element's and the whole page's to "
+              "chrome-devtools-mcp", screenshot.taken({"tool": "take_screenshot"})
+              and not screenshot.taken({"tool": "take_screenshot", "uid": "1_1"})
+              and not screenshot.taken({"tool": "take_screenshot", "fullPage": True}))
+        fake, shots = FakeDevtools([]), Shots()
+        result = steps.run(fake, 7, [{"tool": "take_screenshot", "filePath": path}], lambda name: os.path.join(workdir, name),
+                           target="T1", connect=lambda: shots)
+        check("a queue's viewport screenshot never reaches chrome-devtools-mcp, and its image comes back",
+              fake.calls == [] and not result["isError"] and result["content"][1]["type"] == "image", repr(result))
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def limits_offline():
     """What a queue refuses or stops for: its time, a fill that would do harm, a chrome-devtools-mcp timeout too long."""
     workdir = tempfile.mkdtemp(prefix="browser-limits-")
@@ -1493,7 +1565,7 @@ def recording_offline():
             asked = json.load(handle)
         check("the record holds the tab and the steps read from the tab's record folder, the screenshot given its path",
               asked == {"session": session.id, "tab": "zzzz", "steps": [{"tool": "take_snapshot"},
-                                                 {"tool": "take_screenshot", "filePath": os.path.join(folder, "003-step2-screenshot.png")}]},
+                                                 {"tool": "take_screenshot", "filePath": os.path.join(folder, "003-step2-screenshot.jpeg")}]},
               repr(asked))
         with open(os.path.join(folder, "bad.json"), "w") as handle:
             json.dump([{"tool": "new_page"}], handle)
@@ -1873,6 +1945,48 @@ FORM = ("<title>%s</title><label for=n>Name</label><input id=n><label for=e>Emai
         "<button onclick=\"document.title='CLICKED'\">Go</button>")
 FRAMED = ("<title>framed</title><iframe src=\"data:text/html,%s\"></iframe>"
           % urllib.parse.quote("<label for=x>Inside</label><input id=x>"))
+
+
+# A red square drawn on a canvas 700px down a page taller than any window, which records each trusted click on it.
+PIXELS = ("<title>pixels</title><body style='margin:0;height:3000px'><canvas id=c width=40 height=40 "
+          "style='position:absolute;left:300px;top:700px'></canvas><script>const g = c.getContext('2d'); "
+          "g.fillStyle = '#f00'; g.fillRect(0, 0, 40, 40); window.hits = []; c.addEventListener('click', "
+          "(e) => hits.push([e.isTrusted, e.offsetX, e.offsetY]))</script></body>")
+
+
+def red_box(png, rows_most):
+    """The box [left, top, right, bottom] of a PNG's red pixels in its first rows_most rows, and its size; the checks'
+    own reading of a screenshot, since the standard library has no image decoder. Red is near it, not exact, as the
+    Mac's colour profile shifts #f00."""
+    at, packed, width, height, channels = 8, b"", 0, 0, 4
+    while at < len(png):
+        length, kind = struct.unpack(">I4s", png[at:at + 8])
+        body = png[at + 8:at + 8 + length]
+        if kind == b"IHDR":
+            width, height, _, color = struct.unpack(">IIBB", body[:10])
+            channels = {2: 3, 6: 4}[color]
+        elif kind == b"IDAT":
+            packed += body
+        at += 12 + length
+    raw, stride, previous, found = zlib.decompress(packed), width * channels, bytearray(width * channels), None
+    for y in range(min(height, rows_most)):
+        # Undo each row's PNG filter (none, sub, up, average, Paeth) against the row before it.
+        kind, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            left, up = line[i - channels] if i >= channels else 0, previous[i]
+            corner = previous[i - channels] if i >= channels else 0
+            guess = {0: 0, 1: left, 2: up, 3: (left + up) // 2}.get(kind)
+            if guess is None:
+                p = left + up - corner
+                guess = left if abs(p - left) <= abs(p - up) and abs(p - left) <= abs(p - corner) else \
+                    up if abs(p - up) <= abs(p - corner) else corner
+            line[i] = (line[i] + guess) & 255
+        for x in range(width):
+            red, green, blue = line[x * channels:x * channels + 3]
+            if red > 200 and green < 100 and blue < 100:
+                found = [x, y, x, y] if found is None else [min(found[0], x), found[1], max(found[2], x), y]
+        previous = line
+    return found, (width, height)
 
 
 def uid(snapshot, role, label):
@@ -2320,6 +2434,18 @@ def queue_live(profile, state):
               os.path.realpath(os.path.dirname(where)) == os.path.realpath(os.path.join(home, a)) and os.path.getsize(where) > 0, text)
         check("and not sent back as an image", all(item.get("type") == "text" for item in content), repr([i.get("type") for i in content]))
 
+        drawn = open_tab(PIXELS)
+        status, answer = rpc(httpd, "tools/call", {"name": "queue", "arguments": {"session": session, "tab": drawn, "steps": [
+            {"tool": "evaluate_script", "function": "() => { scrollTo(0, 500); return [Math.round(visualViewport.width), Math.round(visualViewport.height)] }"},
+            {"tool": "take_screenshot", "format": "png"}]}})
+        content = (answer or {}).get("result", {}).get("content", [])
+        size = returned(text_of(content))
+        images = [item for item in content if item.get("type") == "image"]
+        box, shape = red_box(base64.b64decode(images[0]["data"]), 300) if images else (None, None)
+        check("a viewport screenshot comes back as an image of the visible viewport (no scrollbar), one pixel per CSS pixel, the scroll offset included",
+              images and images[0]["mimeType"] == "image/png" and shape == tuple(size or ()) and box == [300, 200, 339, 239],
+              "%r %r %r" % (size, shape, box))
+
         text, is_error = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "new_page", "url": "about:blank"}])
         check("a tab-managing tool is refused in a queue", is_error and "new_page" in text, text)
         text, is_error = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "click"}], extra=1)
@@ -2408,6 +2534,8 @@ if __name__ == "__main__":
     downloads_offline()
     print()
     paste_offline()
+    print()
+    screenshot_offline()
     print()
     limits_offline()
     print()
