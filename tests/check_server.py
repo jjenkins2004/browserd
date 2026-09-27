@@ -28,11 +28,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
 from browser import (cdp, checked, chromes, dialogs, downloads, focus, mcp, page, pointer, profiles, record, screenshot,
-                     server, service, sessions, steps, worker)
+                     server, service, sessions, steps)
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
 from browser.state import Session, State, Tab
-from browser.tabs import LETTERS, Tabs
+from browser.tabs import LETTERS, PLACEHOLDER, Tabs
 from browser.worker import Worker, Workers, returned
 from browser.ws import WebSocketError
 
@@ -410,6 +410,19 @@ def tabs_offline():
         check("a Chrome that names no browser context as its Chrome profile is refused", "its Chrome profile" in refusal(lambda: tabs.list(mine)))
         open_targets, chrome.targets = chrome.targets, []
         check("a Chrome with no window open lists no tabs", tabs.list(mine) == ([], 0))
+        count = len(chrome.created)
+        first, _ = tabs.open(mine, "https://example.com/first")
+        chrome.default = "school"
+        check("open in a Chrome with no window open opens the placeholder first, in the background, and then its tab",
+              chrome.created[count:] == [{"url": PLACEHOLDER, "background": True},
+                                         {"url": "about:blank", "background": True}], repr(chrome.created[count:]))
+        check("no listing includes the placeholder, so it gets no tab id", [t for t, _ in tabs.list(mine)[0]] == [first]
+              and state.tab_for_target("School", chrome.targets[0]["targetId"]) is None, repr(chrome.targets))
+        tabs.close(mine, first)
+        count = len(chrome.created)
+        tabs.open(mine, "https://example.com/second")
+        check("open in a Chrome whose one page is the placeholder opens no second placeholder",
+              chrome.created[count:] == [{"url": "about:blank", "background": True}], repr(chrome.created[count:]))
         chrome.targets = open_targets
         chrome.default = "school"
         check("every connection opened was closed", chrome.open_connections == 0, repr(chrome.open_connections))
@@ -619,17 +632,16 @@ class Marks:
         pass
 
 
-class Listings:
-    """A tab's process whose list_pages answers come from a list, in turn, the last one kept, and whose page 2 is the
-    tab Marks marks."""
+class Listing:
+    """A tab's process whose list_pages answers listing, and whose page 2 is the tab Marks marks."""
 
-    def __init__(self, marks, listings):
-        self.marks, self.listings, self.asked = marks, list(listings), []
+    def __init__(self, marks, listing):
+        self.marks, self.listing, self.asked = marks, listing, []
 
     def text(self, tool, arguments, wait=None):
         self.asked.append(tool)
         if tool == "list_pages":
-            return self.listings.pop(0) if len(self.listings) > 1 else self.listings[0]
+            return self.listing
         held = self.marks.marker if arguments["pageId"] == 2 else None
         return "Script ran on page and returned:\n```json\n%s\n```" % json.dumps(held)
 
@@ -641,18 +653,17 @@ def pairing_offline():
     """Worker._pair with stand-ins for the tab's process and the connection that marks the tab."""
     url = "http://example.test/a"
     marks = Marks(url)
-    listings = Listings(marks, ["", "## Pages\n1: Other (http://other.test/)\n2: A (%s) [selected]" % url])
-    paired = Worker("k3f9", "T1", STAND_IN, tempfile.gettempdir(), lambda: marks)._pair(listings)
-    check("a tab whose process's first list_pages lists no page is paired at the next listing, the page at its url "
-          "probed first, and its marker deleted after",
-          paired == 2 and listings.asked == ["list_pages", "list_pages", "evaluate_script"] and marks.marker is None,
-          repr((paired, listings.asked)))
+    listing = Listing(marks, "## Pages\n1: Other (http://other.test/)\n2: A (%s) [selected]" % url)
+    paired = Worker("k3f9", "T1", STAND_IN, tempfile.gettempdir(), lambda: marks)._pair(listing)
+    check("a tab is paired with the page that holds its marker, the page at its url probed first, and its marker "
+          "deleted after", paired == 2 and listing.asked == ["list_pages", "evaluate_script"] and marks.marker is None,
+          repr((paired, listing.asked)))
     marks = Marks(url)
-    listings = Listings(marks, ["## Pages\n1: Other (http://other.test/)"])
-    said = refusal(lambda: Worker("k3f9", "T1", STAND_IN, tempfile.gettempdir(), lambda: marks)._pair(listings))
-    check("a tab never listed fails after worker.LIST_TRIES listings, each page probed once, saying to open its url "
-          "again before closing it, and its marker deleted after", listings.asked.count("list_pages") == worker.LIST_TRIES
-          and listings.asked.count("evaluate_script") == 1
+    listing = Listing(marks, "## Pages\n1: Other (http://other.test/)")
+    said = refusal(lambda: Worker("k3f9", "T1", STAND_IN, tempfile.gettempdir(), lambda: marks)._pair(listing))
+    check("a tab not among the listed pages fails after one listing, the one page probed, saying to open its url "
+          "again before closing it, and its marker deleted after",
+          listing.asked == ["list_pages", "evaluate_script"]
           and "Open %s again with tab_open first, then close this tab with tab_close" % url in said
           and marks.marker is None, said)
 

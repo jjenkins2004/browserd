@@ -101,7 +101,7 @@ and `close` take the asking session, and a tab of any other session is "no tab o
 as `None`, and reaches every tab. It opens a new `cdp.Browser` for every
 operation, through its `connect`, so every tab tool re-proves the Chrome; `open` first calls its `start`, which
 starts the profile's Chrome, and a Chrome not running lists no tabs. Each listing (`_sync`) marks closed every
-tab whose page is gone, and gives each new page a tab: the session of the page that opened it (its
+tab whose page is gone, and gives each new page but the placeholder (below) a tab: the session of the page that opened it (its
 `openerId`, followed through a popup's own popups and through an opener since closed), or no session's.
 
 **`mcp.Server`** takes tools as dicts (`name`, `description`, `inputSchema`, `run(arguments)`).
@@ -225,6 +225,17 @@ same tabs under the same ids. A crash leaves the same.
   For `tab_show`, `Target.activateTarget` picks the tab, and `focus.bring` brings the tab's Chrome
   to the front by pid, which `activateTarget` alone does not do for a Chrome never yet in front; when
   macOS refuses, `tab_show` fails.
+- **`tab_open` never opens its tab in a window of its own.** A tab opened in a new window (as `Target.createTarget`
+  opens one in a Chrome with no window open) holds a Google search page Chrome's omnibox prerenders there
+  (`warmup.html`), and when Puppeteer attaches that hidden page before the tab's own, Puppeteer finishes connecting
+  without the tab's page, so a new chrome-devtools-mcp lists no page for the tab and its queues cannot pair it
+  (measured in two runs: 6 and 8 of 25 tabs opened in new windows, each failing for over 60s with a new process per
+  queue). So `Tabs.open`, in a Chrome with no page of its Chrome profile open,
+  first opens `tabs.PLACEHOLDER`, a `data:` page that no listing includes and so gets no tab id; the new window's
+  prerender goes to the placeholder, and the tab goes into that window beside it (measured: 0 of 25 failed, each opened
+  in a Chrome with no window open). A lock per profile, in `Tabs._placing`, covers looking for a page and opening the
+  placeholder, so two opens at once make one placeholder. The placeholder stays open until its Chrome quits or it is
+  closed by hand, and the next `tab_open` with no window open opens another.
 - **No agent ends a session.** An agent would end one while its task still needed it, so only Joshua
   closes one: on the page (Close session, Close all paused) or with `../stop`. `Tabs.close_session` marks the
   session closed before it closes its tabs, so any call of the session's made meanwhile is refused. A session is paused after 30 minutes without a call, which stops its tabs' chrome-devtools-mcp processes;
@@ -253,15 +264,8 @@ same tabs under the same ids. A crash leaves the same.
 - **Its page ids mean nothing to DevTools.** `Worker._pair` sets a random value on the tab
   through the server's own connection (`window[Symbol.for('resume-tools-tab')]`), looks for it
   through chrome-devtools-mcp, URL matches first, then deletes it. The probe passes an empty
-  `dialogAction` and no DOM wait, so it never answers a dialog raised in another tab. Not found, it lists the pages
-  again, `worker.LIST_TRIES` (5) listings in all, `worker.LIST_PAUSE` (0.2s) apart, probing only pages not probed yet:
-  a tab opened in a new window (a `tab_open` in a Chrome with no window open) holds a Google search page Chrome's
-  omnibox prerenders there (`warmup.html`), and when Puppeteer attaches that hidden page before the tab's own,
-  Puppeteer finishes connecting without the tab's page, so a new process's first `list_pages` lists no page for the
-  tab (measured: 6 of 25 tabs opened in new windows, each failing for over 60s with a new process per queue, and each
-  found at the next listing; 0 of 25 failed with the listings again). A tab still not found fails its queue saying to
-  open its page again with `tab_open` before closing it with `tab_close`: a tab opened while the old tab keeps its
-  window open gets no new window (measured: 25 of 25 paired).
+  `dialogAction` and no DOM wait, so it never answers a dialog raised in another tab. When no listed page holds the
+  marker, the queue fails, saying to open the tab's url again with `tab_open` before closing it with `tab_close`.
 - **A queue's step is `{"tool": name, ...arguments}`, never with `pageId`.** `steps.check` refuses
   the whole queue before anything runs for a tool in `steps.LEFT_OUT` (opening, listing, choosing
   and closing tabs; lighthouse; heap snapshots), an unknown tool (the refusal names every tool a

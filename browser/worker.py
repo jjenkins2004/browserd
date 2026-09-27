@@ -11,8 +11,6 @@ from . import cdp, downloads
 from .devtools import Devtools
 
 PROBE_WAIT = 15.0
-LIST_TRIES = 5
-LIST_PAUSE = 0.2
 PAGE_LINE = re.compile(r"^(\d+): (.*)$", re.M)
 RETURNED = re.compile(r"```json\s*(.*?)\s*```", re.S)
 MARK = "Symbol.for('resume-tools-tab')"
@@ -87,7 +85,9 @@ class Worker:
 
     def _pair(self, devtools):
         """This tab's page id in chrome-devtools-mcp; README.md, "Agent Gotchas & Invariants", says how it is found."""
-        refused, probed = [], set()
+        listing = devtools.text("list_pages", {})
+        pages = [(int(found.group(1)), found.group(2)) for found in PAGE_LINE.finditer(listing)]
+        refused = []
         nonce = secrets.token_hex(8)
         browser = self.connect()
         try:
@@ -95,28 +95,21 @@ class Worker:
             session = browser.call("Target.attachToTarget", targetId=self.target_id, flatten=True)["sessionId"]
             browser.call("Runtime.evaluate", session=session, expression="window[%s] = %s" % (MARK, json.dumps(nonce)))
             try:
-                for tried in range(LIST_TRIES):
-                    if tried:
-                        time.sleep(LIST_PAUSE)  # README.md, "Agent Gotchas & Invariants", says why it lists again
-                    listing = devtools.text("list_pages", {})
-                    pages = [(int(found.group(1)), found.group(2)) for found in PAGE_LINE.finditer(listing)
-                             if int(found.group(1)) not in probed]
-                    likely = [page for page, label in pages if url and url in label]
-                    for page in likely + [page for page, _ in pages if page not in likely]:
-                        probed.add(page)
-                        try:
-                            answer = devtools.text("evaluate_script", {
-                                "pageId": page, "function": "() => window[%s]" % MARK,
-                                # Only reads: never answer a dialog on another tab, never wait for its DOM to settle.
-                                "dialogAction": "", "waitForStableDom": False}, PROBE_WAIT)
-                        except cdp.CdpError as exc:
-                            if not devtools.alive():
-                                raise
-                            if page in likely:
-                                refused.append("page %d: %s" % (page, exc))
-                            continue  # a page that refuses scripts, like chrome://newtab, is not this tab
-                        if returned(answer) == nonce:
-                            return page
+                likely = [page for page, label in pages if url and url in label]
+                for page in likely + [page for page, _ in pages if page not in likely]:
+                    try:
+                        answer = devtools.text("evaluate_script", {
+                            "pageId": page, "function": "() => window[%s]" % MARK,
+                            # Only reads: never answer a dialog on another tab, never wait for its DOM to settle.
+                            "dialogAction": "", "waitForStableDom": False}, PROBE_WAIT)
+                    except cdp.CdpError as exc:
+                        if not devtools.alive():
+                            raise
+                        if page in likely:
+                            refused.append("page %d: %s" % (page, exc))
+                        continue  # a page that refuses scripts, like chrome://newtab, is not this tab
+                    if returned(answer) == nonce:
+                        return page
             finally:
                 try:
                     browser.call("Runtime.evaluate", session=session, expression="delete window[%s]" % MARK)
