@@ -28,12 +28,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
 from browser import (cdp, checked, chromes, dialogs, downloads, focus, mcp, page, pointer, profiles, record, screenshot,
-                     server, service, sessions, steps)
+                     server, service, sessions, steps, worker)
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
 from browser.state import Session, State, Tab
 from browser.tabs import LETTERS, Tabs
-from browser.worker import Workers, returned
+from browser.worker import Worker, Workers, returned
 from browser.ws import WebSocketError
 
 passed, failed, skipped = [], [], []
@@ -596,6 +596,65 @@ SCHEMAS = {  # the queue's tools as chrome-devtools-mcp describes them, cut to w
         "pageId": {"type": "number"}, "text": {"type": "array", "items": {"type": "string"}},
         "timeout": {"type": "integer"}}}},
 }
+
+
+class Marks:
+    """A connection to a profile's Chrome whose tab, at url, keeps the marker a pairing sets on it."""
+
+    def __init__(self, url):
+        self.url, self.marker = url, None
+
+    def call(self, method, session=None, **params):
+        if method == "Target.getTargetInfo":
+            return {"targetInfo": {"url": self.url}}
+        if method == "Target.attachToTarget":
+            return {"sessionId": "S1"}
+        if params.get("expression", "").startswith("window["):
+            self.marker = json.loads(params["expression"].split(" = ", 1)[1])
+        if params.get("expression", "").startswith("delete window["):
+            self.marker = None
+        return {}
+
+    def close(self):
+        pass
+
+
+class Listings:
+    """A tab's process whose list_pages answers come from a list, in turn, the last one kept, and whose page 2 is the
+    tab Marks marks."""
+
+    def __init__(self, marks, listings):
+        self.marks, self.listings, self.asked = marks, list(listings), []
+
+    def text(self, tool, arguments, wait=None):
+        self.asked.append(tool)
+        if tool == "list_pages":
+            return self.listings.pop(0) if len(self.listings) > 1 else self.listings[0]
+        held = self.marks.marker if arguments["pageId"] == 2 else None
+        return "Script ran on page and returned:\n```json\n%s\n```" % json.dumps(held)
+
+    def alive(self):
+        return True
+
+
+def pairing_offline():
+    """Worker._pair with stand-ins for the tab's process and the connection that marks the tab."""
+    url = "http://example.test/a"
+    marks = Marks(url)
+    listings = Listings(marks, ["", "## Pages\n1: Other (http://other.test/)\n2: A (%s) [selected]" % url])
+    paired = Worker("k3f9", "T1", STAND_IN, tempfile.gettempdir(), lambda: marks)._pair(listings)
+    check("a tab whose process's first list_pages lists no page is paired at the next listing, the page at its url "
+          "probed first, and its marker deleted after",
+          paired == 2 and listings.asked == ["list_pages", "list_pages", "evaluate_script"] and marks.marker is None,
+          repr((paired, listings.asked)))
+    marks = Marks(url)
+    listings = Listings(marks, ["## Pages\n1: Other (http://other.test/)"])
+    said = refusal(lambda: Worker("k3f9", "T1", STAND_IN, tempfile.gettempdir(), lambda: marks)._pair(listings))
+    check("a tab never listed fails after worker.LIST_TRIES listings, each page probed once, saying to open its url "
+          "again before closing it, and its marker deleted after", listings.asked.count("list_pages") == worker.LIST_TRIES
+          and listings.asked.count("evaluate_script") == 1
+          and "Open %s again with tab_open first, then close this tab with tab_close" % url in said
+          and marks.marker is None, said)
 
 
 class Blocked:
@@ -2750,6 +2809,8 @@ if __name__ == "__main__":
     focus_offline()
     print()
     queue_offline()
+    print()
+    pairing_offline()
     print()
     dialogs_offline()
     print()

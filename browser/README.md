@@ -253,7 +253,15 @@ same tabs under the same ids. A crash leaves the same.
 - **Its page ids mean nothing to DevTools.** `Worker._pair` sets a random value on the tab
   through the server's own connection (`window[Symbol.for('resume-tools-tab')]`), looks for it
   through chrome-devtools-mcp, URL matches first, then deletes it. The probe passes an empty
-  `dialogAction` and no DOM wait, so it never answers a dialog raised in another tab.
+  `dialogAction` and no DOM wait, so it never answers a dialog raised in another tab. Not found, it lists the pages
+  again, `worker.LIST_TRIES` (5) listings in all, `worker.LIST_PAUSE` (0.2s) apart, probing only pages not probed yet:
+  a tab opened in a new window (a `tab_open` in a Chrome with no window open) holds a Google search page Chrome's
+  omnibox prerenders there (`warmup.html`), and when Puppeteer attaches that hidden page before the tab's own,
+  Puppeteer finishes connecting without the tab's page, so a new process's first `list_pages` lists no page for the
+  tab (measured: 6 of 25 tabs opened in new windows, each failing for over 60s with a new process per queue, and each
+  found at the next listing; 0 of 25 failed with the listings again). A tab still not found fails its queue saying to
+  open its page again with `tab_open` before closing it with `tab_close`: a tab opened while the old tab keeps its
+  window open gets no new window (measured: 25 of 25 paired).
 - **A queue's step is `{"tool": name, ...arguments}`, never with `pageId`.** `steps.check` refuses
   the whole queue before anything runs for a tool in `steps.LEFT_OUT` (opening, listing, choosing
   and closing tabs; lighthouse; heap snapshots), an unknown tool (the refusal names every tool a
@@ -474,6 +482,7 @@ same tabs under the same ids. A crash leaves the same.
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
     `tabs_offline` and `session_tools_offline` stand in for Chrome and `osascript`, with `state.db` in a
     temporary folder; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
+    `pairing_offline` for a tab's chrome-devtools-mcp and the connection that marks the tab;
     `dialogs_offline` for the answerer's connection; `downloads_offline` for the watcher's connection; `paste_offline` for chrome-devtools-mcp and
     the connection that hands the page its text and presses the paste key; `screenshot_offline` for the connection
     a viewport screenshot is taken over; `pointer_offline` for the connection mouse input is sent over; `limits_offline` for a slow tool;

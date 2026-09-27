@@ -11,6 +11,8 @@ from . import cdp, downloads
 from .devtools import Devtools
 
 PROBE_WAIT = 15.0
+LIST_TRIES = 5
+LIST_PAUSE = 0.2
 PAGE_LINE = re.compile(r"^(\d+): (.*)$", re.M)
 RETURNED = re.compile(r"```json\s*(.*?)\s*```", re.S)
 MARK = "Symbol.for('resume-tools-tab')"
@@ -85,9 +87,7 @@ class Worker:
 
     def _pair(self, devtools):
         """This tab's page id in chrome-devtools-mcp; README.md, "Agent Gotchas & Invariants", says how it is found."""
-        listing = devtools.text("list_pages", {})
-        pages = [(int(found.group(1)), found.group(2)) for found in PAGE_LINE.finditer(listing)]
-        refused = []
+        refused, probed = [], set()
         nonce = secrets.token_hex(8)
         browser = self.connect()
         try:
@@ -95,21 +95,28 @@ class Worker:
             session = browser.call("Target.attachToTarget", targetId=self.target_id, flatten=True)["sessionId"]
             browser.call("Runtime.evaluate", session=session, expression="window[%s] = %s" % (MARK, json.dumps(nonce)))
             try:
-                likely = [page for page, label in pages if url and url in label]
-                for page in likely + [page for page, _ in pages if page not in likely]:
-                    try:
-                        answer = devtools.text("evaluate_script", {
-                            "pageId": page, "function": "() => window[%s]" % MARK,
-                            # Only reads: never answer a dialog on another tab, never wait for its DOM to settle.
-                            "dialogAction": "", "waitForStableDom": False}, PROBE_WAIT)
-                    except cdp.CdpError as exc:
-                        if not devtools.alive():
-                            raise
-                        if page in likely:
-                            refused.append("page %d: %s" % (page, exc))
-                        continue  # a page that refuses scripts, like chrome://newtab, is not this tab
-                    if returned(answer) == nonce:
-                        return page
+                for tried in range(LIST_TRIES):
+                    if tried:
+                        time.sleep(LIST_PAUSE)  # README.md, "Agent Gotchas & Invariants", says why it lists again
+                    listing = devtools.text("list_pages", {})
+                    pages = [(int(found.group(1)), found.group(2)) for found in PAGE_LINE.finditer(listing)
+                             if int(found.group(1)) not in probed]
+                    likely = [page for page, label in pages if url and url in label]
+                    for page in likely + [page for page, _ in pages if page not in likely]:
+                        probed.add(page)
+                        try:
+                            answer = devtools.text("evaluate_script", {
+                                "pageId": page, "function": "() => window[%s]" % MARK,
+                                # Only reads: never answer a dialog on another tab, never wait for its DOM to settle.
+                                "dialogAction": "", "waitForStableDom": False}, PROBE_WAIT)
+                        except cdp.CdpError as exc:
+                            if not devtools.alive():
+                                raise
+                            if page in likely:
+                                refused.append("page %d: %s" % (page, exc))
+                            continue  # a page that refuses scripts, like chrome://newtab, is not this tab
+                        if returned(answer) == nonce:
+                            return page
             finally:
                 try:
                     browser.call("Runtime.evaluate", session=session, expression="delete window[%s]" % MARK)
@@ -117,8 +124,11 @@ class Worker:
                     pass  # a page that navigated took the marker with it
         finally:
             browser.close()
-        raise cdp.CdpError("tab %s: no page chrome-devtools-mcp lists holds its marker%s"
-                           % (self.tab, "; " + "; ".join(refused) if refused else ""))
+        raise cdp.CdpError("tab %s: chrome-devtools-mcp, which runs the steps, cannot find this tab among its pages, "
+                           "so no step can run on it%s. Open %s again with tab_open first, then close this tab "
+                           "with tab_close; closing this tab first can leave the new tab just as unreachable"
+                           % (self.tab, " (pages at its url that refused the check: %s)" % "; ".join(refused)
+                              if refused else "", url or "its page"))
 
     def stop(self):
         watcher, self.watcher = self.watcher, None
