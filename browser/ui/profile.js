@@ -14,8 +14,8 @@ function profilePanel(name) {
   const said = el("div", "said");
   const quit = button("Quit Chrome", "", said, () => ({path: "/quit-chrome", send: {profile: name}}));
   const remove = button("Delete profile", "danger", said, () => confirm("Delete the profile " + name + "? Its Chrome " +
-    "quits, and its open sessions close with their tabs. Its folder is kept, logins and all, for New profile to take " +
-    "over.") ? {path: "/delete-profile", send: {profile: name}} : null);
+    "quits, and its open sessions close with their tabs. Its folder, if its Chrome ever ran, is kept, logins and all, " +
+    "for New profile to take over.") ? {path: "/delete-profile", send: {profile: name}} : null);
   const head = el("div", "head");
   head.append(who, form, quit, remove);
   const body = el("div");

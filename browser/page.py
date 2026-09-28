@@ -131,7 +131,8 @@ class Page(ThreadingHTTPServer):
             return {"quit": profile.name}
         if path == "/delete-profile":
             profile = profiles.delete(self.state, self.chromes, self.tabs, self.workers, body.get("profile"))
-            mcp.log("the page deleted the profile %s, keeping its folder %s" % (profile.name, profile.folder))
+            mcp.log("the page deleted the profile %s, %s its folder %s" % (
+                profile.name, "keeping" if os.path.isdir(profile.folder) else "removing", profile.folder))
             return {"deleted": profile.name}
         tab = body.get("tab")
         if not isinstance(tab, str):

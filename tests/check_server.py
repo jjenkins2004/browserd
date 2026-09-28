@@ -1991,6 +1991,16 @@ def profiles_offline():
         again = State(path)
         check("profiles outlive the server", [p.name for p in again.profiles()] == ["Clash", "Held", "Jobs", "Research"],
               repr(again.profiles()))
+
+        class Quitting:
+            def quit(self, profile):
+                pass
+
+        profiles.delete(again, Quitting(), None, None, "research")
+        check("deleting a profile whose Chrome never ran removes its empty folder, so the name can be made again",
+              not os.path.exists(research.folder) and profiles.make(again, "Research").folder == research.folder)
+        profiles.delete(again, Quitting(), None, None, "Jobs")
+        check("but a folder its Chrome used is kept", again.profile("Jobs") is None and os.path.isdir(jobs.folder))
         again.close()
     finally:
         profiles.GOOGLE, profiles.FIRST_PORT, profiles.LAST_PORT, cdp.owner, cdp.port_of = saved

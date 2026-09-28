@@ -140,6 +140,10 @@ def delete(state, chromes, tabs, workers, name):
     except cdp.CdpError:
         state.add_profile(profile)
         raise
+    try:
+        os.rmdir(profile.folder)  # empty only if its Chrome never ran; README.md says why it is removed
+    except OSError:
+        pass  # kept, logins and all
     for session in state.open_sessions():
         if session.profile.lower() == profile.name.lower():
             for tab in tabs.close_session(session):  # closing each in Chrome fails, the profile gone: only marked closed

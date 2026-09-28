@@ -85,7 +85,9 @@ to 9299 that no profile has, the server does not hold (9230, 9231), and nothing 
 page's Delete profile calls, removes one from `state.db` first, so no `session_start` or `tab_open` finds it meanwhile, then quits its Chrome, so a
 queue running on one of its tabs fails at once rather than holding that tab's Worker; a Chrome still running after puts
 the profile back and refuses. Only then does it close its open sessions and every tab of it. Its folder is kept, logins and all, and so becomes one of
-`profiles.free_folders`, and its sessions' and tabs' rows and record folders are kept too.
+`profiles.free_folders`, and its sessions' and tabs' rows and record folders are kept too. An empty folder, one whose
+Chrome never ran, is removed: it holds no logins, and `profiles.make` could neither make it new (it is there) nor take it
+over (it has no `Local State` for `cdp.check_folder` to read).
 
 **`page.Page`** serves the page on 9231 on a thread of the server's own. `GET /` is `page.assemble()`: `ui/page.html` with
 `ui/page.css` and the scripts of `page.PARTS` put in, read again on every load. `GET /state` gives

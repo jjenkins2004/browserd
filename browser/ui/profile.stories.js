@@ -9,7 +9,7 @@ stories("Profile", "A profile's panel, under its tab: its Chrome, Open Chrome, Q
   "whole.", {
   "Chrome off, nothing open": {
     about: "A profile at rest: Open Chrome starts its Chrome, in a blank window, and there is nothing to quit. Delete " +
-      "profile asks first, then removes it, keeping its folder.",
+      "profile asks first, then removes it, keeping its folder if its Chrome ever ran.",
     render: () => drawnProfile(sampleProfile({pid: null})),
   },
   "A busy profile": {
