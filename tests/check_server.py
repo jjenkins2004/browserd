@@ -32,8 +32,8 @@ from browser import (cdp, checked, chromes, dialogs, downloads, focus, mcp, page
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
 from browser.state import Session, State, Tab
-from browser.tabs import LETTERS, Tabs
-from browser.worker import Workers, returned
+from browser.tabs import LETTERS, PLACEHOLDER, Tabs
+from browser.worker import Worker, Workers, returned
 from browser.ws import WebSocketError
 
 passed, failed, skipped = [], [], []
@@ -410,6 +410,19 @@ def tabs_offline():
         check("a Chrome that names no browser context as its Chrome profile is refused", "its Chrome profile" in refusal(lambda: tabs.list(mine)))
         open_targets, chrome.targets = chrome.targets, []
         check("a Chrome with no window open lists no tabs", tabs.list(mine) == ([], 0))
+        count = len(chrome.created)
+        first, _ = tabs.open(mine, "https://example.com/first")
+        chrome.default = "school"
+        check("open in a Chrome with no window open opens the placeholder first, in the background, and then its tab",
+              chrome.created[count:] == [{"url": PLACEHOLDER, "background": True},
+                                         {"url": "about:blank", "background": True}], repr(chrome.created[count:]))
+        check("no listing includes the placeholder, so it gets no tab id", [t for t, _ in tabs.list(mine)[0]] == [first]
+              and state.tab_for_target("School", chrome.targets[0]["targetId"]) is None, repr(chrome.targets))
+        tabs.close(mine, first)
+        count = len(chrome.created)
+        tabs.open(mine, "https://example.com/second")
+        check("open in a Chrome whose one page is the placeholder opens no second placeholder",
+              chrome.created[count:] == [{"url": "about:blank", "background": True}], repr(chrome.created[count:]))
         chrome.targets = open_targets
         chrome.default = "school"
         check("every connection opened was closed", chrome.open_connections == 0, repr(chrome.open_connections))
@@ -470,12 +483,25 @@ def session_tools_offline():
         other = call(httpd, "session_start", profile="School", label="other")[0].split()[1].rstrip(",")
         text, is_error = call(httpd, "tab_list", session=other)
         check("another session's list does not show it", not is_error and opened not in text and "no open tabs" in text, text)
-        text, is_error = call(httpd, "tab_close", session=other, tab=opened)
+        text, is_error = call(httpd, "tab_close", session=other, tabs=[opened])
         check("another session cannot close it", is_error and "no tab of this session" in text, text)
         text, is_error = call(httpd, "tab_show", session=session, tab=opened)
         check("tab_show answers with the tab's id and URL", not is_error and text.split()[0] == opened, text)
         state.touch(session, 0)
-        check("tab_close closes by id", call(httpd, "tab_close", session=session, tab=opened) == ("closed %s" % opened, False))
+        check("tab_close closes by id", call(httpd, "tab_close", session=session, tabs=[opened]) == ("closed %s" % opened, False))
+        first, second = (call(httpd, "tab_open", session=session, url="https://example.com/%s" % n)[0].split()[0] for n in "de")
+        text, is_error = call(httpd, "tab_close", session=session, tabs=[first, second, first])
+        check("tab_close closes several tabs in one call, a tab named twice once",
+              (text, is_error) == ("closed %s, %s" % (first, second), False) and first not in call(httpd, "tab_list", session=session)[0],
+              text)
+        third = call(httpd, "tab_open", session=session, url="https://example.com/f")[0].split()[0]
+        text, is_error = call(httpd, "tab_close", session=session, tabs=[opened, third])
+        check("one it cannot close still lets the rest close, and makes the result an error naming it and why",
+              is_error and text == "closed %s\ncould not close %s: tab %s is closed" % (third, opened, opened), text)
+        for tabs_given in ([], opened, [""]):
+            text, is_error = call(httpd, "tab_close", session=session, tabs=tabs_given)
+            check("tab_close given tabs=%r is refused, showing a list" % (tabs_given,),
+                  is_error and 'tabs must be a list of one or more tab ids, like ["k3f9", "m2x7"]' in text, text)
         check("and any call moves the session's last call to now", time.time() - state.session(session).last_call < 5)
         state.close_all(time.time())
         text, is_error = call(httpd, "tab_list", session=session)
@@ -583,6 +609,63 @@ SCHEMAS = {  # the queue's tools as chrome-devtools-mcp describes them, cut to w
         "pageId": {"type": "number"}, "text": {"type": "array", "items": {"type": "string"}},
         "timeout": {"type": "integer"}}}},
 }
+
+
+class Marks:
+    """A connection to a profile's Chrome whose tab, at url, keeps the marker a pairing sets on it."""
+
+    def __init__(self, url):
+        self.url, self.marker = url, None
+
+    def call(self, method, session=None, **params):
+        if method == "Target.getTargetInfo":
+            return {"targetInfo": {"url": self.url}}
+        if method == "Target.attachToTarget":
+            return {"sessionId": "S1"}
+        if params.get("expression", "").startswith("window["):
+            self.marker = json.loads(params["expression"].split(" = ", 1)[1])
+        if params.get("expression", "").startswith("delete window["):
+            self.marker = None
+        return {}
+
+    def close(self):
+        pass
+
+
+class Listing:
+    """A tab's process whose list_pages answers listing, and whose page 2 is the tab Marks marks."""
+
+    def __init__(self, marks, listing):
+        self.marks, self.listing, self.asked = marks, listing, []
+
+    def text(self, tool, arguments, wait=None):
+        self.asked.append(tool)
+        if tool == "list_pages":
+            return self.listing
+        held = self.marks.marker if arguments["pageId"] == 2 else None
+        return "Script ran on page and returned:\n```json\n%s\n```" % json.dumps(held)
+
+    def alive(self):
+        return True
+
+
+def pairing_offline():
+    """Worker._pair with stand-ins for the tab's process and the connection that marks the tab."""
+    url = "http://example.test/a"
+    marks = Marks(url)
+    listing = Listing(marks, "## Pages\n1: Other (http://other.test/)\n2: A (%s) [selected]" % url)
+    paired = Worker("k3f9", "T1", STAND_IN, tempfile.gettempdir(), lambda: marks)._pair(listing)
+    check("a tab is paired with the page that holds its marker, the page at its url probed first, and its marker "
+          "deleted after", paired == 2 and listing.asked == ["list_pages", "evaluate_script"] and marks.marker is None,
+          repr((paired, listing.asked)))
+    marks = Marks(url)
+    listing = Listing(marks, "## Pages\n1: Other (http://other.test/)")
+    said = refusal(lambda: Worker("k3f9", "T1", STAND_IN, tempfile.gettempdir(), lambda: marks)._pair(listing))
+    check("a tab not among the listed pages fails after one listing, the one page probed, saying to open its url "
+          "again before closing it, and its marker deleted after",
+          listing.asked == ["list_pages", "evaluate_script"]
+          and "Open %s again with tab_open first, then close this tab with tab_close" % url in said
+          and marks.marker is None, said)
 
 
 class Blocked:
@@ -1016,6 +1099,55 @@ def views(workdir):
     report = text_of(steps.run(FakeDevtools([([{"type": "text", "text": "Timed out after waiting 5000ms"}], True)]), 3,
                                [{"tool": "wait_for", "text": ["Slideshow"]}], lambda name: os.path.join(workdir, "009-" + name))["content"])
     check("a failed wait_for says what it matches", "accessible name is exactly one" in report, report)
+
+    # A handbook of 60 parts, each a heading and 12 lines of text, about 60,000 characters as a view.
+    rows, n = [], 1
+    for part in range(1, 61):
+        rows.append('  uid=1_%d heading "Part %d" level="2"' % (n, part))
+        rows.extend('  uid=1_%d StaticText "Row %d of part %d, with some words in it to fill a line"' % (n + k, k, part)
+                    for k in range(1, 13))
+        n += 13
+    big = "## Latest page snapshot\n" + 'uid=1_0 RootWebArea "Handbook" url="https://example.com/"\n' + "\n".join(rows)
+    path = os.path.join(workdir, "010-step1-snapshot.txt")
+    text, missing = steps.view(big, path)
+    shown = text.split("\n--- cut: ")[0]
+    note = text.split("\n--- cut: ")[1] if "\n--- cut: " in text else ""
+    last = re.findall(r"uid=(1_\d+)", shown)[-1]
+    check("a view over VIEW_MOST is cut at a line, its first line not counted",
+          not missing and len("\n".join(shown.split("\n")[2:])) <= steps.VIEW_MOST and shown.endswith('"'), len(shown))
+    check("and its note says how many lines are left, the call to read on, and names the first HEADINGS_MOST headings "
+          "below the cut, counting the rest",
+          note.startswith("%d more lines below. Read on with take_snapshot {\"after\": \"%s\"}, or from a heading" % (
+              len(rows) + 1 - len(shown.split("\n")) + 1, last))
+          and [line for line in note.split("\n") if ' heading "Part ' in line][0] == 'uid=1_144 heading "Part 12" level="2"'
+          and len([line for line in note.split("\n") if ' heading "Part ' in line]) == steps.HEADINGS_MOST
+          and note.endswith("(and 9 more headings)"), note[:300])
+    text, missing = steps.view(big, path, after=last)
+    check("after reads on from the line after that uid, with its own cut",
+          not missing and "after %s" % last in text.split("\n")[0]
+          and text.split("\n")[1].startswith("  uid=1_%d " % (int(last.split("_")[1]) + 1)) and "--- cut: " in text,
+          text[:300])
+    runs = "## Latest page snapshot\n" + "\n".join(['uid=1_0 RootWebArea "Words"', '  uid=1_1 heading "Top" level="1"'] + [
+        '  uid=1_%d StaticText "w%d"' % (k, k) for k in range(2, 7)] + ['  uid=1_7 StaticText "End of the words"'])
+    text, missing = steps.view(runs, path, after="1_4")
+    check("after takes any uid of the snapshot, one folded into a run of words included",
+          not missing and text.split("\n")[1:] == ['  uid=1_7 StaticText "End of the words"'], text)
+    text, missing = steps.view(runs, path, after="3_4")
+    check("an after uid the snapshot lacks fails the step, saying so",
+          missing and text.endswith("no element has uid=3_4 in this snapshot"), text)
+    mixed = "## Latest page snapshot\n" + "\n".join(['uid=1_0 RootWebArea "Feed"', '  uid=1_1 StaticText "Old post"',
+                                                     '  uid=2_7 StaticText "New post"', '  uid=1_2 StaticText "Footer"'])
+    text, missing = steps.view(mixed, path, after="1_1")
+    check("after goes by place, as a snapshot taken after the page changed mixes 1_x and 2_x uids",
+          not missing and text.split("\n")[1:] == ['  uid=2_7 StaticText "New post"', '  uid=1_2 StaticText "Footer"'], text)
+    text, _ = steps.view(big, path, find="Row")
+    check("the call to read on keeps the view's own options", '{"find": "Row", "after": "1_' in text, text[-400:])
+    rooted = big.replace('url="https://example.com/"', 'url="data:text/html,%s"' % ("x" * 12000))
+    text, _ = steps.view(rooted, path)
+    check("a long first line, like a data: page's url, does not eat the view",
+          text.split("\n")[1].startswith('uid=1_0 RootWebArea') and len(text.split("\n--- cut: ")[0]) > 12000 + 9000, len(text))
+    text, _ = steps.view(big, path, find=r"^\s*uid=\S+ heading")
+    check("a view within VIEW_MOST, like a find's, is not cut", "--- cut: " not in text and text.count(" heading ") == 60, text[:200])
 
 
 class Page:
@@ -2052,7 +2184,7 @@ def live(profile, state):
         opened = text.split()[0] if text else ""
         check("tab_open works over HTTP against a profile's Chrome", not is_error and "over http" in text, text)
         check("tab_list over HTTP lists it", opened in call(httpd, "tab_list", session=over)[0])
-        check("tab_close over HTTP closes it", call(httpd, "tab_close", session=over, tab=opened) == ("closed %s" % opened, False))
+        check("tab_close over HTTP closes it", call(httpd, "tab_close", session=over, tabs=[opened]) == ("closed %s" % opened, False))
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -2717,7 +2849,7 @@ def queue_live(profile, state):
         check("tab_list stops the chrome-devtools-mcp of a tab closed outside the server", by_hand is not None and not by_hand.alive())
 
         process = workers.get(b, tabs.target(mine, b), profile)._devtools
-        call(httpd, "tab_close", session=session, tab=b)
+        call(httpd, "tab_close", session=session, tabs=[b])
         opened.remove(b)
         check("closing a tab stops its chrome-devtools-mcp", process is not None and not process.alive())
         text, is_error = call(httpd, "queue", session=session, tab=b, steps=[{"tool": "take_snapshot"}])
@@ -2733,7 +2865,7 @@ def queue_live(profile, state):
               numbered and total > 20 and set(os.listdir(home)) >= {a, b}, repr(os.listdir(home)))
     finally:
         for tab in opened:
-            call(httpd, "tab_close", session=session, tab=tab)
+            call(httpd, "tab_close", session=session, tabs=[tab])
         workers.stop_all()
         httpd.shutdown()
         httpd.server_close()
@@ -2749,6 +2881,8 @@ if __name__ == "__main__":
     focus_offline()
     print()
     queue_offline()
+    print()
+    pairing_offline()
     print()
     dialogs_offline()
     print()

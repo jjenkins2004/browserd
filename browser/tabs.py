@@ -7,6 +7,7 @@ import random
 import sqlite3
 import threading
 import time
+import urllib.parse
 
 from . import cdp, focus
 from .state import Tab
@@ -16,6 +17,10 @@ LETTERS = "abcdefghjkmnpqrstuvwxyz23456789"
 LOAD_WAIT = 10.0
 NOT_AN_ID = "%r is not a tab id (four characters, like k3f9); tab_open and tab_list give tab ids"
 NOT_YOURS = "no tab of this session has the id %r; tab_list gives this session's tabs"
+# A data: page, so nothing need serve it; README.md, "Agent Gotchas & Invariants", says why it is opened.
+PLACEHOLDER = "data:text/html," + urllib.parse.quote(
+    "<title>browserd placeholder</title>browserd opened this tab so the tabs it opens go into this window, not a new "
+    "one. Closing it is safe: browserd opens another when it needs one.")
 
 
 def is_id(tab):
@@ -35,6 +40,7 @@ class Tabs:
         self._connect = connect
         self._start = start or (lambda profile: None)
         self._lock = threading.Lock()  # one listing gives out ids at a time, so no page gets two
+        self._placing = {}  # profile name -> its lock: one open at a time looks for a page, so two make one placeholder
 
     def profile(self, session):
         """The Profile a session drives."""
@@ -59,6 +65,7 @@ class Tabs:
         pages = [
             info for info in infos
             if info.get("type") == "page" and not info.get("url", "").startswith(("devtools://", "chrome-extension://"))
+            and info.get("url") != PLACEHOLDER
         ]
         if not default:
             if not pages:
@@ -209,6 +216,7 @@ class Tabs:
         self._start(profile)
         browser = self._connect(profile)
         try:
+            self._keep_window(browser)
             # background keeps Chrome from taking the Mac's focus; README.md, "Agent Gotchas".
             target = browser.call("Target.createTarget", url="about:blank", background=True)["targetId"]
             with self._lock:
@@ -246,6 +254,15 @@ class Tabs:
         finally:
             browser.close()
         return tab, info
+
+    def _keep_window(self, browser):
+        """Open the placeholder in a Chrome with no page of its Chrome profile open, so the tab opened next goes into
+        the placeholder's window, not a new one of its own; README.md, "Agent Gotchas & Invariants", says why."""
+        with self._placing.setdefault(browser.profile.name, threading.Lock()):
+            default = browser.call("Target.getBrowserContexts").get("defaultBrowserContextId")
+            infos = browser.call("Target.getTargets")["targetInfos"]
+            if not any(info.get("type") == "page" and info.get("browserContextId") == default for info in infos):
+                browser.call("Target.createTarget", url=PLACEHOLDER, background=True)
 
     def show(self, session, tab):
         """Bring a tab to the front and return its target info.

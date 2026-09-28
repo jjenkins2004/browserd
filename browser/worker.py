@@ -128,8 +128,11 @@ class Worker:
                     pass  # a page that navigated took the marker with it
         finally:
             browser.close()
-        raise cdp.CdpError("tab %s: no page chrome-devtools-mcp lists holds its marker%s"
-                           % (self.tab, "; " + "; ".join(refused) if refused else ""))
+        raise cdp.CdpError("tab %s: chrome-devtools-mcp, which runs the steps, cannot find this tab among its pages, "
+                           "so no step can run on it%s. Open %s again with tab_open first, then close this tab "
+                           "with tab_close; closing this tab first can leave the new tab just as unreachable"
+                           % (self.tab, " (pages at its url that refused the check: %s)" % "; ".join(refused)
+                              if refused else "", url or "its page"))
 
     def stop(self):
         watcher, self.watcher = self.watcher, None

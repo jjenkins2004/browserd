@@ -104,7 +104,7 @@ and `close` take the asking session, and a tab of any other session is "no tab o
 as `None`, and reaches every tab. It opens a new `cdp.Browser` for every
 operation, through its `connect`, so every tab tool re-proves the Chrome; `open` first calls its `start`, which
 starts the profile's Chrome, and a Chrome not running lists no tabs. Each listing (`_sync`) marks closed every
-tab whose page is gone, and gives each new page a tab: the session of the page that opened it (its
+tab whose page is gone, and gives each new page but the placeholder (below) a tab: the session of the page that opened it (its
 `openerId`, followed through a popup's own popups and through an opener since closed), or no session's.
 
 **`mcp.Server`** takes tools as dicts (`name`, `description`, `inputSchema`, `run(arguments)`).
@@ -119,7 +119,9 @@ them on the new tab through it (recorded as that tab's queue call), `steps.QUEUE
 `tab_open`, and answers with its tab id, title and URL, then the report, or those and why its steps did not run. Agents
 read a new tab right after opening it (measured in benchmarks: most with a lone `take_snapshot` queue, and 8 of 11
 calls of a queue step's name as a top-level tool came right after `tab_open`). Without `queue` (as most checks build
-them), `tab_open` lists no `steps` argument, and ignores one given. All turn `cdp.CdpError`
+them), `tab_open` lists no `steps` argument, and ignores one given. `tab_close` takes `tabs`, a list of tab ids, and closes each
+it can in one call, naming any it could not, and why, in an error result: agents told to close the browser close their tabs
+as they finish, and one call per tab was 21 to 27% of their calls in two benchmark runs. All turn `cdp.CdpError`
 into `ToolError`, and all but `session_start` run through `_in_session`, which refuses a missing, malformed,
 unknown or closed session and moves its last call to now as the call starts and as it ends. The queue records
 into `server.CALLS/<profile>/<session>-<label>/<tab>/`, so it refuses a tab argument not shaped like a tab id
@@ -149,7 +151,7 @@ it asks once more, as each queue lets go of its tab, whether the session is paus
 
 **`steps.place_screenshots`** first gives each `take_screenshot` without a `filePath` one among the
 call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added (and
-without take_snapshot's own `under`, `full` and `find`), hands each checked step to `checked.run`, passes
+without take_snapshot's own `under`, `full`, `find` and `after`), hands each checked step to `checked.run`, passes
 every reply's text, less chrome-devtools-mcp's `## Pages` list of every tab in Chrome and its note on
 which page it now selects, and with a `Page navigated to <url>.` line cut to the url's query and fragment
 when the queue's navigation line before it named the same scheme, host and path and the url has a query
@@ -227,6 +229,17 @@ same tabs under the same ids. A crash leaves the same.
   For `tab_show`, `Target.activateTarget` picks the tab, and `focus.bring` brings the tab's Chrome
   to the front by pid, which `activateTarget` alone does not do for a Chrome never yet in front; when
   macOS refuses, `tab_show` fails.
+- **`tab_open` never opens its tab in a window of its own.** A tab opened in a new window (as `Target.createTarget`
+  opens one in a Chrome with no window open) holds a Google search page Chrome's omnibox prerenders there
+  (`warmup.html`), and when Puppeteer attaches that hidden page before the tab's own, Puppeteer finishes connecting
+  without the tab's page, so a new chrome-devtools-mcp lists no page for the tab and its queues cannot pair it
+  (measured in two runs: 6 and 8 of 25 tabs opened in new windows, each failing for over 60s with a new process per
+  queue). So `Tabs.open`, in a Chrome with no page of its Chrome profile open,
+  first opens `tabs.PLACEHOLDER`, a `data:` page that no listing includes and so gets no tab id; the new window's
+  prerender goes to the placeholder, and the tab goes into that window beside it (measured: 0 of 25 failed, each opened
+  in a Chrome with no window open). A lock per profile, in `Tabs._placing`, covers looking for a page and opening the
+  placeholder, so two opens at once make one placeholder. The placeholder stays open until its Chrome quits or it is
+  closed by hand, and the next `tab_open` with no window open opens another.
 - **No agent ends a session.** An agent would end one while its task still needed it, so only Joshua
   closes one: on the page (Close session) or with `../stop`. `Tabs.close_session` marks the
   session closed before it closes its tabs, so any call of the session's made meanwhile is refused. A session is paused after 30 minutes without a call, which stops its tabs' chrome-devtools-mcp processes;
@@ -255,7 +268,8 @@ same tabs under the same ids. A crash leaves the same.
 - **Its page ids mean nothing to DevTools.** `Worker._pair` sets a random value on the tab
   through the server's own connection (`window[Symbol.for('resume-tools-tab')]`), looks for it
   through chrome-devtools-mcp, URL matches first, then deletes it. The probe passes an empty
-  `dialogAction` and no DOM wait, so it never answers a dialog raised in another tab.
+  `dialogAction` and no DOM wait, so it never answers a dialog raised in another tab. When no listed page holds the
+  marker, the queue fails, saying to open the tab's url again with `tab_open` before closing it with `tab_close`.
 - **A queue's step is `{"tool": name, ...arguments}`, never with `pageId`.** `steps.check` refuses
   the whole queue before anything runs for a tool in `steps.LEFT_OUT` (opening, listing, choosing
   and closing tabs; lighthouse; heap snapshots), an unknown tool (the refusal names every tool a
@@ -392,7 +406,21 @@ same tabs under the same ids. A crash leaves the same.
   view's header names it. take_snapshot's own `under: uid` keeps only that element and what sits under
   it, a native select there not collapsed, and fails its step when the snapshot lacks the uid;
   `full: true` gives the lines as chrome-devtools-mcp wrote them instead of a view; `find: <regex>`
-  keeps only the lines it matches, ignoring case, and its header counts them. take_snapshot's
+  keeps only the lines it matches, ignoring case, and its header counts them; `after: uid` keeps the lines after
+  that element in the saved snapshot's order, one the view leaves out or folds into a run of words included, and
+  fails its step when the snapshot has no such element. It goes by place, not by number: chrome-devtools-mcp keeps
+  an element's uid from the snapshot that first saw it, so a snapshot taken after the page changed mixes `1_x` and
+  `2_x` uids. A view, or `full`'s lines, over `steps.VIEW_MOST` (10,000 characters, the first line, a page's
+  RootWebArea with its url, not counted) is cut at a line, and a note after it gives how many lines are left, the
+  take_snapshot call that reads on (`after` the last uid shown, with the step's own `under`, `find` or `full`), and
+  the first `steps.HEADINGS_MOST` (40) headings below the cut, whose uids read from there as `after` (`under` a
+  heading gives the heading alone, its section sitting beside it). A view barely over is left whole, when the note
+  would be as long as what it cuts. 145 of 537 views were over 10,000 characters in two MCP-Universe benchmark runs,
+  and every later request of a conversation carries each one again. On a 40- or 80-section page with one fact
+  hidden in its middle, agents found it in 9 of 9 task pairs both with the cut and with views cut only at a reply's
+  `steps.REPLY_MOST` (40,000), in a mean 11.4s against 22.0s (median 12s against 17s) and with 38% fewer input
+  tokens (750k against 1,203k). A failed queue's view of the page now is cut to fit `steps.ERROR_MOST`, which is
+  under `steps.VIEW_MOST`, so it loses the note. take_snapshot's
   `filePath` is refused, since it would skip the view and the record folder. A name ends at the first
   quote followed by one of the attribute names a snapshot line can carry (`steps.ATTRIBUTES`), and a
   native select's value, its last attribute, runs to the line's end, so quotes inside either are kept.
@@ -482,6 +510,7 @@ same tabs under the same ids. A crash leaves the same.
     `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
     `tabs_offline` and `session_tools_offline` stand in for Chrome and `osascript`, with `state.db` in a
     temporary folder; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
+    `pairing_offline` for a tab's chrome-devtools-mcp and the connection that marks the tab;
     `dialogs_offline` for the answerer's connection; `downloads_offline` for the watcher's connection; `paste_offline` for chrome-devtools-mcp and
     the connection that hands the page its text and presses the paste key; `screenshot_offline` for the connection
     a viewport screenshot is taken over; `pointer_offline` for the connection mouse input is sent over; `limits_offline` for a slow tool;

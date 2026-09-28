@@ -44,7 +44,11 @@ NAVIGATED = re.compile(r"^Page navigated to (\S+)\.$", re.M)  # chrome-devtools-
 TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool, "array": list, "object": dict}
 
 SNAPSHOT = "## Latest page snapshot"  # the header chrome-devtools-mcp puts over a snapshot in its reply
-VIEW_OPTIONS = ("under", "full", "find")  # take_snapshot's own options here, never sent on to chrome-devtools-mcp
+VIEW_OPTIONS = ("under", "full", "find", "after")  # take_snapshot's own options, never sent on to chrome-devtools-mcp
+VIEW_MOST = 10000  # characters a view shows before it is cut; README.md, "Agent Gotchas & Invariants", says why
+HEADINGS_MOST = 40  # headings below a cut that its note names
+LINE_UID = re.compile(r"^\s*uid=([^\s.]+)")  # a view line's uid, a word run's first
+HEADING = re.compile(r"^\s*uid=\S+ heading ")
 OWN_OPTIONS = {"take_snapshot": VIEW_OPTIONS, "take_screenshot": ("scale",)}  # each tool's options the queue takes itself
 UID_NUMBER = re.compile(r"(\d+)_(\d+)")  # a uid: its snapshot's number, then its own
 UID_RANGE = re.compile(r"(\d+_\d+)\.\.\d+")  # a view's run of words, uid=5_1..25; a step given it acts on the first
@@ -110,7 +114,7 @@ def describe(tools):
         arguments = ", ".join(
             "%s%s: %s" % (key, "" if key in required else "?", _shape(spec))
             for key, spec in schema.get("properties", {}).items() if key in _takes(name, schema)
-        ) + {"take_snapshot": ", under?: string, full?: boolean, find?: string",
+        ) + {"take_snapshot": ", under?: string, full?: boolean, find?: string, after?: string",
              "take_screenshot": ", scale?: number"}.get(name, "")
         summary = (tool.get("description") or "").strip().split("\n")[0].split(". ")[0].rstrip(".")
         lines.append("  %s(%s) - %s" % (name, arguments, summary))
@@ -159,7 +163,7 @@ def _bare(value):
 
 def _bare_uids(step):
     """Strip "uid=", and a run's "..<last>", from a uid copied whole from a view line, wherever a step names one."""
-    for key in ("uid", "under", "from_uid", "to_uid"):
+    for key in ("uid", "under", "after", "from_uid", "to_uid"):
         if key in step:
             step[key] = _bare(step[key])
     if isinstance(step.get("args"), list):
@@ -228,8 +232,9 @@ def _arguments_problem(step, tool):
     its file paths against the folders its file tools may use."""
     name = step["tool"]
     if name == "take_snapshot":
-        if "under" in step and (not isinstance(step["under"], str) or not step["under"]):
-            return "take_snapshot's under must be a uid"
+        for key in ("under", "after"):
+            if key in step and (not isinstance(step[key], str) or not step[key]):
+                return "take_snapshot's %s must be a uid" % key
         if not isinstance(step.get("full", False), bool):
             return "take_snapshot's full must be true or false"
         if "filePath" in step:
@@ -414,8 +419,9 @@ def _full(nodes, out):
     return out
 
 
-def view(text, path, under=None, full=False, find=None):
+def view(text, path, under=None, full=False, find=None, after=None):
     """A tool's reply with its snapshot, when it has one, cut to a view or kept full, and the whole snapshot saved.
+    The lines kept, a view's or full's, go through _cut.
 
     Args:
         text (str): the reply's text.
@@ -423,8 +429,9 @@ def view(text, path, under=None, full=False, find=None):
         under (str | None): a uid; only that element and what sits under it is kept.
         full (bool): give the snapshot's lines as they are instead of as a view.
         find (str | None): a regex; only the lines it matches, ignoring case, are kept.
+        after (str | None): a uid; only the lines after that element, in the snapshot's order, are kept.
 
-    Returns (text, missing): missing is True when under names no element in the snapshot.
+    Returns (text, missing): missing is True when under or after names no element in the snapshot.
     """
     lines = text.split("\n")
     if SNAPSHOT not in lines:
@@ -433,7 +440,7 @@ def view(text, path, under=None, full=False, find=None):
     end = next((at for at in range(start, len(lines)) if lines[at] in AFTER_SNAPSHOT), len(lines))
     while end > start and not lines[end - 1]:
         end -= 1  # the blank lines before the next section stay where they are
-    before, whole, after = lines[:start - 1], lines[start:end], lines[end:]
+    before, whole, tail = lines[:start - 1], lines[start:end], lines[end:]
     with open(path, "w", encoding="utf-8") as handle:
         handle.write("\n".join(whole) + "\n")
     nodes, loose = _tree(whole)
@@ -443,15 +450,67 @@ def view(text, path, under=None, full=False, find=None):
         if found is None:
             shown = ["%s (view under %s; saved whole to %s)" % (SNAPSHOT, under, path),
                      "no element has uid=%s in this snapshot" % under]
-            return "\n".join(before + shown + after), True
+            return "\n".join(before + shown + tail), True
         nodes, loose, scope = [found], [], " under %s" % under
     kept = loose + (_full(nodes, []) if full else _view(nodes, 0, under, []))
     if find is not None:
         matched = [line for line in kept if re.search(find, line, re.I)]
         scope += ", lines matching %s: %d of %d" % (json.dumps(find), len(matched), len(kept))
         kept = matched
-    shown = ["%s (%s%s; saved whole to %s)" % (SNAPSHOT, "full" if full else "view", scope, path)] + kept
-    return "\n".join(before + shown + after), False
+    kind = "full" if full else "view"
+    if after is not None:
+        later = _after(kept, after, whole)
+        if later is None:
+            shown = ["%s (%s%s, after %s; saved whole to %s)" % (SNAPSHOT, kind, scope, after, path),
+                     "no element has uid=%s in this snapshot" % after]
+            return "\n".join(before + shown + tail), True
+        kept, scope = later, scope + ", after %s" % after
+    asked = {key: value for key, value in (("under", under), ("full", full), ("find", find)) if value}
+    shown = ["%s (%s%s; saved whole to %s)" % (SNAPSHOT, kind, scope, path)] + _cut(kept, asked)
+    return "\n".join(before + shown + tail), False
+
+
+def _line_uid(line):
+    found = LINE_UID.match(line)
+    return found.group(1) if found else None
+
+
+def _after(lines, uid, whole):
+    """The lines after the element uid names, in the snapshot's own order, or None when the snapshot has no such
+    element; one the view leaves out or folds into a run of words will do. By place, not number: chrome-devtools-mcp
+    keeps an element's uid from the snapshot that first saw it, so a snapshot taken after the page changed mixes
+    1_x and 2_x uids."""
+    order = {}
+    for at, found in enumerate(map(_line_uid, whole)):
+        if found:
+            order.setdefault(found, at)
+    if uid not in order:
+        return None
+    return [line for line in lines if order.get(_line_uid(line), -1) > order[uid]]
+
+
+def _cut(lines, asked):
+    """lines, or those within VIEW_MOST characters and a note giving the take_snapshot call that reads on, asked's
+    options kept, and the headings below the cut. The first line, a page's RootWebArea with its url, always shows
+    and is not counted."""
+    if sum(len(line) + 1 for line in lines[1:]) <= VIEW_MOST:
+        return lines
+    size, shown = 0, 1
+    while shown < len(lines) and size + len(lines[shown]) + 1 <= VIEW_MOST:
+        size += len(lines[shown]) + 1
+        shown += 1
+    rest = lines[shown:]
+    last = next((uid for uid in map(_line_uid, reversed(lines[:shown])) if uid), None)
+    headings = [line.strip() for line in rest if HEADING.match(line)]
+    ways = "from a heading below with its uid as after, or search with find: a regex"
+    ways = "Read on with take_snapshot %s, or %s" % (json.dumps(dict(asked, after=last)), ways) if last else "Read " + ways
+    note = ["--- cut: %d more lines below. %s%s" % (len(rest), ways, "; headings below:" if headings else ".")]
+    note += headings[:HEADINGS_MOST]
+    if len(headings) > HEADINGS_MOST:
+        note.append("(and %d more headings)" % (len(headings) - HEADINGS_MOST))
+    if sum(len(line) + 1 for line in rest) <= sum(len(line) + 1 for line in note):
+        return lines  # the note would be as long as what it leaves out
+    return lines[:shown] + note
 
 
 def _without_pages(text):
