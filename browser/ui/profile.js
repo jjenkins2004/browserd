@@ -3,19 +3,14 @@
 function profilePanel(name) {
   const node = el("section", "profile");
   const status = el("span", "state");
-  const where = el("span", "where");
   const line = el("div", "line");
-  line.append(status, where);
+  line.append(status);
   const who = el("div", "who");
   who.append(el("div", "name", name), line);
   const form = el("form");
-  const url = el("input");
-  url.placeholder = "URL to open, or blank";
-  url.autocomplete = "off";
-  url.spellcheck = false;
   const open = el("button", "primary", "Open Chrome");
   open.type = "submit";
-  form.append(url, open);
+  form.append(open);
   const head = el("div", "head");
   head.append(who, form);
   const said = el("div", "said");
@@ -25,8 +20,7 @@ function profilePanel(name) {
     event.preventDefault();
     open.disabled = true;
     try {
-      await api("/open", {profile: name, url: url.value.trim()});
-      url.value = "";
+      await api("/open", {profile: name});
       said.textContent = "";
       await refresh();
     } catch (error) {
@@ -35,14 +29,13 @@ function profilePanel(name) {
       open.disabled = false;
     }
   });
-  return {node, status, where, said, body, key: null, picks: new Map()};
+  return {node, status, said, body, key: null};
 }
 
 function showProfile(panel, profile) {
-  panel.status.textContent = profile.pid ? "Chrome running, pid " + profile.pid : "Chrome not running";
+  panel.status.textContent = profile.pid ? "Chrome running" : "Chrome not running";
   panel.status.className = "state" + (profile.pid ? " up" : "");
-  panel.where.textContent = " · port " + profile.port + " · " + profile.folder;
-  // Rebuilt only when what it shows changed, so a hand-over choice held open is not reset every 2s.
+  // Rebuilt only on a change; README.md, "Agent Gotchas & Invariants", says why.
   const key = JSON.stringify([profile.error, profile.sessions, profile.by_hand, profile.closed]);
   if (key !== panel.key) {
     panel.key = key;
@@ -50,7 +43,7 @@ function showProfile(panel, profile) {
     if (profile.error) parts.push(el("div", "said bad", profile.error));
     parts.push(...profile.sessions.map((session) => sessionBlock(session, panel.said)));
     if (!profile.sessions.length) parts.push(el("div", "quiet", "No open sessions."));
-    if (profile.by_hand.length) parts.push(byHandBlock(profile, panel.said, panel.picks));
+    if (profile.by_hand.length) parts.push(byHandBlock(profile, panel.said));
     if (profile.closed.length) parts.push(closedBlock(profile));
     panel.body.replaceChildren(...parts);
   }

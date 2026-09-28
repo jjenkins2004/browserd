@@ -9,7 +9,7 @@ short tab ids; `queue` runs a list of steps on one tab through that tab's own ch
 records every call in that tab's record folder, `../.run/calls/<profile>/<session>-<label>/<tab>/`. The
 browserd page, at `http://127.0.0.1:9231/`, lists the profiles kept in `../.run/state.db` as a strip of
 profile tabs and shows one profile's sessions and tabs at a time; it makes new profiles, opens a profile's Chrome,
-shows, closes and hands over tabs, and closes sessions.
+shows and closes tabs, and closes sessions.
 Python standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`;
 run `npm ci`).
 
@@ -87,11 +87,11 @@ every profile with its Chrome's pid (or `null`, not running), `error` when its C
 listed, its open sessions (active or paused) with their
 tabs, the tabs no session owns, and its last `page.CLOSED_SHOWN` (10) closed sessions, from one
 `Tabs.listing` per profile, which also keeps `state.db` in step with each Chrome; and the folders a new profile
-may take over. Each button POSTs: `/profiles` a new profile, `/open` a window of a profile's Chrome in front (at
-a URL or blank), `/show` and `/close-tab` any tab, `/close-session` a session and every tab of it, and
-`/handover` a tab no session owns to an open session of its profile; `/close-paused` (every paused session and its
-tabs) is still served, though no button posts it. A tab of a session closed as it opened (a `tab_open` or popup under way) is shown with those by hand,
-so it can still be closed or handed over. A `ProfileError`,
+may take over. Each button POSTs: `/profiles` a new profile, `/open` a blank window of a profile's Chrome in
+front, `/show` and `/close-tab` any tab, and `/close-session` a session and every tab of it; `/handover` (a tab no
+session owns to an open session of its profile) and `/close-paused` (every paused session and its tabs) are still
+served, though no button posts either. A tab of a session closed as it opened (a `tab_open` or popup under way) is shown with those by hand,
+so it can still be closed. A `ProfileError`,
 `page.Refused` or `cdp.CdpError` is answered as `{"error": ...}` for the page to show.
 
 **`state.Session`** is one agent's task on one profile: a six-character id (`k3f9x2`), the profile's name, a
@@ -247,7 +247,7 @@ same tabs under the same ids. A crash leaves the same.
   included, starts its own session; `SESSION_HELP` says so, and that only an agent carrying on the same task
   in the same tabs is given another's id. Sessions of one profile share its logins and cookies: one signing
   out of a site signs every one out.
-- **A tab opened by hand is no session's** until the page hands it over. It gets a tab id at the next listing, but
+- **A tab opened by hand is no session's** until `/handover` gives it to one. It gets a tab id at the next listing, but
   no session's `tab_list` shows it before then. A tab
   closed outside the server is marked closed at the next listing or use, and its id stays refused.
 - **The MCP port, 9230, refuses any request with an `Origin` header, a `Host` other than

@@ -89,17 +89,16 @@ class Chromes:
             except cdp.CdpError as exc:
                 mcp.log("could not check whether the %s Chrome is running: %s" % (profile.name, exc))
 
-    def window(self, profile, url):
-        """Start a profile's Chrome if it is down, and open a window in front of the Mac at url.
+    def window(self, profile):
+        """Start a profile's Chrome if it is down, and open a blank window in front of the Mac.
 
         Args:
             profile (Profile): whose Chrome.
-            url (str): where the window opens; empty for a blank one.
         """
         self.ensure(profile)
         browser = cdp.Browser(profile)
         try:
-            browser.call("Target.createTarget", url=url or "about:blank", newWindow=True)
+            browser.call("Target.createTarget", url="about:blank", newWindow=True)
             if not focus.bring(browser.pid):
                 raise cdp.CdpError("the %s Chrome opened a window, but macOS did not bring it to the front" % profile.name)
         finally:

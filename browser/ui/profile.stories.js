@@ -7,7 +7,7 @@ function drawnProfile(profile) {
 stories("Profile", "A profile's panel, under its tab: its Chrome and Open Chrome, then its sessions, the tabs " +
   "opened by hand and its last closed sessions. Each of those has its own states; these are the panel as a whole.", {
   "Chrome off, nothing open": {
-    about: "A profile at rest: Open Chrome starts its Chrome, at the URL given or a blank page.",
+    about: "A profile at rest: Open Chrome starts its Chrome, in a blank window.",
     render: () => drawnProfile(sampleProfile({pid: null})),
   },
   "A busy profile": {

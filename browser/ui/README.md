@@ -19,7 +19,7 @@ drawn from `samples.js` by the preview (`../../preview/`); the server never send
       profile.js       a profile's panel: Chrome, Open Chrome, sessions, by hand, closed
       session.js       one session: state, label, id, last call, Close session, its tabs
       tab.js           one Chrome tab's row, with Show, Close, and needs-you note
-      by_hand.js       tabs no session owns, each with a hand-over picker
+      by_hand.js       tabs no session owns, each with Show and Close
       closed.js        a profile's last closed sessions
       new_profile.js   the New profile form, and the folders it may take over
       page.js          start(): the header, the strip, one panel at a time, refresh and poll
@@ -31,12 +31,12 @@ drawn from `samples.js` by the preview (`../../preview/`); the server never send
 **A part** is a function that builds its elements: `header(add)`, `profileTab(name, pick)`, `profilePanel(name)` and
 `newProfile()` return an object of the elements a later poll changes, and `tabItem`, `sessionBlock`,
 `byHandBlock` and `closedBlock` return the element itself. A `show…` function (`showStatus`, `showProfileTab`,
-`showProfile`, `showFolders`) changes a built one in place. A row's button (Show, Close, Close session, Hand over)
+`showProfile`, `showFolders`) changes a built one in place. A row's button (Show, Close, Close session)
 posts through `button()`, then calls `refresh()`, and puts a refusal in the `said` element it was given; the Open
 Chrome and New profile forms do the same in their own submit handlers.
 
-**`page.js`** is the only part that reads `/state`, and it holds every built part, with that part's own `key` and
-`picks`, across polls. `start(main)` draws the header, the
+**`page.js`** is the only part that reads `/state`, and it holds every built part, with that part's own `key`,
+across polls. `start(main)` draws the header, the
 strip and the panel and starts the poll; `refresh()` gets `/state`, `showProfiles` keeps one `rows` entry
 (`{panel, tab}`) per profile, made once and changed in place, and `showChosen` shows the profile the hash names
 (`#Jobs`; `#+new` is the New profile form, which the header's button opens), else the first.
@@ -55,7 +55,7 @@ what the state is and how the page handles it.
 - **Every part runs in one inline script** (the page's CSP allows no script file), so a top-level name in one part
   is seen by all; none may take a `window` property's name (`name`, `status`, `open`, `close`, `closed`, `top`).
 - **Elements are changed in place, not rebuilt, at each poll**: a panel's body is rebuilt only when what it shows
-  changed, so a URL being typed or a hand-over picker held open survives.
+  changed, so a button being clicked is not swapped out under the pointer.
 - **The page says active and idle for a session the server calls `active` and `paused`**: no one paused an idle
   one; its agent just made no call for 30 minutes. Only the labels differ; classes and data keep the server's word.
 - **A session's tab may carry `needs_action: {note, since}`** (an agent's words, and seconds since the epoch):

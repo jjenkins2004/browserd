@@ -6,7 +6,7 @@ const NEW = "+new";  // the New profile form's hash; a profile's name never hold
 // dashes, so the hash is never encoded.
 let chosen = location.hash.slice(1);
 let order = [];
-// Panels and tabs are kept and changed in place, never rebuilt, so a URL being typed survives each poll.
+// Panels and tabs are kept and changed in place, never rebuilt, so a refusal shown in a panel survives each poll.
 const rows = new Map();
 let heading, strip, box, newForm;  // drawn by start()
 

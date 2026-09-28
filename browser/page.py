@@ -1,5 +1,5 @@
 """The browserd page, http://127.0.0.1:9231/: every profile, its Chrome, its sessions and their tabs, and the buttons
-that make a profile, open its Chrome, show, close or hand over a tab, and close sessions.
+that make a profile, open its Chrome, show or close a tab, and close sessions.
 
 One page, ui/page.html with ui/'s parts put in, that polls GET /state and POSTs its buttons. README.md, "Agent Gotchas & Invariants",
 says what each request must carry and why the page has a port of its own.
@@ -78,7 +78,7 @@ class Page(ThreadingHTTPServer):
         for row, info in listed:
             tab = {"id": row.id, "title": info.get("title") or "", "url": info.get("url", "")}
             # A tab of a session closed as it opened (a tab_open or popup under way) is shown with those by hand, so
-            # it can still be closed or handed over.
+            # it can still be closed.
             by_session.get(row.session, shown["by_hand"]).append(tab)
         for session in here:
             shown["sessions"].append({"id": session.id, "label": session.label, "last_call": session.last_call,
@@ -109,14 +109,12 @@ class Page(ThreadingHTTPServer):
             mcp.log("the page made the profile %s, %s on port %d" % (made.name, made.folder, made.port))
             return {"name": made.name, "folder": made.folder, "port": made.port}
         if path == "/open":
-            name, url = body.get("profile"), body.get("url", "")
+            name = body.get("profile")
             profile = self.state.profile(name) if isinstance(name, str) else None
             if profile is None:
                 raise Refused("there is no profile named %r" % name)
-            if not isinstance(url, str):
-                raise Refused("a URL is text")
-            self.chromes.window(profile, url)
-            mcp.log("the page opened a window of the %s Chrome at %s" % (profile.name, url or "about:blank"))
+            self.chromes.window(profile)
+            mcp.log("the page opened a window of the %s Chrome" % profile.name)
             return {"opened": profile.name}
         tab = body.get("tab")
         if not isinstance(tab, str):

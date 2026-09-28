@@ -2006,12 +2006,12 @@ def page_offline():
     state = State(os.path.join(workdir, "state.db"))
 
     class Windows:
-        opened = []
+        opened, refuse = [], False
 
-        def window(self, profile, url):
-            if url == "chrome://refused":
+        def window(self, profile):
+            if self.refuse:
                 raise cdp.CdpError("Target.createTarget: refused")
-            self.opened.append((profile.name, url))
+            self.opened.append(profile.name)
 
     class Dropped:
         tabs = []
@@ -2067,12 +2067,13 @@ def page_offline():
         check("an unknown action is refused", ask("POST", "/nothing", {}, **own)[0] == 404)
         status, raw, _ = ask("GET", "/state", **{page.TOKEN: board.token})
         check("state says a profile's Chrome is not running", json.loads(raw)["profiles"][0]["pid"] is None, raw.decode())
-        status, raw, _ = ask("POST", "/open", {"profile": "jobs", "url": "https://example.com/"}, **own)
-        check("Open Chrome opens a window of the named profile's Chrome, whatever the name's case, at the URL",
-              status == 200 and windows.opened == [("Jobs", "https://example.com/")], raw.decode())
+        status, raw, _ = ask("POST", "/open", {"profile": "jobs"}, **own)
+        check("Open Chrome opens a window of the named profile's Chrome, whatever the name's case",
+              status == 200 and windows.opened == ["Jobs"], raw.decode())
         status, raw, _ = ask("POST", "/open", {"profile": "Nobody"}, **own)
         check("Open Chrome refuses a profile there is not", status == 400 and "no profile named 'Nobody'" in raw.decode(), raw.decode())
-        status, raw, _ = ask("POST", "/open", {"profile": "Jobs", "url": "chrome://refused"}, **own)
+        windows.refuse = True
+        status, raw, _ = ask("POST", "/open", {"profile": "Jobs"}, **own)
         check("and passes on why Chrome refused", status == 400 and "refused" in json.loads(raw)["error"], raw.decode())
 
         jobs = state.profile("Jobs")
