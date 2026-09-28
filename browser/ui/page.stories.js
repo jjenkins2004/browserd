@@ -21,7 +21,8 @@ stories("Page", "The whole page on made-up data, as browserd serves it: a few ca
     }),
   },
   "Waiting on you": {
-    about: "An agent on Research is waiting on you: Research's tab says so.",
+    about: "An agent on Research is waiting on you: the Needs you list over the strip and Research's profile tab say " +
+      "so.",
     state: () => ({
       profiles: [
         sampleProfile({sessions: [sampleSession()]}),

@@ -15,28 +15,30 @@ drawn from `samples.js` by the preview (`../../preview/`); the server never send
       page.css         the palette's tokens, shared rules, then each part's by name
       base.js          api, el, tell, ago, aged, button: shared by every part
       header.js        browserd, New profile, and server errors only when there are any
+      needs.js         every tab that needs you, from every profile, with Show
       profile_tab.js   a profile's strip tab: name, needs-you and active counts, alarm
       profile.js       a profile's panel: Chrome, Open and Quit Chrome, Delete profile, sessions, idle folded, by hand
       session.js       one session: state, label, id, last call, Close session, its tabs
       tab.js           one Chrome tab's row, with Show, Close, and needs-you note
       by_hand.js       tabs no session owns, each with Show and Close
       new_profile.js   the New profile form, and the folders it may take over
-      page.js          start(): the header, the strip, one panel at a time, refresh and poll
+      page.js          start(): the header, the needs list, the strip, one panel at a time, refresh and poll
       samples.js       made-up tabs, sessions and profiles, for stories only
       *.stories.js     each part's states, for the preview only
 
 ## Core Abstractions & Shared Pieces
 
-**A part** is a function that builds its elements: `header(add)`, `profileTab(name, pick)`, `profilePanel(name)` and
+**A part** is a function that builds its elements: `header(add)`, `needsList(pick)`, `profileTab(name, pick)`,
+`profilePanel(name)` and
 `newProfile()` return an object of the elements a later poll changes, and `tabItem`, `sessionBlock` and
-`byHandBlock` return the element itself. A `show…` function (`showStatus`, `showProfileTab`,
+`byHandBlock` return the element itself. A `show…` function (`showStatus`, `showNeeds`, `showProfileTab`,
 `showProfile`, `showFolders`) changes a built one in place. A button (Show, Close, Close session, Quit Chrome, Delete profile)
 posts through `button()`, then calls `refresh()`, and puts a refusal in the `said` element it was given; the Open
 Chrome and New profile forms do the same in their own submit handlers.
 
 **`page.js`** is the only part that reads `/state`, and it holds every built part, with that part's own `key`,
 across polls. `start(main)` draws the header, the
-strip and the panel and starts the poll; `refresh()` gets `/state`, `showProfiles` keeps one `rows` entry
+needs list, the strip and the panel and starts the poll; `refresh()` gets `/state`, `showProfiles` keeps one `rows` entry
 (`{panel, tab}`) per profile, made once and changed in place, and `showChosen` shows the profile the hash names
 (`#Jobs`; `#+new` is the New profile form, which the header's button opens), else the first.
 
@@ -64,6 +66,6 @@ what the state is and how the page handles it.
   pointer.
 - **A session's tab may carry `needs_input: {note, since}`** (an agent's words, and seconds since the epoch):
   the tab is waiting on you. Its agent sets and clears it with `tab_needs_input`, and closing the tab clears it. The
-  page draws it on the profile's tab and the tab's row.
+  page draws it in the needs list over the strip, on the profile's tab and on the tab's row.
 - **Amber means a tab needs you, and nothing else**; an idle session's chip is grey.
 - **Stories draw from `samples.js`, never real data**, and may use the preview's `stories()` and `onPanel()`.

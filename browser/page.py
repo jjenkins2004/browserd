@@ -19,7 +19,7 @@ from .ws import WebSocketError
 PORT = 9231
 UI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 # The page's parts, each ui/<part>.js, put into ui/page.html's one script in this order.
-PARTS = ("base", "header", "profile_tab", "profile", "session", "tab", "by_hand", "new_profile", "page")
+PARTS = ("base", "header", "needs", "profile_tab", "profile", "session", "tab", "by_hand", "new_profile", "page")
 TOKEN = "X-Browserd-Token"
 MAX_BODY = 64 << 10
 CLOSED_SHOWN = 10  # closed sessions /state sends per profile, newest first

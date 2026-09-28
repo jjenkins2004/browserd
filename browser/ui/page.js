@@ -1,5 +1,5 @@
-// The page: the header, the strip of profile tabs, one profile's panel at a time, and the poll that keeps them
-// current. Only this part reads /state.
+// The page: the header, the needs list, the strip of profile tabs, one profile's panel at a time, and the
+// poll that keeps them current. Only this part reads /state.
 const NEW = "+new";  // the New profile form's hash; a profile's name never holds a "+"
 
 // One profile is shown at a time, named in the URL's hash so a reload keeps it. A name is letters, digits and
@@ -8,7 +8,7 @@ let chosen = location.hash.slice(1);
 let order = [];
 // Panels and tabs are kept and changed in place, never rebuilt, so a refusal shown in a panel survives each poll.
 const rows = new Map();
-let heading, strip, box, newForm;  // drawn by start()
+let heading, needs, strip, box, newForm;  // drawn by start()
 
 function choose(name) {
   chosen = name;
@@ -60,6 +60,7 @@ async function refresh() {
   try {
     const state = await api("/state");
     showProfiles(state.profiles);
+    showNeeds(needs, state.profiles);
     showFolders(newForm, state.folders);
     showStatus(heading, "");
   } catch (error) {
@@ -75,6 +76,7 @@ async function poll() {
 
 function start(main) {
   heading = header(() => choose(NEW));
+  needs = needsList(choose);
   strip = el("nav", "strip");
   strip.setAttribute("role", "tablist");
   strip.setAttribute("aria-label", "Profiles");
@@ -83,7 +85,7 @@ function start(main) {
   box = el("div", "panel");
   box.hidden = true;  // until the server first answers
   box.append(newForm.node);
-  main.append(heading.node, strip, box);
+  main.append(heading.node, needs.node, strip, box);
   addEventListener("hashchange", () => {
     chosen = location.hash.slice(1);
     showChosen();
