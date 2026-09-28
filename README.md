@@ -17,6 +17,7 @@ agent starts with `session_start {profile, label}`, and sees only its session's 
     package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
     .run/                   gitignored: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs), devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     tests/                  check_browser.py, check_server.py; throwaway.py, the live checks' own Chrome
+    preview/                every state of the page's parts from made-up data: `python3 preview/preview.py`, then http://127.0.0.1:9320/
 
 `browser/README.md` is the one to read before changing any of it: the Chrome proof, the tab ids, the
 queue's checked steps, and what each tool refuses. Agents connect over HTTP at `http://127.0.0.1:9230/mcp`,

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>browserd preview</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #060A12; --side: #0B111E; --line: #1C2640; --text: #DCE3F0; --muted: #7D89A6; --accent: #46C8E8;
+  --pick: rgba(70, 200, 232, .14); --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, system-ui, sans-serif;
+  display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: 100vh; }
+aside { background: var(--side); border-right: 1px solid var(--line); padding: 18px 12px; position: sticky; top: 0;
+  height: 100vh; overflow-y: auto; }
+.brand { font-weight: 700; padding: 0 8px 14px; }
+.brand span { color: var(--muted); font-weight: 500; }
+nav { display: grid; gap: 2px; }
+nav a { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: 7px; color: var(--muted);
+  text-decoration: none; }
+nav a:hover { color: var(--text); }
+nav a[aria-current="page"] { color: var(--text); background: var(--pick); }
+nav a b { font: 12px/1.45 var(--mono); }
+.variants { margin: 18px 8px 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.variants code { font-family: var(--mono); color: var(--text); }
+main { padding: 24px 28px 64px; display: grid; gap: 30px; align-content: start; }
+.intro h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -.01em; }
+.intro p { margin: 0; color: var(--muted); max-width: 80ch; }
+.story { display: grid; gap: 10px; }
+.story h2 { margin: 0; font-size: 15px; }
+.story p { margin: 2px 0 0; color: var(--muted); font-size: 13px; max-width: 80ch; }
+.frames { display: grid; grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); gap: 14px; align-items: start; }
+figure { margin: 0; display: grid; gap: 6px; }
+figcaption { font: 11px/1 var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+iframe { display: block; width: 100%; height: 80px; border: 1px solid var(--line); border-radius: 10px; background: #0A0F1A; }
+@media (max-width: 720px) {
+  body { grid-template-columns: 1fr; }
+  aside { position: static; height: auto; }
+  main { padding: 20px 16px 48px; }
+  .frames { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand">browserd <span>preview</span></div>
+  <nav id="parts"></nav>
+  <div class="variants" id="variants"></div>
+</aside>
+<main id="shelf"></main>
+<script>
+// Each stories file calls stories() once; here only each story's name and about are kept.
+const shelves = [];
+let current = null;
+function stories(part, about, list) {
+  shelves.push({file: current, part, about, list: Object.entries(list).map(([name, story]) => ({name, about: story.about}))});
+}
+</script>
+<script src="/data.js"></script>
+<script>
+const columns = [""].concat(VARIANTS);
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+// A frame is as tall as what it draws, and follows it as it changes.
+function frame(file, story, variant) {
+  const node = el("iframe");
+  node.src = "/frame?" + new URLSearchParams({file, story, variant});
+  node.title = story + (variant ? " · " + variant : "");
+  node.addEventListener("load", () => {
+    const drawn = node.contentDocument.querySelector("main");
+    const fit = () => { node.style.height = drawn.offsetHeight + 2 + "px"; };
+    fit();
+    new node.contentWindow.ResizeObserver(fit).observe(drawn);
+  });
+  return node;
+}
+
+function showShelf() {
+  const file = location.hash.slice(1);
+  const shelf = shelves.find((s) => s.file === file) || shelves[0];
+  for (const link of document.querySelectorAll("#parts a")) {
+    if (link.dataset.file === shelf.file) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
+  }
+  const intro = el("div", "intro");
+  intro.append(el("h1", "", shelf.part), el("p", "", shelf.about));
+  const parts = [intro];
+  for (const story of shelf.list) {
+    const section = el("section", "story");
+    const head = el("div");
+    head.append(el("h2", "", story.name), el("p", "", story.about || ""));
+    const frames = el("div", "frames");
+    frames.style.setProperty("--cols", columns.length);
+    for (const variant of columns) {
+      const figure = el("figure");
+      if (columns.length > 1) figure.append(el("figcaption", "", variant || "current"));
+      figure.append(frame(shelf.file, story.name, variant));
+      frames.append(figure);
+    }
+    section.append(head, frames);
+    parts.push(section);
+  }
+  document.getElementById("shelf").replaceChildren(...parts);
+}
+
+const nav = document.getElementById("parts");
+for (const shelf of shelves) {
+  const link = el("a");
+  link.href = "#" + shelf.file;
+  link.dataset.file = shelf.file;
+  link.append(el("span", "", shelf.part), el("b", "", String(shelf.list.length)));
+  nav.append(link);
+}
+const note = document.getElementById("variants");
+if (VARIANTS.length) {
+  note.append("Comparing: current, " + VARIANTS.join(", ") + ".");
+} else {
+  note.append("No variants. To compare a design, add ");
+  note.append(el("code", "", "preview/variants/<name>.css"), ".");
+}
+if (shelves.length) {
+  showShelf();
+  window.addEventListener("hashchange", showShelf);
+} else {
+  document.getElementById("shelf").append(el("p", "", "No stories found in browser/ui/."));
+}
+
+// Reloads when a file under browser/ui/ or preview/ changes.
+let seen = null;
+async function watch() {
+  try {
+    const version = await (await fetch("/version")).text();
+    if (seen !== null && version !== seen) location.reload();
+    seen = version;
+  } catch (error) {
+    // the preview is stopped; the next try may find it back
+  }
+  setTimeout(watch, 1000);
+}
+watch();
+</script>
+</body>
+</html>
