@@ -58,6 +58,17 @@ h1 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
 .name { font-weight: 650; font-size: 18px; }
 .line { color: var(--muted); font-size: 12px; }
 .state.up { color: var(--accent); }
+.idle-fold { margin-top: 10px; }
+.idle-fold > summary { display: flex; align-items: baseline; gap: 8px; list-style: none; cursor: pointer;
+  color: var(--muted); font-size: 13px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 10px; }
+.idle-fold > summary::-webkit-details-marker { display: none; }
+.idle-fold > summary::before { content: "▸"; transition: transform .15s; }
+.idle-fold[open] > summary::before { transform: rotate(90deg); }
+.idle-fold > summary:hover { color: var(--text); border-color: var(--muted); }
+.idle-fold .names { flex: 1; min-width: 0; width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .8; }
+.idle-fold .session { opacity: .7; }
+.idle-fold .session:hover, .idle-fold .session:focus-within { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .idle-fold > summary::before { transition: none; } }
 
 /* session.js */
 .session { background: var(--soft); border-radius: 10px; padding: 10px 12px; margin-top: 10px; }

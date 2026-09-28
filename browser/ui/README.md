@@ -16,7 +16,7 @@ drawn from `samples.js` by the preview (`../../preview/`); the server never send
       base.js          api, el, tell, ago, aged, button: shared by every part
       header.js        browserd, New profile, and server errors only when there are any
       profile_tab.js   a profile's strip tab: name, needs-you and active counts, alarm
-      profile.js       a profile's panel: Chrome, Open and Quit Chrome, Delete profile, sessions, by hand
+      profile.js       a profile's panel: Chrome, Open and Quit Chrome, Delete profile, sessions, idle folded, by hand
       session.js       one session: state, label, id, last call, Close session, its tabs
       tab.js           one Chrome tab's row, with Show, Close, and needs-you note
       by_hand.js       tabs no session owns, each with Show and Close
@@ -57,6 +57,11 @@ what the state is and how the page handles it.
   changed, so a button being clicked is not swapped out under the pointer.
 - **The page says active and idle for a session the server calls `active` and `paused`**: no one paused an idle
   one; its agent just made no call for 30 minutes. Only the labels differ; classes and data keep the server's word.
+- **A profile's idle sessions fold** into one line naming them (`idleFold`), newest call first, which a click opens
+  and which stays open across rebuilds (`panel.idleOpen`, read off the fold as each rebuild starts). An idle session
+  with a tab that needs you stays out with the active ones, so amber is never folded away. Those keep the server's
+  order, oldest started first: sorted by last call, two active sessions would swap at almost every poll, under the
+  pointer.
 - **A session's tab may carry `needs_action: {note, since}`** (an agent's words, and seconds since the epoch):
   the tab is waiting on you. The page draws it on the profile's tab and the tab's row, but the server
   sends no such field yet, and no tool sets or clears it; only the stories show it.
