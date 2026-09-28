@@ -109,29 +109,6 @@ class Page(ThreadingHTTPServer):
             raise Refused("there is no profile named %r" % name)
         return profile
 
-    def _quit(self, profile):
-        """Quit a profile's Chrome, or raise Refused when it is still running after."""
-        self.chromes.quit(profile)
-        if _running(profile) is not None:
-            raise Refused("the %s Chrome is still running; see .run/server.log" % profile.name)
-
-    def _delete_profile(self, profile):
-        # README.md, "Core Abstractions & Shared Pieces", gives this order. Closing its tabs in Chrome then fails, the
-        # profile gone, so each is only marked closed.
-        self.state.remove_profile(profile.name)
-        try:
-            self._quit(profile)
-        except (cdp.CdpError, Refused):
-            self.state.add_profile(profile)
-            raise
-        for session in self.state.open_sessions():
-            if session.profile.lower() == profile.name.lower():
-                self._close_session(session)
-        for row in self.state.open_tabs(profile.name):  # the tabs opened by hand
-            self.state.close_tab(row.id, time.time())
-            self.workers.drop(row.id)
-        mcp.log("the page deleted the profile %s, keeping its folder %s" % (profile.name, profile.folder))
-
     def act(self, path, body):
         """Do what a POST asks, and return its answer, or None for a path no button posts to."""
         if path == "/profiles":
@@ -147,14 +124,14 @@ class Page(ThreadingHTTPServer):
         if path == "/quit-chrome":
             profile = self._profile(body)
             tabs = [row.id for row in self.state.open_tabs(profile.name)]
-            self._quit(profile)
+            self.chromes.quit(profile)
             for tab in tabs:
                 self.workers.drop(tab)  # its chrome-devtools-mcp was pointed at the Chrome that quit
             mcp.log("the page quit the %s Chrome" % profile.name)
             return {"quit": profile.name}
         if path == "/delete-profile":
-            profile = self._profile(body)
-            self._delete_profile(profile)
+            profile = profiles.delete(self.state, self.chromes, self.tabs, self.workers, body.get("profile"))
+            mcp.log("the page deleted the profile %s, keeping its folder %s" % (profile.name, profile.folder))
             return {"deleted": profile.name}
         tab = body.get("tab")
         if not isinstance(tab, str):

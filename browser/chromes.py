@@ -128,7 +128,8 @@ class Chromes:
                 mcp.log("could not quit the %s Chrome: %s" % (profile.name, exc))
 
     def quit(self, profile):
-        """Quit a profile's Chrome if it is running, once any start of it under way has finished.
+        """Quit a profile's Chrome if it is running, once any start of it under way has finished; raise CdpError when it
+        is still running after.
 
         Args:
             profile (Profile): whose Chrome.
@@ -136,6 +137,8 @@ class Chromes:
         with self._start_lock(profile.folder):
             if cdp.owner(profile.folder) is not None:
                 quit_chrome(profile)
+                if cdp.owner(profile.folder) is not None:
+                    raise cdp.CdpError("the %s Chrome is still running; see .run/server.log" % profile.name)
 
     def _keep_focus(self, profile):
         with self._lock:

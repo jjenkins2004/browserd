@@ -39,7 +39,7 @@ run `npm ci`).
       pointer.py   the queue's pointer steps: move_at, click_down, click_up
       guard.py     the click guard: a press or keys stopped when the page changed since the agent's screenshot
       record.py    one queue call's numbered files in a folder
-      profiles.py  Profile (name, folder, port); what a new profile is given
+      profiles.py  Profile (name, folder, port); what a new profile is given; deleting one
       state.py     .run/state.db: the profiles, sessions and tabs
       sessions.py  session ids, labels, record folder names, when a session is paused
       page.py      the browserd page on 9231: GET /state, and a POST per button
@@ -68,9 +68,9 @@ Chrome with `launch.launch` unless it is up, one start at a time per folder, and
 it launched but never saw answer. It then runs `focus.keep` for that Chrome on a connection of its own: a
 thread that ends when the Chrome quits and starts again with it. `adopt` does the same for every profile's
 Chrome already running as the server starts, `window` is the page's Open Chrome (it brings a running Chrome to the
-front, restoring a minimized window, and opens a blank window only when it has no page open), `quit` quits one once any start of it under way has
-finished (the page's Quit Chrome and Delete profile), and `quit_all` quits every running one that way when the server
-stops; no Chrome starts after it.
+front, restoring a minimized window, and opens a blank window only when it has no page open), `quit` (the page's Quit Chrome, and `profiles.delete`) quits one once any start of it under way has
+finished, raising a `CdpError` when it is still running after, and `quit_all` quits every running one that way when the
+server stops, logging that error rather than raising it; no Chrome starts after it.
 
 **`profiles.Profile`** is one Chrome: a name, its folder (`--user-data-dir`) and its debugging port.
 **`state.State`** keeps them in `../.run/state.db`, with the sessions and tabs, one SQLite connection shared by
@@ -81,8 +81,8 @@ profile: a folder taken over must hold no Chrome profile but Chrome's `Default` 
 `~/Library/Application Support/Google/Chrome-<name>`, made empty, or one of `profiles.free_folders` (a
 `Chrome-*` folder there that no profile uses) taken over with its logins, once `cdp.check_folder` passes.
 Its port is the one that folder's Chrome already runs with, when no profile has it; otherwise the lowest from 9223
-to 9299 that no profile has, the server does not hold (9230, 9231), and nothing listens on. The page's Delete profile
-removes one from `state.db` first, so no `session_start` or `tab_open` finds it meanwhile, then quits its Chrome, so a
+to 9299 that no profile has, the server does not hold (9230, 9231), and nothing listens on. **`profiles.delete`**, which the
+page's Delete profile calls, removes one from `state.db` first, so no `session_start` or `tab_open` finds it meanwhile, then quits its Chrome, so a
 queue running on one of its tabs fails at once rather than holding that tab's Worker; a Chrome still running after puts
 the profile back and refuses. Only then does it close its open sessions and every tab of it. Its folder is kept, logins and all, and so becomes one of
 `profiles.free_folders`, and its sessions' and tabs' rows and record folders are kept too.
