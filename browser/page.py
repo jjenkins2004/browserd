@@ -130,7 +130,8 @@ class Page(ThreadingHTTPServer):
             mcp.log("the page quit the %s Chrome" % profile.name)
             return {"quit": profile.name}
         if path == "/delete-profile":
-            profile = profiles.delete(self.state, self.chromes, self.tabs, self.workers, body.get("profile"))
+            profile = profiles.delete(self.state, self.chromes, self.tabs, self.workers, body.get("profile"),
+                                      close_sessions=True)
             mcp.log("the page deleted the profile %s, %s its folder %s" % (
                 profile.name, "keeping" if os.path.isdir(profile.folder) else "removing", profile.folder))
             return {"deleted": profile.name}

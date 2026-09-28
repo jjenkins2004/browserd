@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import time
 
-from . import cdp, guard, mcp, page, record, sessions, steps
+from . import cdp, guard, mcp, page, profiles, record, sessions, steps
 from .chromes import Chromes
 from .devtools import Devtools
 from .state import Session, State
@@ -33,11 +33,11 @@ PAUSE_POLL = 60.0  # seconds between looks for sessions newly paused
 
 
 def _refusing(run):
-    """A tool body whose CdpError reaches the agent as a readable refusal."""
+    """A tool body whose CdpError or ProfileError reaches the agent as a readable refusal."""
     def wrapped(arguments):
         try:
             return run(arguments)
-        except cdp.CdpError as exc:
+        except (cdp.CdpError, profiles.ProfileError) as exc:
             raise mcp.ToolError(str(exc))
     return wrapped
 
@@ -117,7 +117,8 @@ def tab_tools(state, tabs, workers, queue=None):
         if profile is None:
             known = [p.name for p in state.profiles()]
             raise mcp.ToolError("there is no profile named %r; %s" % (name, "the profiles are %s" % ", ".join(known)
-                                if known else "there are none yet: the user makes them on the browserd page, %s"
+                                if known else "there are none yet: the user makes them on the browserd page, %s, or asks you to "
+                                "with profile_new"
                                 % PAGE_URL))
         now = time.time()
         while True:
@@ -222,6 +223,50 @@ def tab_tools(state, tabs, workers, queue=None):
                                         "tabs": {"type": "array", "items": {"type": "string"}, "minItems": 1,
                                                  "description": "tab ids from tab_open or tab_list, like "
                                                                 "[\"k3f9\", \"m2x7\"]"}}}},
+    ]
+
+
+def profile_tools(state, chromes, tabs, workers, reserved):
+    """The profile_new and profile_delete tools.
+
+    Args:
+        state (State): the profiles, sessions and tabs.
+        chromes (Chromes): quits a deleted profile's Chrome.
+        tabs (Tabs): given to profiles.delete, which closes no session for these tools.
+        workers (Workers): each tab's Worker, dropped when a deleted profile's tab opened by hand is closed.
+        reserved (tuple[int, ...]): the ports the server itself holds, which no profile's Chrome may take.
+    """
+    def profile_new(arguments):
+        name = _text(arguments, "name")
+        # Chrome-<name> kept by profile_delete or the page's Delete profile comes back with its logins.
+        folder = next((found for found in profiles.free_folders(state.profiles())
+                       if found.lower() == (profiles.PREFIX + name).lower()), None)
+        made = profiles.make(state, name, folder, reserved)
+        mcp.log("profile_new made the profile %s, %s on port %d" % (made.name, made.folder, made.port))
+        return "made the profile %s, %s %s; session_start with profile %s starts a session on it" % (
+            made.name, "taking over the logins in" if folder else "in the new folder", made.folder, made.name)
+
+    def profile_delete(arguments):
+        gone = profiles.delete(state, chromes, tabs, workers, _text(arguments, "name"), close_sessions=False)
+        kept = os.path.isdir(gone.folder)
+        mcp.log("profile_delete deleted the profile %s, %s its folder %s" % (gone.name, "keeping" if kept else "removing",
+                                                                            gone.folder))
+        return "deleted the profile %s and quit its Chrome; %s" % (
+            gone.name, "its folder, %s, is kept with its logins" % gone.folder if kept else "its folder was empty and is removed")
+
+    return [
+        {"name": "profile_new", "run": _refusing(profile_new),
+         "description": "Make a new browserd profile, a Chrome with its own logins, only when the user asks for "
+                        "one. A Chrome-<name> folder no profile uses is taken over with its logins; else a new, empty "
+                        "one is made. Takes no session.",
+         "inputSchema": {"type": "object", "required": ["name"], "additionalProperties": False,
+                         "properties": {"name": {"type": "string", "description": profiles.NAME_RULE}}}},
+        {"name": "profile_delete", "run": _refusing(profile_delete),
+         "description": "Delete a browserd profile, only when the user asks: quit its Chrome and remove the "
+                        "profile, keeping its logins. Takes no session, and is refused while the profile has any open "
+                        "session, yours included.",
+         "inputSchema": {"type": "object", "required": ["name"], "additionalProperties": False,
+                         "properties": {"name": {"type": "string"}}}},
     ]
 
 
@@ -425,7 +470,7 @@ def serve():
     tabs, workers = Tabs(state, cdp.Browser, chromes.ensure), Workers(RUN)
     allowed = _allowed_tools()
     tools = tab_tools(state, tabs, workers, queue_steps(state, tabs, workers, allowed)) + [
-        queue_tool(state, tabs, workers, allowed)]
+        queue_tool(state, tabs, workers, allowed)] + profile_tools(state, chromes, tabs, workers, (PORT, page.PORT))
     # A port another program holds fails the start here, before the pid file is written.
     server = mcp.Server(HOST, PORT, tools, NAME)
     page_server = page.Page(HOST, page.PORT, state, (PORT, page.PORT), chromes, tabs, workers)

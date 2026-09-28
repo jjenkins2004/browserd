@@ -3,7 +3,8 @@
 The browser MCP server and everything it needs: it owns one Chrome per profile and serves the tools a
 Claude Code agent reads and drives pages with. Nothing here knows what a job is; it is handed a tab, and
 records each `queue` call in that tab's record folder, `.run/calls/<profile>/<session>-<label>/<tab>/`. An
-agent starts with `session_start {profile, label}`, and sees only its session's tabs.
+agent starts with `session_start {profile, label}`, and sees only its session's tabs; asked to, it makes or
+deletes a profile with `profile_new` or `profile_delete`.
 
     ./start    the server, in the background; each profile's Chrome starts on its first use. The
                browserd page, http://127.0.0.1:9231/, makes profiles and shows their sessions and tabs

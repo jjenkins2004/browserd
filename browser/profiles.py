@@ -20,7 +20,7 @@ FIRST_PORT, LAST_PORT = 9223, 9299
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,23}")
 NAME_RULE = "a profile's name is a letter, then up to 23 letters, digits or dashes"
 
-_making = threading.Lock()  # the page answers on threads; two New profile clicks at once would pick the same port
+_making = threading.Lock()  # the page and the MCP server answer on threads; two makes at once would pick the same port
 
 
 class Profile(NamedTuple):
@@ -34,7 +34,7 @@ class Profile(NamedTuple):
 
 
 class ProfileError(Exception):
-    """A new profile, or a delete, refused, in words for the page."""
+    """A new profile, or a delete, refused, in words for the page or an agent."""
 
 
 def free_folders(profiles):
@@ -120,7 +120,7 @@ def make(state, name, folder=None, reserved=()):
     return profile
 
 
-def delete(state, chromes, tabs, workers, name):
+def delete(state, chromes, tabs, workers, name, *, close_sessions):
     """Remove a profile, quit its Chrome, and close its open sessions and every tab of it; README.md, "Core Abstractions
     & Shared Pieces", gives the order and what is kept. Returns the profile removed.
 
@@ -130,21 +130,27 @@ def delete(state, chromes, tabs, workers, name):
         tabs (Tabs): closes its sessions.
         workers (Workers): each tab's Worker, dropped as its tab is closed.
         name (str): the profile's name, whatever its case.
+        close_sessions (bool): False refuses, changing nothing, while the profile has an open session.
     """
     profile = state.profile(name) if isinstance(name, str) else None
     if profile is None:
         raise ProfileError("there is no profile named %r" % name)
     state.remove_profile(profile.name)
     try:
+        # Listed once it is removed, so a session_start from now on finds no profile.
+        here = [session for session in state.open_sessions() if session.profile.lower() == profile.name.lower()]
+        if here and not close_sessions:
+            raise ProfileError("the %s profile has open sessions (%s); only the user closes a session, on the browserd "
+                               "page" % (profile.name, ", ".join(session.id for session in here)))
         chromes.quit(profile)
-    except cdp.CdpError:
+    except (cdp.CdpError, ProfileError):
         state.add_profile(profile)
         raise
     try:
         os.rmdir(profile.folder)  # empty only if its Chrome never ran; README.md says why it is removed
     except OSError:
         pass  # kept, logins and all
-    for session in state.open_sessions():
+    for session in state.open_sessions():  # again: a session_start that found the profile before it went may add one
         if session.profile.lower() == profile.name.lower():
             for tab in tabs.close_session(session):  # closing each in Chrome fails, the profile gone: only marked closed
                 workers.drop(tab)
