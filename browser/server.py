@@ -30,6 +30,7 @@ PID_FILE = os.path.join(RUN, "server.pid")
 LOG_FILE = os.path.join(RUN, "server.log")
 STATE_FILE = os.path.join(RUN, "state.db")
 PAUSE_POLL = 60.0  # seconds between looks for sessions newly paused
+NOTE_MOST = 200  # characters in a tab_needs_input note: a sentence
 
 
 def _refusing(run):
@@ -99,7 +100,7 @@ again."""
 
 
 def tab_tools(state, tabs, workers, queue=None):
-    """The session_start, tab_open, tab_list, tab_show and tab_close tools.
+    """The session_start, tab_open, tab_list, tab_show, tab_close and tab_needs_input tools.
 
     Args:
         state (State): the profiles, sessions and tabs.
@@ -179,6 +180,29 @@ def tab_tools(state, tabs, workers, queue=None):
             raise mcp.ToolError("\n".join([said] + ["could not close %s" % why for why in refused]))
         return said
 
+    def tab_needs_input(session, arguments):
+        tab, note, resolved = _text(arguments, "tab"), arguments.get("note"), arguments.get("resolved")
+        if resolved is True and note is None:
+            if not is_id(tab):
+                raise mcp.ToolError(NOT_AN_ID % tab)
+            row = state.tab(tab)
+            if row is None or row.session != session.id:
+                raise mcp.ToolError(NOT_YOURS % tab)
+            state.clear_needs_input(tab)
+            mcp.log("session %s cleared tab %s's mark of needing input" % (session.id, tab))
+            return "tab %s no longer needs the user's input" % tab
+        if resolved not in (None, False) or not isinstance(note, str) or not note.strip():
+            raise mcp.ToolError("give note, what the user must do in the tab, to mark it; or resolved: true alone, "
+                                "to clear its mark")
+        note = note.strip()
+        if len(note) > NOTE_MOST:
+            raise mcp.ToolError("a note is at most %d characters: a sentence" % NOTE_MOST)
+        tabs.target(session, tab)  # the session's, and open
+        state.mark_needs_input(tab, note, time.time())
+        mcp.log("session %s marked tab %s as needing input: %r" % (session.id, tab, note))
+        return ("tab %s is marked as needing the user's input; once you are told it is done, call tab_needs_input "
+                "with resolved: true" % tab)
+
     session_argument = {"type": "string", "description": "your session id, from session_start"}
     opening = {"session": session_argument, "url": {"type": "string"}}
     if queue is not None:
@@ -223,6 +247,18 @@ def tab_tools(state, tabs, workers, queue=None):
                                         "tabs": {"type": "array", "items": {"type": "string"}, "minItems": 1,
                                                  "description": "tab ids from tab_open or tab_list, like "
                                                                 "[\"k3f9\", \"m2x7\"]"}}}},
+        {"name": "tab_needs_input", "run": _refusing(_in_session(state, tab_needs_input)),
+         "description": "Mark a tab of your session as needing the user's input, with a note saying what they must "
+                        "do in it (sign in, solve a captcha, check a form); the browserd page shows it to them. It "
+                        "does not wait for them. Once you are told it is done, call it with resolved: true "
+                        "to clear the mark; closing the tab clears it too.",
+         "inputSchema": {"type": "object", "required": ["session", "tab"], "additionalProperties": False,
+                         "properties": {"session": session_argument,
+                                        "tab": {"type": "string", "description": "a tab id from tab_open or tab_list"},
+                                        "note": {"type": "string",
+                                                 "description": "what the user must do in the tab, in a sentence"},
+                                        "resolved": {"type": "boolean",
+                                                     "description": "true, without note, clears the mark"}}}},
     ]
 
 

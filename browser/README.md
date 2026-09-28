@@ -5,7 +5,8 @@
 The browser MCP server: it starts and owns one Chrome per profile and serves tools to Claude Code agents
 over HTTP on `127.0.0.1:9230`, so pages are read and driven with that profile's logins. An agent first calls `session_start {profile, label}`, and passes the session id it
 gets to every other tool but `profile_new` and `profile_delete`, which make and delete a profile. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage the session's own tabs by
-short tab ids; `queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
+short tab ids, and `tab_needs_input` marks one as needing the user's input, for the page to show, until its agent clears the mark
+or the tab closes; `queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
 records every call in that tab's record folder, `../.run/calls/<profile>/<session>-<label>/<tab>/`. The
 browserd page, at `http://127.0.0.1:9231/`, lists the profiles kept in `../.run/state.db` as a strip of
 profile tabs and shows one profile's sessions and tabs at a time; it makes and deletes profiles, opens and quits a profile's Chrome,
@@ -40,7 +41,7 @@ run `npm ci`).
       guard.py     the click guard: a press or keys stopped when the page changed since the agent's screenshot
       record.py    one queue call's numbered files in a folder
       profiles.py  Profile (name, folder, port); what a new profile is given; deleting one
-      state.py     .run/state.db: the profiles, sessions and tabs
+      state.py     .run/state.db: the profiles, sessions, tabs and their `needs_input` marks
       sessions.py  session ids, labels, record folder names, when a session is paused
       page.py      the browserd page on 9231: GET /state, and a POST per button
       ui/          the page itself: one file per part, and each part's states; its own README
@@ -73,7 +74,8 @@ finished, raising a `CdpError` when it is still running after, and `quit_all` qu
 server stops, logging that error rather than raising it; no Chrome starts after it.
 
 **`profiles.Profile`** is one Chrome: a name, its folder (`--user-data-dir`) and its debugging port.
-**`state.State`** keeps them in `../.run/state.db`, with the sessions and tabs, one SQLite connection shared by
+**`state.State`** keeps them in `../.run/state.db`, with the sessions, the tabs and the tabs' marks of needing the
+user's input (`needs_input`: a note and since when; closing a tab clears its mark), one SQLite connection shared by
 the server's threads; the file is gitignored, so each person's profiles stay theirs, and a name is taken
 whatever its case. Not a Chrome
 profile: a folder taken over must hold no Chrome profile but Chrome's `Default` one.
@@ -96,7 +98,7 @@ checked once the profile is removed.
 `ui/page.css` and the scripts of `page.PARTS` put in, read again on every load. `GET /state` gives
 every profile with its Chrome's pid (or `null`, not running), `error` when its Chrome's tabs could not be
 listed, its open sessions (active or paused) with their
-tabs, the tabs no session owns, and its last `page.CLOSED_SHOWN` (10) closed sessions (no part draws them), from one
+tabs (one needing the user's input with `needs_input: {note, since}`), the tabs no session owns, and its last `page.CLOSED_SHOWN` (10) closed sessions (no part draws them), from one
 `Tabs.listing` per profile, which also keeps `state.db` in step with each Chrome; and the folders a new profile
 may take over. Each button POSTs: `/profiles` a new profile, `/delete-profile` a profile (above), `/open` a profile's Chrome in front,
 `/quit-chrome` a profile's Chrome (refused when it is still running after; its sessions stay open, and the next listing
@@ -125,7 +127,7 @@ as is. Raising `mcp.ToolError` sends the agent a readable error result; any othe
 an error result naming it, with the traceback in the log; a client dropping its connection is one
 log line. Every tool call is one log line; one a tool refuses (`ToolError`), one naming no such tool, and
 one whose params or arguments are not an object also name what they were given. `server.tab_tools(state, tabs,
-workers, queue)` builds `session_start` and the four tab tools, `server.queue_tool` the queue, `server.profile_tools` `profile_new`
+workers, queue)` builds `session_start` and the five tab tools, `server.queue_tool` the queue, `server.profile_tools` `profile_new`
 and `profile_delete`;
 `server.queue_steps` makes the queue's body, which the queue and `tab_open` share: `tab_open`, given `steps`, runs
 them on the new tab through it (recorded as that tab's queue call), `steps.QUEUE_MOST` counted from the start of

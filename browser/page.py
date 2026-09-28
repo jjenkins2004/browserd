@@ -62,10 +62,11 @@ class Page(ThreadingHTTPServer):
 
     def snapshot(self):
         """What GET /state answers; README.md, "Core Abstractions & Shared Pieces"."""
-        known, now = self.state.profiles(), time.time()
-        return {"profiles": [self._shown(profile, now) for profile in known], "folders": profiles.free_folders(known)}
+        known, now, needs = self.state.profiles(), time.time(), self.state.needs_input()
+        return {"profiles": [self._shown(profile, now, needs) for profile in known],
+                "folders": profiles.free_folders(known)}
 
-    def _shown(self, profile, now):
+    def _shown(self, profile, now, needs):
         """One profile of GET /state's answer; README.md, "Core Abstractions & Shared Pieces"."""
         shown = {"name": profile.name, "folder": profile.folder, "port": profile.port, "pid": _running(profile),
                  "error": None, "sessions": [], "by_hand": []}
@@ -77,6 +78,9 @@ class Page(ThreadingHTTPServer):
         by_session = {session.id: [] for session in here}
         for row, info in listed:
             tab = {"id": row.id, "title": info.get("title") or "", "url": info.get("url", "")}
+            if row.id in needs:
+                note, since = needs[row.id]
+                tab["needs_input"] = {"note": note, "since": since}
             # A tab of a session closed as it opened (a tab_open or popup under way) is shown with those by hand, so
             # it can still be closed.
             by_session.get(row.session, shown["by_hand"]).append(tab)

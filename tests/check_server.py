@@ -485,10 +485,33 @@ def session_tools_offline():
         check("another session's list does not show it", not is_error and opened not in text and "no open tabs" in text, text)
         text, is_error = call(httpd, "tab_close", session=other, tabs=[opened])
         check("another session cannot close it", is_error and "no tab of this session" in text, text)
+        text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, note="  sign in to Workday  ")
+        marked = state.needs_input().get(opened)
+        check("tab_needs_input marks a tab of the session with its note, trimmed, and says how to clear it",
+              not is_error and marked is not None and marked[0] == "sign in to Workday" and "resolved: true" in text, text)
+        call(httpd, "tab_needs_input", session=session, tab=opened, note="solve the captcha")
+        check("marking it again takes the new note and keeps since when",
+              state.needs_input().get(opened) == ("solve the captcha", marked[1] if marked else None), repr(state.needs_input()))
+        text, is_error = call(httpd, "tab_needs_input", session=other, tab=opened, note="mine now")
+        check("another session cannot mark it", is_error and "no tab of this session" in text, text)
+        text, is_error = call(httpd, "tab_needs_input", session=other, tab=opened, resolved=True)
+        check("nor clear its mark", is_error and "no tab of this session" in text and opened in state.needs_input(), text)
+        text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, note="check the form",
+                              resolved=False)
+        check("a note with resolved: false marks it", not is_error and state.needs_input()[opened][0] == "check the form", text)
+        for given in ({}, {"note": "  "}, {"note": "x", "resolved": True}, {"resolved": False}):
+            text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, **given)
+            check("tab_needs_input given %r is refused, saying what it takes" % given, is_error and "resolved: true" in text, text)
+        text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, note="x" * 201)
+        check("a note over 200 characters is refused", is_error and "at most 200" in text, text)
+        text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, resolved=True)
+        check("resolved: true clears the mark", not is_error and opened not in state.needs_input(), text)
+        call(httpd, "tab_needs_input", session=session, tab=opened, note="check the form")
         text, is_error = call(httpd, "tab_show", session=session, tab=opened)
         check("tab_show answers with the tab's id and URL", not is_error and text.split()[0] == opened, text)
         state.touch(session, 0)
         check("tab_close closes by id", call(httpd, "tab_close", session=session, tabs=[opened]) == ("closed %s" % opened, False))
+        check("and closing a tab clears its mark", opened not in state.needs_input(), repr(state.needs_input()))
         first, second = (call(httpd, "tab_open", session=session, url="https://example.com/%s" % n)[0].split()[0] for n in "de")
         text, is_error = call(httpd, "tab_close", session=session, tabs=[first, second, first])
         check("tab_close closes several tabs in one call, a tab named twice once",
@@ -2151,7 +2174,11 @@ def page_offline():
         mine, _ = tabs.open(working, "https://example.com/a")
         stale, _ = tabs.open(idle, "https://example.com/b")
         chrome.add("https://example.com/hand", title="By hand")
+        state.mark_needs_input(mine, "sign in", 1000.0)
         shown = json.loads(ask("GET", "/state", **{page.TOKEN: board.token})[1])["profiles"][0]
+        check("state gives a tab marked as needing input its note and since when, and no other tab a mark",
+              [t.get("needs_input") for s in shown["sessions"] for t in s["tabs"]]
+              == [{"note": "sign in", "since": 1000.0}, None], repr(shown))
         check("state lists each open session with its state and tabs, and the tabs no session owns",
               [(s["label"], s["state"], [t["id"] for t in s["tabs"]]) for s in shown["sessions"]]
               == [("apply acme", "active", [mine]), ("old run", "paused", [stale])]

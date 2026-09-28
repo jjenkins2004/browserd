@@ -48,7 +48,7 @@ function showProfile(panel, profile) {
     if (opened) panel.idleOpen = opened.open;
     // README.md, "Agent Gotchas & Invariants", says which sessions fold and why only those are sorted.
     const unfolded = profile.sessions.filter((session) => session.state === "active"
-      || session.tabs.some((tab) => tab.needs_action));
+      || session.tabs.some((tab) => tab.needs_input));
     const idle = profile.sessions.filter((session) => !unfolded.includes(session))
       .sort((a, b) => b.last_call - a.last_call);
     const parts = [];

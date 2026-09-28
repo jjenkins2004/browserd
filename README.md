@@ -16,7 +16,7 @@ deletes a profile with `profile_new` or `profile_delete`.
     start, stop, restart    launchers for browser/service.py
     browser/                the server: tabs, the queue, and its own README
     package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
-    .run/                   gitignored: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs), devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
+    .run/                   gitignored: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs, needs_input), devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     tests/                  check_browser.py, check_server.py; throwaway.py, the live checks' own Chrome
     preview/                every state of the page's parts from made-up data: `python3 preview/preview.py`, then http://127.0.0.1:9320/
 

@@ -62,8 +62,8 @@ what the state is and how the page handles it.
   with a tab that needs you stays out with the active ones, so amber is never folded away. Those keep the server's
   order, oldest started first: sorted by last call, two active sessions would swap at almost every poll, under the
   pointer.
-- **A session's tab may carry `needs_action: {note, since}`** (an agent's words, and seconds since the epoch):
-  the tab is waiting on you. The page draws it on the profile's tab and the tab's row, but the server
-  sends no such field yet, and no tool sets or clears it; only the stories show it.
+- **A session's tab may carry `needs_input: {note, since}`** (an agent's words, and seconds since the epoch):
+  the tab is waiting on you. Its agent sets and clears it with `tab_needs_input`, and closing the tab clears it. The
+  page draws it on the profile's tab and the tab's row.
 - **Amber means a tab needs you, and nothing else**; an idle session's chip is grey.
 - **Stories draw from `samples.js`, never real data**, and may use the preview's `stories()` and `onPanel()`.
