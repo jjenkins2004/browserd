@@ -409,7 +409,10 @@ same tabs under the same ids. A crash leaves the same.
   view's header names it. take_snapshot's own `under: uid` keeps only that element and what sits under
   it, a native select there not collapsed, and fails its step when the snapshot lacks the uid;
   `full: true` gives the lines as chrome-devtools-mcp wrote them instead of a view; `find: <regex>`
-  keeps only the lines it matches, ignoring case, and its header counts them; `after: uid` keeps the lines after
+  keeps only the lines it matches, ignoring case, and its header counts them; between two of them, a line such as
+  `(2 lines left out by find)` says it left lines out there, since two lines shown one after the other read as
+  neighbours: on an MCP-Universe benchmark task a `find: "ROLE"` showed `<ROLE>`, the block's first line and
+  `</ROLE>`, its second line left out, and the agent answered with the first alone; `after: uid` keeps the lines after
   that element in the saved snapshot's order, one the view leaves out or folds into a run of words included, and
   fails its step when the snapshot has no such element. It goes by place, not by number: chrome-devtools-mcp keeps
   an element's uid from the snapshot that first saw it, so a snapshot taken after the page changed mixes `1_x` and

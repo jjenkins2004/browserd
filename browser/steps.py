@@ -49,6 +49,7 @@ VIEW_MOST = 10000  # characters a view shows before it is cut; README.md, "Agent
 HEADINGS_MOST = 40  # headings below a cut that its note names
 LINE_UID = re.compile(r"^\s*uid=([^\s.]+)")  # a view line's uid, a word run's first
 HEADING = re.compile(r"^\s*uid=\S+ heading ")
+FIND_LEFT_OUT = re.compile(r"^\s*\(\d+ lines? left out by find\)$")  # a line _matching puts between two matches
 OWN_OPTIONS = {"take_snapshot": VIEW_OPTIONS, "take_screenshot": ("scale",)}  # each tool's options the queue takes itself
 UID_NUMBER = re.compile(r"(\d+)_(\d+)")  # a uid: its snapshot's number, then its own
 UID_RANGE = re.compile(r"(\d+_\d+)\.\.\d+")  # a view's run of words, uid=5_1..25; a step given it acts on the first
@@ -428,7 +429,7 @@ def view(text, path, under=None, full=False, find=None, after=None):
         path (str): where the whole snapshot is saved.
         under (str | None): a uid; only that element and what sits under it is kept.
         full (bool): give the snapshot's lines as they are instead of as a view.
-        find (str | None): a regex; only the lines it matches, ignoring case, are kept.
+        find (str | None): a regex; only the lines it matches, ignoring case, are kept, as _matching gives them.
         after (str | None): a uid; only the lines after that element, in the snapshot's order, are kept.
 
     Returns (text, missing): missing is True when under or after names no element in the snapshot.
@@ -454,9 +455,8 @@ def view(text, path, under=None, full=False, find=None, after=None):
         nodes, loose, scope = [found], [], " under %s" % under
     kept = loose + (_full(nodes, []) if full else _view(nodes, 0, under, []))
     if find is not None:
-        matched = [line for line in kept if re.search(find, line, re.I)]
-        scope += ", lines matching %s: %d of %d" % (json.dumps(find), len(matched), len(kept))
-        kept = matched
+        matched = sum(1 for line in kept if re.search(find, line, re.I))
+        scope += ", lines matching %s: %d of %d" % (json.dumps(find), matched, len(kept))
     kind = "full" if full else "view"
     if after is not None:
         later = _after(kept, after, whole)
@@ -465,9 +465,28 @@ def view(text, path, under=None, full=False, find=None, after=None):
                      "no element has uid=%s in this snapshot" % after]
             return "\n".join(before + shown + tail), True
         kept, scope = later, scope + ", after %s" % after
+    if find is not None:
+        # Here, not before after: _after keeps only lines with a uid, and would drop the lines _matching adds.
+        kept = _matching(kept, find)
     asked = {key: value for key, value in (("under", under), ("full", full), ("find", find)) if value}
     shown = ["%s (%s%s; saved whole to %s)" % (SNAPSHOT, kind, scope, path)] + _cut(kept, asked)
     return "\n".join(before + shown + tail), False
+
+
+def _matching(lines, find):
+    """The lines find matches, ignoring case, with a line between two of them saying how many it left out there;
+    README.md, "Agent Gotchas & Invariants", says why."""
+    out, left_out = [], 0
+    for line in lines:
+        if not re.search(find, line, re.I):
+            left_out += 1
+            continue
+        if out and left_out:
+            indent = line[:len(line) - len(line.lstrip())]
+            out.append("%s(%d line%s left out by find)" % (indent, left_out, "" if left_out == 1 else "s"))
+        out.append(line)
+        left_out = 0
+    return out
 
 
 def _line_uid(line):
@@ -504,7 +523,8 @@ def _cut(lines, asked):
     headings = [line.strip() for line in rest if HEADING.match(line)]
     ways = "from a heading below with its uid as after, or search with find: a regex"
     ways = "Read on with take_snapshot %s, or %s" % (json.dumps(dict(asked, after=last)), ways) if last else "Read " + ways
-    note = ["--- cut: %d more lines below. %s%s" % (len(rest), ways, "; headings below:" if headings else ".")]
+    below = sum(1 for line in rest if not FIND_LEFT_OUT.match(line))  # the page's lines, not _matching's
+    note = ["--- cut: %d more lines below. %s%s" % (below, ways, "; headings below:" if headings else ".")]
     note += headings[:HEADINGS_MOST]
     if len(headings) > HEADINGS_MOST:
         note.append("(and %d more headings)" % (len(headings) - HEADINGS_MOST))

@@ -1148,6 +1148,24 @@ def views(workdir):
           text.split("\n")[1].startswith('uid=1_0 RootWebArea') and len(text.split("\n--- cut: ")[0]) > 12000 + 9000, len(text))
     text, _ = steps.view(big, path, find=r"^\s*uid=\S+ heading")
     check("a view within VIEW_MOST, like a find's, is not cut", "--- cut: " not in text and text.count(" heading ") == 60, text[:200])
+    role = "## Latest page snapshot\n" + "\n".join([
+        'uid=1_0 RootWebArea "SYSTEM_PROMPT.txt"', '  uid=1_1 StaticText "You are a helpful agent."',
+        '  uid=1_2 StaticText "<ROLE>"', '  uid=1_3 StaticText "Your primary role is to assist users."',
+        '  uid=1_4 StaticText "* If the user asks a question, just answer it."', '  uid=1_5 StaticText "</ROLE>"',
+        '  uid=1_6 StaticText "Take care."'])
+    text, _ = steps.view(role, path, find="ROLE")
+    check("between two lines find matches, a line says how many it left out there; none before the first or after "
+          "the last", text.split("\n")[1:] == ['  uid=1_2 StaticText "<ROLE>"',
+                                               '  uid=1_3 StaticText "Your primary role is to assist users."',
+                                               '  (1 line left out by find)', '  uid=1_5 StaticText "</ROLE>"'], text)
+    text, _ = steps.view(big, path, find=r"^\s*uid=\S+ heading", after="1_14")
+    check("and after keeps those lines, still none before the first match", text.split("\n")[1:4] == [
+        '  uid=1_27 heading "Part 3" level="2"', '  (12 lines left out by find)', '  uid=1_40 heading "Part 4" level="2"'],
+          text[:300])
+    text, _ = steps.view(big, path, find="heading|Row [123] of")
+    shown, note = text.split("\n--- cut: ")
+    check("a cut find view's note counts the lines it left below, not the lines saying what find left out", int(
+        note.split(" ")[0]) + sum(1 for line in shown.split("\n")[1:] if " uid=" in line) == 240, note[:80])
 
 
 class Page:
