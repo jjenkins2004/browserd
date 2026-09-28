@@ -87,14 +87,14 @@ SESSION_HELP = """Start a browserd session: call it once, before any other brows
 instructions name (if they name none, ask the user which) and a label of a few words saying what you are doing,
 like "apply acme backend". It returns the session id every other browserd tool takes as session.
 
-A profile is one Chrome with its own logins. A session sees and drives only its own tabs: the ones it opened, the
-ones their pages opened (a popup, a target=_blank link), and any the user hands it on the browserd page. Every agent starts its own session, a subagent
+A profile is one Chrome with its own logins. A session drives only its own tabs: those it opened, those their pages
+opened (a popup, a target=_blank link), and any tab the user hands it. Every agent starts its own session, a subagent
 included; pass yours on only to an agent that carries on your task in your tabs.
 
-No agent ends a session: when your task is done, leave its tabs open. After %d minutes without a call a session is
-paused, which stops the processes that drive its tabs, so their element uids are gone; any call with its id resumes
-it. A session closes only when the user closes it on the browserd page or browserd stops, its tabs with it; a
-closed session's id is refused, so start a new one and open its tabs again."""
+A session closes only when the user closes it on the browserd page or browserd stops, its tabs with it; no tool closes
+one or the browser. If your task says to close the browser, close every tab of your session in one tab_close
+(tab_list lists them); otherwise leave them open. After %d minutes without a call a session is paused and its element uids are gone; any call
+with its id resumes it. A closed session's id is refused: start a new one and open its tabs again."""
 
 
 def tab_tools(state, tabs, workers, queue=None):
@@ -229,63 +229,65 @@ def tab_tools(state, tabs, workers, queue=None):
 QUEUE_HELP = """Run steps on one tab, top to bottom, stopping at the first that fails.
 
 Give your session id, the tab id and steps, a list of {"tool": <name>, ...its arguments}, or file, a JSON file holding
-that list. Never pass pageId: the tab chooses the page. The steps
-argument's description lists every tool a step may name, with its arguments, and when to use which: a
-chrome-devtools-mcp tool reports success once it has acted, not once the page took it, so pick, expect, type and
-wait read the page back.
+that list. Never pass pageId: the tab chooses the page. The steps argument's description lists every tool a step may
+name, with its arguments, and when to use which: chrome-devtools-mcp's tools and browserd's own, which run only as
+steps, here or in tab_open's steps, and are never tools to call by themselves.
 
-Element uids (1_13) come from a snapshot and stay valid on this tab until the page navigates, the element goes
-away or the session is paused. Every snapshot in a report is a view: each line that carries words, in page order with its uid, and every
-control, with a native select on one line, like combobox "Country" = "United States" (249 options). A view's header
-names where the whole snapshot is saved. take_snapshot also takes under, a uid, for that element and what sits
-under it (a native select's options); find, a regex, for only the lines it matches; and full: true, for its lines
-as chrome-devtools-mcp wrote them.
+Element uids, like 1_13, come from a snapshot and stay valid on this tab until the page navigates, the element goes
+away or the session is paused. Every snapshot in a report is a view: one line per element that carries words or is a
+control, in page order with its uid, indented under what holds it, so a table's cells come row by row; a native select
+is one line, like combobox "Country" = "United States" (249 options). A view's header names the file the whole snapshot
+is saved in. take_snapshot also takes under, a uid, for only that element and what sits under it (a native select's
+options); find, a regex, for only the lines it matches; and full: true, for its lines as chrome-devtools-mcp wrote
+them.
 
-The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A failure makes the result an error,
-names the steps not run, and ends with a view of the page now. A step's reply over %d characters is cut, the
-whole of it saved. Each call is recorded in the tab's record folder, %s/<profile>/<session>-<label>/<tab>/:
-001-queue.json the steps,
-001-queue.txt the report. A take_screenshot is saved there too, and the viewport's comes back as an image. A
-step's file paths (filePath, filePaths) must be absolute and sit inside ~/Desktop, /tmp, $TMPDIR or browserd's
-folder. After %gs a queue starts no more steps and names them, as Claude Code drops a reply after about 60s.
+The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A failure makes the result an error, names
+the steps not run, and ends with a view of the page now. A step's reply over %d characters is cut and saved whole in
+the tab's record folder, %s/<profile>/<session>-<label>/<tab>/, which keeps every call and screenshot. A screenshot of
+the viewport also comes back to you as an image. A step's file paths (filePath, filePaths) must be absolute and inside
+~/Desktop, /tmp, $TMPDIR or browserd's folder. After %gs a queue starts no more steps, and names the steps not run.
 """
 
-STEPS_HELP = """The steps, in order: each {"tool": <name>, ...its arguments}, checked against the tool before any
-step runs. ? marks an optional argument.
+STEPS_HELP = """The steps, in order: each {"tool": <name>, ...its arguments}, all checked before any runs. ? marks an
+optional argument.
 
-When to use which. pick for any dropdown you type into (react-select, an autocomplete). fill for a native select,
-with an option's exact text, which take_snapshot under the select's uid lists; and for a date or time field, on its
-own line, in its own form: a Date line as 1957-08-01, an InputTime line as 14:30, a DateTime line as 1957-08-01T14:30
-(a month's as 1957-08, a week's as 1957-W31). type for text of 100 characters or
-more. paste for text an editor changes as it is typed (Slides curls quotes, a code editor closes brackets and
-indents): click into the editor and select what it replaces (Meta+A) first, or give a text box's uid; never set an
-editor's text with evaluate_script. expect after a fill or click whose result matters. wait for a
-page still at work, like a resume parser after an upload: uid and value for a field it fills (passing at once if
-the field holds it already), or gone with its status text; never a setTimeout in evaluate_script.
+A step that loads a new page (navigate_page, a link or submit click) makes every uid new: end the queue with
+take_snapshot, and use its uids in the next queue.
+
+Which to use. fill for a text box, for a native select (an option's exact text, which take_snapshot under the select's
+uid lists), and for a date or time field, on its own line, in its own form: a Date line as 1957-08-01, an InputTime
+line as 14:30, a DateTime line as 1957-08-01T14:30 (a month's as 1957-08, a week's as 1957-W31). press_key acts where
+the focus is, so press_key Enter after a one-line text box's fill submits that box. type instead of fill for text of
+100 characters or more. pick for a dropdown you type into (react-select, an autocomplete). paste for text an editor
+changes as it is typed (Slides curls quotes, a code editor closes brackets): click into the editor and select what it
+replaces (Meta+A) first, or give a text box's uid; never set an editor's text with evaluate_script. fill, click and the
+other steps report success once they act, not once the page takes it: use expect after one whose result matters (pick,
+type, wait and a paste given a uid read the page back themselves). wait for a page still at work, like a resume parser
+after an upload: uid and value for a field it fills (passing at once if the field holds it already), or gone with its
+status text; never a setTimeout in evaluate_script. navigate_page leaves a page even when the page asks to confirm
+leaving (unsaved changes); give it handleBeforeUnload "dismiss" to stay.
 
 Pixels: a take_screenshot of the viewport comes back as an image, one pixel per CSS pixel unless its line gives a
-factor to multiply by. move_at moves the pointer to a point's CSS coordinates in it, and click_down and click_up press
-and let go of a button where the pointer is, as a hand does: a click is move_at, click_down, click_up; a drag,
-move_at, click_down, move_at, click_up; a double click, a click then click_down and click_up, each with count 2.
-Use them for what has no uid, like a slide, a map or a canvas, and end the queue with take_screenshot to see what
-they did. take_screenshot with scale 0.5 costs a quarter of the tokens: use it to see what is where, and no scale to
-read small text or aim at anything under about 16 CSS pixels.
+factor to multiply by. move_at moves the pointer to a point in it, and click_down and click_up press and let go of a
+button where the pointer is: a click is move_at, click_down, click_up; a drag, move_at, click_down, move_at, click_up;
+a double click, a click then click_down and click_up, each with count 2. Use them for what has no uid, like a slide, a
+map or a canvas, and end the queue with take_screenshot to see what they did. take_screenshot with scale 0.5 costs a
+quarter of the tokens: use it to see what is where, and no scale to read small text or aim at anything under about 16
+CSS pixels.
 
-Dialogs: put a handle_dialog step right after the step that opens an alert, confirm or prompt (a click, a key
-press), and the dialog is answered the moment it opens, or up to 5s after that step for a late one; evaluate_script
-answers its own with dialogAction (default accept), so takes none. A dialog no handle_dialog step waits on blocks
-the page: its step takes about 5s and counts as done, and a handle_dialog step in the next queue answers it.
+Dialogs (alert, confirm and prompt; never a modal or banner the page draws itself): put a handle_dialog step right
+after the step that opens one (a click, a key press), and it answers the dialog the moment it opens, or up to 5s after
+that step for a late one; evaluate_script answers its own with dialogAction (default accept), so put no handle_dialog
+step after it. When a step opens a dialog and no handle_dialog step follows it, that step takes about 5s, counts as
+done, and leaves the dialog open, blocking the page: answer it with a handle_dialog step in the next queue.
 
-A view over 10,000 characters, full's lines included, is cut at a line, and its note gives the take_snapshot call
-that reads on and the headings below the cut: take_snapshot's after, a uid, gives the lines after that element, so a
-heading's uid reads from there. A step that loads a new page (navigate_page, a link or submit click) makes every uid
-new: end the queue with
-take_snapshot and use its uids in the next queue. navigate_page leaves a page even when the page asks to stay
-(unsaved changes); give it handleBeforeUnload "dismiss" to stay. A view shows names and values as the page has them, quotes
-and all; a spinbutton's value= is its aria-valuenow, which some pages never update, while expect reads what it holds.
-A native select's value in a view may be its first option, shown though no one chose it; fill it anyway. Three or
-more one-word text lines whose uids count up, as a canvas app like Slides draws its words, are one view line,
-uid=5_1..25 StaticText "<words>": word k has uid 5_(1+k), and a step given 5_1..25 acts on 5_1.
+Views: names and values show as the page has them, quotes and all; a spinbutton's value= is its aria-valuenow, which
+some pages never update, while expect reads the field's real value. A native select may show its first option though
+no one chose it; fill it anyway. Three or more one-word text lines whose uids count up, as a canvas app like Slides
+draws its words or a table its one-word cells, are one line, uid=5_1..25 StaticText "<words>" for uids 5_1 to 5_25:
+the words keep their uids in order, and a step given 5_1..25 acts on 5_1. A view over 10,000 characters, full's lines
+included, is cut at a line, and its note gives the take_snapshot call that reads on and the headings below the cut:
+take_snapshot's after, a uid, gives the lines after that element, so a heading's uid reads from there.
 
 """
 

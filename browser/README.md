@@ -281,7 +281,10 @@ same tabs under the same ids. A crash leaves the same.
   the page now. A relative `file` is read from the tab's record folder.
 - **Claude Code cuts a tool's description at about 2,000 characters.** `server.QUEUE_HELP` stays
   under it; `server.STEPS_HELP` and the step catalog, `steps.describe`, make up the `steps` argument's
-  description, which Claude Code passes whole.
+  description, which Claude Code passes whole. `QUEUE_HELP` must still say that the catalog's tools run only as
+  steps: without its "Never pass pageId", "every tool a step may name" and "never tools to call by themselves"
+  lines, agents call a queue step's name, like `navigate_page`, as a top-level tool (measured in
+  `../findings/queue-descriptions.md`).
 - **Claude Code reads the tool list when a Claude Code session connects, and again only when told it changed.**
   So `initialize` declares `tools.listChanged` and gives an `Mcp-Session-Id`, and a request under an `Mcp-Session-Id`
   this process did not give (one from before a restart) is answered as an event stream:
