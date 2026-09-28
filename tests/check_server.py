@@ -2000,18 +2000,23 @@ def profiles_offline():
 
 def page_offline():
     """The page's requests: what each must carry, the profile its button makes, and its tabs shown, closed and handed
-    over, and its sessions closed, in a stand-in Chrome."""
+    over, its sessions closed, its Chrome quit, and the profile deleted, in a stand-in Chrome."""
     saved = (profiles.GOOGLE, profiles.FIRST_PORT)
     workdir = tempfile.mkdtemp(prefix="browser-page-")
     state = State(os.path.join(workdir, "state.db"))
 
     class Windows:
-        opened, refuse = [], False
+        opened, quits, refuse, stuck = [], [], False, False
 
         def window(self, profile):
             if self.refuse:
                 raise cdp.CdpError("Target.createTarget: refused")
             self.opened.append(profile.name)
+
+        def quit(self, profile):
+            if self.stuck:
+                raise cdp.CdpError("ps could not run")
+            self.quits.append(profile.name)
 
     class Dropped:
         tabs = []
@@ -2068,7 +2073,7 @@ def page_offline():
         status, raw, _ = ask("GET", "/state", **{page.TOKEN: board.token})
         check("state says a profile's Chrome is not running", json.loads(raw)["profiles"][0]["pid"] is None, raw.decode())
         status, raw, _ = ask("POST", "/open", {"profile": "jobs"}, **own)
-        check("Open Chrome opens a window of the named profile's Chrome, whatever the name's case",
+        check("Open Chrome brings the named profile's Chrome to the front, whatever the name's case",
               status == 200 and windows.opened == ["Jobs"], raw.decode())
         status, raw, _ = ask("POST", "/open", {"profile": "Nobody"}, **own)
         check("Open Chrome refuses a profile there is not", status == 400 and "no profile named 'Nobody'" in raw.decode(), raw.decode())
@@ -2118,6 +2123,34 @@ def page_offline():
         shown = json.loads(ask("GET", "/state", **{page.TOKEN: board.token})[1])["profiles"][0]
         check("and state lists both sessions as closed, the last closed first",
               shown["sessions"] == [] and [s["id"] for s in shown["closed"]] == [working.id, idle.id], repr(shown))
+
+        last = open_session(state, "last run", jobs)
+        kept, _ = tabs.open(last, "https://example.com/c")
+        status, raw, _ = ask("POST", "/quit-chrome", {"profile": "jobs"}, **own)
+        check("Quit Chrome quits the named profile's Chrome and drops the Worker of each of its tabs, leaving its sessions open",
+              status == 200 and windows.quits == ["Jobs"] and kept in dropped.tabs and state.session(last.id).closed is None,
+              raw.decode())
+        later, _ = tabs.open(last, "https://example.com/d")
+        chrome.add("https://example.com/hand-again", title="By hand again")
+        tabs.listing(jobs)
+        hand = [row.id for row in state.open_tabs("Jobs") if row.session is None]
+        status, raw, _ = ask("POST", "/delete-profile", {"profile": "Nobody"}, **own)
+        check("Delete profile refuses a profile there is not", status == 400 and "no profile named 'Nobody'" in raw.decode(),
+              raw.decode())
+        windows.stuck = True
+        status, raw, _ = ask("POST", "/delete-profile", {"profile": "jobs"}, **own)
+        windows.stuck = False
+        check("a Chrome that could not be quit puts the profile back, and leaves its sessions and tabs open",
+              status == 400 and "ps could not run" in raw.decode() and state.profile("Jobs") == jobs
+              and state.session(last.id).closed is None and state.tab(later).closed is None, raw.decode())
+        status, raw, _ = ask("POST", "/delete-profile", {"profile": "jobs"}, **own)
+        check("Delete profile removes it, whatever the name's case, quits its Chrome, and closes its sessions and every tab of it",
+              status == 200 and state.profile("Jobs") is None and state.session(last.id).closed is not None
+              and state.open_tabs("Jobs") == [] and len(hand) == 1 and {later, *hand} <= set(dropped.tabs)
+              and windows.quits == ["Jobs", "Jobs"], raw.decode())
+        shown = json.loads(ask("GET", "/state", **{page.TOKEN: board.token})[1])
+        check("and keeps its folder, for a new profile to take over",
+              os.path.isdir(made["folder"]) and shown == {"profiles": [], "folders": ["Chrome-School"]}, repr(shown))
     finally:
         profiles.GOOGLE, profiles.FIRST_PORT = saved
         board.shutdown()

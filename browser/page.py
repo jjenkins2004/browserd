@@ -1,5 +1,5 @@
 """The browserd page, http://127.0.0.1:9231/: every profile, its Chrome, its sessions and their tabs, and the buttons
-that make a profile, open its Chrome, show or close a tab, and close sessions.
+that make or delete a profile, open or quit its Chrome, show or close a tab, and close sessions.
 
 One page, ui/page.html with ui/'s parts put in, that polls GET /state and POSTs its buttons. README.md, "Agent Gotchas & Invariants",
 says what each request must carry and why the page has a port of its own.
@@ -42,7 +42,7 @@ class Page(ThreadingHTTPServer):
             port (int): port to bind; 0 picks a free one.
             state (State): the profiles, sessions and tabs shown and changed.
             reserved (tuple[int, ...]): ports the server holds, which no profile's Chrome may take.
-            chromes (Chromes): starts a profile's Chrome for Open Chrome.
+            chromes (Chromes): starts a profile's Chrome for Open Chrome, and quits it for Quit Chrome and Delete profile.
             tabs (Tabs): lists each profile's tabs, and shows, closes and hands them over.
             workers (Workers): each tab's Worker, dropped when the page closes its tab.
         """
@@ -101,6 +101,37 @@ class Page(ThreadingHTTPServer):
             self.workers.drop(tab)
         mcp.log("the page closed session %s (%s)" % (session.id, session.label))
 
+    def _profile(self, body):
+        """The profile a request names, whatever its case."""
+        name = body.get("profile")
+        profile = self.state.profile(name) if isinstance(name, str) else None
+        if profile is None:
+            raise Refused("there is no profile named %r" % name)
+        return profile
+
+    def _quit(self, profile):
+        """Quit a profile's Chrome, or raise Refused when it is still running after."""
+        self.chromes.quit(profile)
+        if _running(profile) is not None:
+            raise Refused("the %s Chrome is still running; see .run/server.log" % profile.name)
+
+    def _delete_profile(self, profile):
+        # README.md, "Core Abstractions & Shared Pieces", gives this order. Closing its tabs in Chrome then fails, the
+        # profile gone, so each is only marked closed.
+        self.state.remove_profile(profile.name)
+        try:
+            self._quit(profile)
+        except (cdp.CdpError, Refused):
+            self.state.add_profile(profile)
+            raise
+        for session in self.state.open_sessions():
+            if session.profile.lower() == profile.name.lower():
+                self._close_session(session)
+        for row in self.state.open_tabs(profile.name):  # the tabs opened by hand
+            self.state.close_tab(row.id, time.time())
+            self.workers.drop(row.id)
+        mcp.log("the page deleted the profile %s, keeping its folder %s" % (profile.name, profile.folder))
+
     def act(self, path, body):
         """Do what a POST asks, and return its answer, or None for a path no button posts to."""
         if path == "/profiles":
@@ -109,13 +140,22 @@ class Page(ThreadingHTTPServer):
             mcp.log("the page made the profile %s, %s on port %d" % (made.name, made.folder, made.port))
             return {"name": made.name, "folder": made.folder, "port": made.port}
         if path == "/open":
-            name = body.get("profile")
-            profile = self.state.profile(name) if isinstance(name, str) else None
-            if profile is None:
-                raise Refused("there is no profile named %r" % name)
+            profile = self._profile(body)
             self.chromes.window(profile)
-            mcp.log("the page opened a window of the %s Chrome" % profile.name)
+            mcp.log("the page brought the %s Chrome to the front" % profile.name)
             return {"opened": profile.name}
+        if path == "/quit-chrome":
+            profile = self._profile(body)
+            tabs = [row.id for row in self.state.open_tabs(profile.name)]
+            self._quit(profile)
+            for tab in tabs:
+                self.workers.drop(tab)  # its chrome-devtools-mcp was pointed at the Chrome that quit
+            mcp.log("the page quit the %s Chrome" % profile.name)
+            return {"quit": profile.name}
+        if path == "/delete-profile":
+            profile = self._profile(body)
+            self._delete_profile(profile)
+            return {"deleted": profile.name}
         tab = body.get("tab")
         if not isinstance(tab, str):
             tab = ""  # refused below as no tab id at all

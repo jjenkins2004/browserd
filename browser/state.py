@@ -88,6 +88,10 @@ class State:
         """Add a profile, or raise sqlite3.IntegrityError when its name, folder or port is taken."""
         self._run("INSERT INTO profiles (name, folder, port) VALUES (?, ?, ?)", *profile)
 
+    def remove_profile(self, name):
+        """Remove the profile of that name, whatever its case; its sessions and tabs are kept."""
+        self._run("DELETE FROM profiles WHERE name = ?", name)
+
     def add_session(self, session):
         """Add a session, or raise sqlite3.IntegrityError when its id is taken."""
         self._run("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)", *session)

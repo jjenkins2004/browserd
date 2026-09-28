@@ -1,4 +1,5 @@
-// A profile's panel, under its tab: its Chrome and Open Chrome, then its sessions and the tabs opened by hand.
+// A profile's panel, under its tab: its Chrome, Open Chrome, Quit Chrome while it runs, and Delete profile, then its
+// sessions and the tabs opened by hand.
 function profilePanel(name) {
   const node = el("section", "profile");
   const status = el("span", "state");
@@ -10,9 +11,13 @@ function profilePanel(name) {
   const open = el("button", "primary", "Open Chrome");
   open.type = "submit";
   form.append(open);
-  const head = el("div", "head");
-  head.append(who, form);
   const said = el("div", "said");
+  const quit = button("Quit Chrome", "", said, () => ({path: "/quit-chrome", send: {profile: name}}));
+  const remove = button("Delete profile", "danger", said, () => confirm("Delete the profile " + name + "? Its Chrome " +
+    "quits, and its open sessions close with their tabs. Its folder is kept, logins and all, for New profile to take " +
+    "over.") ? {path: "/delete-profile", send: {profile: name}} : null);
+  const head = el("div", "head");
+  head.append(who, form, quit, remove);
   const body = el("div");
   node.append(head, said, body);
   form.addEventListener("submit", async (event) => {
@@ -28,12 +33,13 @@ function profilePanel(name) {
       open.disabled = false;
     }
   });
-  return {node, status, said, body, key: null};
+  return {node, status, quit, said, body, key: null};
 }
 
 function showProfile(panel, profile) {
   panel.status.textContent = profile.pid ? "Chrome running" : "Chrome not running";
   panel.status.className = "state" + (profile.pid ? " up" : "");
+  panel.quit.hidden = !profile.pid;
   // Rebuilt only on a change; README.md, "Agent Gotchas & Invariants", says why.
   const key = JSON.stringify([profile.error, profile.sessions, profile.by_hand]);
   if (key !== panel.key) {
