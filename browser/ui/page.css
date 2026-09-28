@@ -83,6 +83,3 @@ h1 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
 .tab.needs, .tab.needs:hover { background: var(--wait-fill); }
 .ask { flex-basis: 100%; color: var(--wait); font-size: 12px; font-weight: 600; }
 .ask .age { color: inherit; font-weight: 400; opacity: .8; }
-
-/* closed.js */
-.closed { color: var(--muted); font-size: 13px; }

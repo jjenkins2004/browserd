@@ -85,7 +85,7 @@ to 9299 that no profile has, the server does not hold (9230, 9231), and nothing 
 `ui/page.css` and the scripts of `page.PARTS` put in, read again on every load. `GET /state` gives
 every profile with its Chrome's pid (or `null`, not running), `error` when its Chrome's tabs could not be
 listed, its open sessions (active or paused) with their
-tabs, the tabs no session owns, and its last `page.CLOSED_SHOWN` (10) closed sessions, from one
+tabs, the tabs no session owns, and its last `page.CLOSED_SHOWN` (10) closed sessions (no part draws them), from one
 `Tabs.listing` per profile, which also keeps `state.db` in step with each Chrome; and the folders a new profile
 may take over. Each button POSTs: `/profiles` a new profile, `/open` a blank window of a profile's Chrome in
 front, `/show` and `/close-tab` any tab, and `/close-session` a session and every tab of it; `/handover` (a tab no

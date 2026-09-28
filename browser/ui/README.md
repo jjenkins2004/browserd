@@ -16,11 +16,10 @@ drawn from `samples.js` by the preview (`../../preview/`); the server never send
       base.js          api, el, tell, ago, aged, button: shared by every part
       header.js        browserd, New profile, and server errors only when there are any
       profile_tab.js   a profile's strip tab: name, needs-you and active counts, alarm
-      profile.js       a profile's panel: Chrome, Open Chrome, sessions, by hand, closed
+      profile.js       a profile's panel: Chrome, Open Chrome, sessions, by hand
       session.js       one session: state, label, id, last call, Close session, its tabs
       tab.js           one Chrome tab's row, with Show, Close, and needs-you note
       by_hand.js       tabs no session owns, each with Show and Close
-      closed.js        a profile's last closed sessions
       new_profile.js   the New profile form, and the folders it may take over
       page.js          start(): the header, the strip, one panel at a time, refresh and poll
       samples.js       made-up tabs, sessions and profiles, for stories only
@@ -29,8 +28,8 @@ drawn from `samples.js` by the preview (`../../preview/`); the server never send
 ## Core Abstractions & Shared Pieces
 
 **A part** is a function that builds its elements: `header(add)`, `profileTab(name, pick)`, `profilePanel(name)` and
-`newProfile()` return an object of the elements a later poll changes, and `tabItem`, `sessionBlock`,
-`byHandBlock` and `closedBlock` return the element itself. A `show…` function (`showStatus`, `showProfileTab`,
+`newProfile()` return an object of the elements a later poll changes, and `tabItem`, `sessionBlock` and
+`byHandBlock` return the element itself. A `show…` function (`showStatus`, `showProfileTab`,
 `showProfile`, `showFolders`) changes a built one in place. A row's button (Show, Close, Close session)
 posts through `button()`, then calls `refresh()`, and puts a refusal in the `said` element it was given; the Open
 Chrome and New profile forms do the same in their own submit handlers.

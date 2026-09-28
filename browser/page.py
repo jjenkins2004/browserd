@@ -19,10 +19,10 @@ from .ws import WebSocketError
 PORT = 9231
 UI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 # The page's parts, each ui/<part>.js, put into ui/page.html's one script in this order.
-PARTS = ("base", "header", "profile_tab", "profile", "session", "tab", "by_hand", "closed", "new_profile", "page")
+PARTS = ("base", "header", "profile_tab", "profile", "session", "tab", "by_hand", "new_profile", "page")
 TOKEN = "X-Browserd-Token"
 MAX_BODY = 64 << 10
-CLOSED_SHOWN = 10  # closed sessions the page lists per profile, newest first
+CLOSED_SHOWN = 10  # closed sessions /state sends per profile, newest first
 # The page runs only its own inline script and talks only to itself, and no other page may frame it and steer a click.
 POLICY = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; "
           "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")

@@ -1,5 +1,4 @@
-// A profile's panel, under its tab: its Chrome and Open Chrome, then its sessions, the tabs opened by hand and its
-// last closed sessions.
+// A profile's panel, under its tab: its Chrome and Open Chrome, then its sessions and the tabs opened by hand.
 function profilePanel(name) {
   const node = el("section", "profile");
   const status = el("span", "state");
@@ -36,7 +35,7 @@ function showProfile(panel, profile) {
   panel.status.textContent = profile.pid ? "Chrome running" : "Chrome not running";
   panel.status.className = "state" + (profile.pid ? " up" : "");
   // Rebuilt only on a change; README.md, "Agent Gotchas & Invariants", says why.
-  const key = JSON.stringify([profile.error, profile.sessions, profile.by_hand, profile.closed]);
+  const key = JSON.stringify([profile.error, profile.sessions, profile.by_hand]);
   if (key !== panel.key) {
     panel.key = key;
     const parts = [];
@@ -44,7 +43,6 @@ function showProfile(panel, profile) {
     parts.push(...profile.sessions.map((session) => sessionBlock(session, panel.said)));
     if (!profile.sessions.length) parts.push(el("div", "quiet", "No open sessions."));
     if (profile.by_hand.length) parts.push(byHandBlock(profile, panel.said));
-    if (profile.closed.length) parts.push(closedBlock(profile));
     panel.body.replaceChildren(...parts);
   }
   for (const node of panel.body.querySelectorAll("[data-when]")) {
