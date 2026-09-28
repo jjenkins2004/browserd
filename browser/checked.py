@@ -641,13 +641,12 @@ def describe():
     return "\n".join([
         "  pick(uid: string, text: string, search?: string, wait?: number) - Choose the option whose text is "
         "exactly text in a dropdown you type into (react-select, an autocomplete) and confirm the field took it; "
-        "search is typed instead when the full text lists nothing (just the city), wait is seconds (default %g)"
+        "search is typed instead when the full text lists nothing (like just the city), wait is seconds (default %g)"
         % PICK_WAIT,
         "  expect(uid: string, value: string) - Fail unless the field holds value: \"true\"/\"false\" for a "
         "checkbox, radio, or aria-pressed/aria-checked element; option text for a select; the choice a dropdown shows",
         "  type(uid: string, text: string) - Select the text box's text and type text over it with real keys, then fail "
-        "unless the field holds text, exactly or with only its spacing and punctuation changed (a masked phone); use it "
-        "instead of fill for a value of 100 characters or more, which fill sets by script",
+        "unless the field holds text, exactly or with only its spacing and punctuation changed (a masked phone)",
         "  paste(text: string, uid?: string) - Paste text with Meta+V, so an editor takes it as it is, with no quotes "
         "curled or brackets closed as typing gets (the page is handed the text; the Mac's clipboard is never written); "
         "with uid, over a text box's text, read back as type reads; without, where the focus is, read back by nothing",
