@@ -1,7 +1,7 @@
 """The browserd page, http://127.0.0.1:9231/: every profile, its Chrome, its sessions and their tabs, and the buttons
 that make a profile, open its Chrome, show, close or hand over a tab, and close sessions.
 
-One HTML file, page.html, that polls GET /state and POSTs its buttons. README.md, "Agent Gotchas & Invariants",
+One page, ui/page.html with ui/'s parts put in, that polls GET /state and POSTs its buttons. README.md, "Agent Gotchas & Invariants",
 says what each request must carry and why the page has a port of its own.
 """
 
@@ -17,7 +17,9 @@ from . import cdp, mcp, profiles, sessions
 from .ws import WebSocketError
 
 PORT = 9231
-HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "page.html")
+UI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
+# The page's parts, each ui/<part>.js, put into ui/page.html's one script in this order.
+PARTS = ("base", "header", "profile_tab", "profile", "session", "tab", "by_hand", "closed", "new_profile", "page")
 TOKEN = "X-Browserd-Token"
 MAX_BODY = 64 << 10
 CLOSED_SHOWN = 10  # closed sessions the page lists per profile, newest first
@@ -147,6 +149,15 @@ class Page(ThreadingHTTPServer):
         return None
 
 
+def assemble():
+    """What GET / answers; README.md, "Core Abstractions & Shared Pieces"."""
+    def read(name):
+        with open(os.path.join(UI, name), encoding="utf-8") as handle:
+            return handle.read()
+    script = "\n".join(read(part + ".js") for part in PARTS)
+    return read("page.html").replace("__STYLE__", read("page.css")).replace("__SCRIPT__", script)
+
+
 def _running(profile):
     try:
         return cdp.owner(profile.folder)
@@ -194,8 +205,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/":
             if not self._from_page(page, post=False, token=False):
                 return None
-            with open(HTML, "rb") as handle:
-                html = handle.read().replace(b"__TOKEN__", page.token.encode())
+            html = assemble().replace("__TOKEN__", page.token).encode()
             return self._send(200, html, "text/html; charset=utf-8")
         if self.path == "/state":
             if self._from_page(page, post=False):
