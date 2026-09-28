@@ -93,8 +93,9 @@ included; pass yours on only to an agent that carries on your task in your tabs.
 
 A session closes only when the user closes it on the browserd page or browserd stops, its tabs with it; no tool closes
 one or the browser. If your task says to close the browser, close every tab of your session in one tab_close
-(tab_list lists them); otherwise leave them open. After %d minutes without a call a session is paused and its element uids are gone; any call
-with its id resumes it. A closed session's id is refused: start a new one and open its tabs again."""
+(tab_list lists them); otherwise leave them open. After %d minutes without a call a session is paused and its element
+uids are gone; any call with its id resumes it. A closed session's id is refused: start a new one and open its tabs
+again."""
 
 
 def tab_tools(state, tabs, workers, queue=None):
@@ -285,9 +286,10 @@ Views: names and values show as the page has them, quotes and all; a spinbutton'
 some pages never update, while expect reads the field's real value. A native select may show its first option though
 no one chose it; fill it anyway. Three or more one-word text lines whose uids count up, as a canvas app like Slides
 draws its words or a table its one-word cells, are one line, uid=5_1..25 StaticText "<words>" for uids 5_1 to 5_25:
-the words keep their uids in order, and a step given 5_1..25 acts on 5_1. A view over 10,000 characters, full's lines
-included, is cut at a line, and its note gives the take_snapshot call that reads on and the headings below the cut:
-take_snapshot's after, a uid, gives the lines after that element, so a heading's uid reads from there.
+the words keep their uids in order, and a step given 5_1..25 acts on 5_1. A view over 10,000 characters, one taken
+with full: true included, is cut at a line, and its note gives the take_snapshot call that reads on and the headings
+below the cut: take_snapshot's after, a uid, gives the lines after that element: give it a heading's uid to read on
+from that heading.
 
 """
 
