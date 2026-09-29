@@ -32,7 +32,7 @@ run `npm ci`).
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
       worker.py    one tab's process, paired with its page; Workers registry
       steps.py     the queue: load, check, run, report; snapshot views
-      checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused
+      checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused, read_fills
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       downloads.py hears a tab's downloads and where each went
       screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
@@ -498,6 +498,21 @@ same tabs under the same ids. A crash leaves the same.
     `checked.FILL_JS` sets the value on a copy of the input, Chrome's own parser, so a form but the type's own
     (`checked.DATE_VALUES`: 1957-08-01 for a date) and a day that does not exist (1957-02-29) both fail; an empty
     value, which clears the input, passes.
+  - **A run of `fill` steps in a row is read in one call** (`checked.read_fills`) as its first step runs. The first
+    step, and each after it that `checked.FILL_JS` reads as a `box` (a text-like input, a textarea or a
+    contenteditable, with no combobox or listbox role) up to the first that is not one, is judged by that read instead
+    of its own (`steps._Fills`); a select, toggle, date or other input is what most often locks or unlocks the fields
+    after it, so after one each fill reads its own element. A read that refuses is taken again at the step's own turn,
+    after the fills before it, so a box one of them enabled is filled. No `GAP` is slept between two fills, since
+    chrome-devtools-mcp's `fill` waits for the page to settle. On a FormFactory form a `fill` step took about 0.4s
+    (its read 0.1s, chrome-devtools-mcp's `fill` 0.2s), and `GAP` 0.1s followed it; four text boxes in a row took
+    0.9s, against 1.8s with a read and a `GAP` per fill, and 50 FormFactory agent runs a mean 20.9s a form against
+    21.8s (31 of 50 forms faster), their fields as right (94%). Not covered: a box the page makes read-only or
+    disabled after its run's read, by a handler an earlier fill of the run set off (a box's keys and `input` as it is
+    typed; the `input` and `change` fired at once for a value of 100 characters or more, which `fill` sets by script;
+    a typed box's `change`, fired as the next fill takes the focus) or by work of its own (a reply or timer landing),
+    is filled on the read from before: chrome-devtools-mcp's `fill` empties a read-only one and reports success, and
+    fails a disabled one after 5s.
 - **Element uids come from `take_snapshot` and live in that tab's process.** They stay valid
   across queue calls until the page navigates or the element goes away. When the process died and
   was restarted, the next report opens with a note that they are gone. A step failing with

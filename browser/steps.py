@@ -18,7 +18,7 @@ PAGE_TOOLS = {"new_page", "close_page", "select_page", "list_pages"}
 LEFT_OUT = PAGE_TOOLS | {"lighthouse_audit", "take_heapsnapshot"}
 RESTARTED = ("note: this tab's chrome-devtools-mcp had stopped and was started again, so element uids from before "
              "are gone; take a new snapshot")
-GAP = 0.1  # seconds between steps, so the page can react to one step before the next
+GAP = 0.1  # seconds between steps but two fills, so the page can react to one step before the next
 NAVIGATE_TIMEOUT = 30000  # ms a navigate_page that names none gives the load; README.md, "Core Abstractions & Shared Pieces"
 QUEUE_MOST = 50.0  # seconds a queue starts steps for; README.md, "Agent Gotchas & Invariants", says why
 DOWNLOAD_WAIT = 5.0  # seconds a step waits for a download it began to end; README.md, "Agent Gotchas & Invariants"
@@ -614,6 +614,7 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
     if restarted:
         report.append(RESTARTED)
     started, answerer, navigated = began or time.monotonic(), None, None
+    fills = _Fills(devtools, page_id, steps)
     try:
         for number, step in enumerate(steps, 1):
             left = QUEUE_MOST - (time.monotonic() - started)
@@ -632,7 +633,8 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             if stopped is not None:
                 content, failed = stopped
             else:
-                content, failed = _step(devtools, page_id, step, left, answerer, target, connect, guard)
+                content, failed = _step(devtools, page_id, step, left, answerer, target, connect, guard,
+                                        fills.read(number) if step["tool"] == "fill" else None)
                 if guard:
                     guard.after(step, failed)
             got = watcher.take(min(DOWNLOAD_WAIT, QUEUE_MOST - (time.monotonic() - started))) if watcher else []
@@ -660,7 +662,8 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             if failed:
                 report.extend(_after_stop(devtools, page_id, steps, number, path, len("\n".join(report))))
                 break
-            if number < len(steps):
+            # No GAP between two fills; README.md, "Agent Gotchas & Invariants", says why.
+            if number < len(steps) and (step["tool"], steps[number]["tool"]) != ("fill", "fill"):
                 time.sleep(GAP)
     finally:
         if guard:
@@ -682,9 +685,9 @@ def _downloaded(download):
     return "--- %s is still downloading; a later step on this tab says where it went" % download["name"]
 
 
-def _step(devtools, page_id, step, left, answerer, target, connect, guard=None):
+def _step(devtools, page_id, step, left, answerer, target, connect, guard=None, read=None):
     """(content, failed) for one step: a checked step, a pointer step, a screenshot of the viewport, a dialog the
-    answerer answered, a refused fill, or the tool's own."""
+    answerer answered, a refused fill, or the tool's own. read is a fill's read taken earlier, by _Fills."""
     if step["tool"] in checked.STEPS:
         text, failed = checked.run(devtools, page_id, step, left, target, connect)
         return [{"type": "text", "text": text}], failed
@@ -697,7 +700,7 @@ def _step(devtools, page_id, step, left, answerer, target, connect, guard=None):
         if answered is not None:
             return [{"type": "text", "text": answered}], False
     if step["tool"] in ("fill", "fill_form"):
-        refused = checked.fill_refused(devtools, page_id, step)
+        refused = checked.fill_refused(devtools, page_id, step, read)
         if refused:
             return [{"type": "text", "text": refused}], True
     arguments = {key: value for key, value in step.items()
@@ -711,6 +714,31 @@ def _step(devtools, page_id, step, left, answerer, target, connect, guard=None):
         return devtools.call(step["tool"], arguments)
     except cdp.CdpError as exc:
         return [{"type": "text", "text": str(exc)}], True
+
+
+class _Fills:
+    """The reads a queue's runs of fill steps are judged by, each run's elements read in one call as its first step
+    runs; README.md, "Agent Gotchas & Invariants", says which fills use them, and why."""
+
+    def __init__(self, devtools, page_id, steps):
+        self.devtools, self.page_id, self.steps = devtools, page_id, steps
+        self.reads = {}  # step number -> the read of its text box, taken with its run's first step
+
+    def read(self, number):
+        """The read of fill step `number`'s element taken with its run's first step, or None for its own read."""
+        if number == 1 or self.steps[number - 2]["tool"] != "fill":
+            run = [number]
+            while run[-1] < len(self.steps) and self.steps[run[-1]]["tool"] == "fill":
+                run.append(run[-1] + 1)
+            fills = [self.steps[at - 1] for at in run]
+            found = checked.read_fills(self.devtools, self.page_id, fills) if run[1:] else None
+            self.reads = {}
+            for at, read in zip(run, found or []):
+                if isinstance(read, dict) and (at == number or read.get("kind") == "box"):
+                    self.reads[at] = read  # the run's first read is as fresh as its own would be, whatever it reads
+                if not isinstance(read, dict) or read.get("kind") != "box":
+                    break
+        return self.reads.pop(number, None)
 
 
 def _after_stop(devtools, page_id, steps, done, path, used):

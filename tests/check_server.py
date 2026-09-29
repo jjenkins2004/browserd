@@ -848,6 +848,60 @@ def queue_offline():
         check("the report ends with the page as it is now, as a view", report.rstrip().endswith('uid=1_0 RootWebArea "Form"'), report)
         check("and saves that snapshot whole", open(called("page-now-snapshot.txt")).read().endswith("  uid=1_1 generic\n"))
         check("an image a step returned comes back as an image", content[1:] == [image])
+
+        class Form(FakeDevtools):
+            """FakeDevtools whose evaluate_script answers as checked.FILL_JS would: reads maps a uid to its reads,
+            given in turn with the last repeated (a plain text box for a uid not in it); one uid gets its read alone,
+            several a list."""
+
+            def __init__(self, answers, reads=None):
+                super().__init__(answers)
+                self.reads = reads or {}
+
+            def text(self, tool, arguments, wait=None):
+                if tool != "evaluate_script":
+                    return super().text(tool, arguments, wait)
+                self.calls.append((tool, arguments))
+                turns = [self.reads.get(uid, [{"kind": "box"}]) for uid in arguments["args"]]
+                found = [answers.pop(0) if answers[1:] else answers[0] for answers in turns]
+                return "```json\n%s\n```" % json.dumps(found if found[1:] else found[0])
+
+        ok = ([{"type": "text", "text": "Filled"}], False)
+        run = [{"tool": "fill", "uid": "1_2", "value": "a"}, {"tool": "fill", "uid": "1_3", "value": "b"},
+               {"tool": "fill", "uid": "1_4", "value": "c"}]
+        fake = Form([ok, ok, ok, ok])
+        report = text_of(steps.run(fake, 7, run + [{"tool": "click", "uid": "1_5"}],
+                                   lambda name: os.path.join(workdir, "011-" + name))["content"])
+        check("fills in a row are read in one call, and each text box is filled without a read of its own",
+              [tool for tool, _ in fake.calls] == ["evaluate_script", "fill", "fill", "fill", "click"]
+              and fake.calls[0][1]["args"] == ["1_2", "1_3", "1_4"]
+              and all("--- %d fill ok" % n in report for n in (1, 2, 3)), repr(fake.calls) + report)
+        fake = Form([ok], {"1_3": [{"kind": "box", "disabled": True}]})
+        result = steps.run(fake, 7, run, lambda name: os.path.join(workdir, "012-" + name))
+        report = text_of(result["content"])
+        check("a fill the one read refuses is read again at its own step, and fails when its own read refuses too",
+              [tool for tool, _ in fake.calls] == ["evaluate_script", "fill", "evaluate_script", "take_snapshot"]
+              and fake.calls[2][1]["args"] == ["1_3"] and result["isError"] and "--- 2 fill FAILED" in report
+              and "element 1_3 is disabled" in report and "--- not run: 3 fill" in report, repr(fake.calls) + report)
+        fake = Form([ok, ok, ok], {"1_3": [{"kind": "box", "disabled": True}, {"kind": "box"}]})
+        result = steps.run(fake, 7, run, lambda name: os.path.join(workdir, "013-" + name))
+        check("and is filled when its own read, after the fills before it, passes",
+              [tool for tool, _ in fake.calls] == ["evaluate_script", "fill", "evaluate_script", "fill", "fill"]
+              and not result["isError"], repr(fake.calls))
+        fake = Form([ok, ok, ok], {"1_3": [{"kind": "select", "options": ["b"]}]})
+        steps.run(fake, 7, run, lambda name: os.path.join(workdir, "014-" + name))
+        check("a fill that is not a text box, and each after it, reads its own element, as filling it may change the rest",
+              [tool for tool, _ in fake.calls] == ["evaluate_script", "fill", "evaluate_script", "fill", "evaluate_script",
+                                                    "fill"], repr(fake.calls))
+        fake = Form([ok, ok, ok], {"1_2": [{"kind": "select", "options": ["a"]}]})
+        steps.run(fake, 7, run, lambda name: os.path.join(workdir, "016-" + name))
+        check("a run's first fill is judged by the one read whatever it reads, as that read is as fresh as its own",
+              [tool for tool, _ in fake.calls] == ["evaluate_script", "fill", "evaluate_script", "fill", "evaluate_script",
+                                                    "fill"], repr(fake.calls))
+        fake = FakeDevtools([ok, ok])
+        steps.run(fake, 7, run[:2], lambda name: os.path.join(workdir, "015-" + name))
+        check("when the one read fails, each fill reads its own element", [tool for tool, _ in fake.calls] == [
+            "evaluate_script", "evaluate_script", "fill", "evaluate_script", "fill"], repr(fake.calls))
         dialog = "# Open dialog\nalert: Heads up.\nCall handle_dialog to handle it before continuing."
         fake = FakeDevtools([([{"type": "text", "text": "Error: Failed to interact with the element with uid 1_1.\n" + dialog}], True),
                              ([{"type": "text", "text": "Successfully accepted the dialog\n## Pages\n1: Other tab (https://example.com) [selected]\n2: Mine\n"
@@ -2526,6 +2580,27 @@ def checked_live(httpd, tabs, opened, session):
     check("fill_form refuses a select given text none of its options has, before filling any element",
           is_error and 'no option of the select %s is exactly "Atlantis"' % auth in text and "--- 1 expect FAILED" in held,
           text + held)
+    kinds = [field("textbox", "Name"), field("textbox", "Cover letter"), field("textbox", "Bio"),
+             field("listbox", "Languages known"), field("combobox", "Dud"), auth]
+    text, _ = call(httpd, "queue", session=session, tab=tab, steps=[{
+        "tool": "evaluate_script", "function": "(...els) => els.map(el => (%s)(el, 'x').kind)" % checked.FILL_JS,
+        "args": kinds}])
+    check("FILL_JS reads a text input, a textarea and a contenteditable as boxes, a multiple select and a combobox "
+          "input as others", returned(text) == ["box", "box", "box", "other", "other", "select"], repr(kinds) + text)
+    name, zip_code, letter = field("textbox", "Name"), field("textbox", "Zip"), field("textbox", "Cover letter")
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
+        {"tool": "fill", "uid": name, "value": "Grace Hopper"}, {"tool": "fill", "uid": zip_code, "value": "10001"},
+        {"tool": "fill", "uid": letter, "value": "A new letter"}, {"tool": "expect", "uid": name, "value": "Grace Hopper"},
+        {"tool": "expect", "uid": zip_code, "value": "10001"}, {"tool": "expect", "uid": letter, "value": "A new letter"}])
+    check("fills in a row, judged by one read, fill each box", not is_error and text.count(" ok ") == 6, text)
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
+        {"tool": "fill", "uid": name, "value": "Ada Lovelace"}, {"tool": "fill", "uid": locked, "value": "x"},
+        {"tool": "fill", "uid": field("textbox", "City"), "value": "London"}])
+    held, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": name, "value": "Ada Lovelace"},
+                                                                     {"tool": "expect", "uid": locked, "value": "fixed"}])
+    check("and a read-only box in the run is refused at its own step, the fills before it done",
+          is_error and "--- 1 fill ok" in text and "--- 2 fill FAILED" in text and "is read-only" in text
+          and "--- not run: 3 fill" in text and "--- 1 expect ok" in held and "--- 2 expect ok" in held, text + held)
     parse, city = field("button", "Parse resume"), field("textbox", "City")
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "click", "uid": parse}, {"tool": "wait", "gone": "Parsing your resume", "timeout": 10000},

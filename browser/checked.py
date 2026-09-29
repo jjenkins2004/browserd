@@ -1,5 +1,6 @@
 """The queue's checked steps, pick, expect, type, paste and wait: they read the page, not a tool's "Successfully"
-(all but a paste without a uid); and fill_refused, which reads each element before a fill.
+(all but a paste without a uid); and fill_refused, which judges each element by a read of it before a fill, and
+read_fills, which reads a run of fills' elements in one call.
 
 server.STEPS_HELP says when to use which.
 """
@@ -182,7 +183,11 @@ FILL_JS = r"""(el, value) => {
   }
   const toggle = ['checkbox', 'radio'].includes((el.type || '').toLowerCase())
     || ['checkbox', 'radio', 'switch'].includes(el.getAttribute('role'));
-  return {kind: toggle ? 'toggle' : 'box', disabled: !!el.disabled, readonly: !toggle && !!el.readOnly};
+  // A box takes typed text: puppeteer's own typeable inputs, a textarea or contenteditable, and no dropdown's role.
+  const typed = ['text', 'url', 'tel', 'search', 'password', 'number', 'email'];
+  const box = !['combobox', 'listbox'].includes(el.getAttribute('role'))
+    && (el.tagName === 'TEXTAREA' || el.isContentEditable || (el.tagName === 'INPUT' && typed.includes(el.type)));
+  return {kind: toggle ? 'toggle' : box ? 'box' : 'other', disabled: !!el.disabled, readonly: !toggle && !!el.readOnly};
 }"""
 # Why type or paste put nothing in, by what SELECT_JS refused; any other input type is not text-like.
 TYPE_REFUSED = {
@@ -534,14 +539,17 @@ def _press_paste(target, text, connect):
         browser.close()
 
 
-def fill_refused(devtools, page_id, step):
+def fill_refused(devtools, page_id, step, read=None):
     """Why a fill or fill_form step must not run, from a read of each of its elements first; None when it may.
 
     Args:
         devtools (Devtools): the tab's process.
         page_id (int): the tab's page id in it.
         step (dict): a fill or fill_form step that the queue's check has passed.
+        read (dict | None): the fill's element as read_fills read it earlier; a read that refuses is taken again, now.
     """
+    if read is not None and not _unfillable(read, step["uid"], step["value"]):
+        return None
     for element in step["elements"] if step["tool"] == "fill_form" else [step]:
         try:
             found = returned(_script(devtools, page_id, "(el) => (%s)(el, %s)" % (FILL_JS, json.dumps(element["value"])),
@@ -552,6 +560,24 @@ def fill_refused(devtools, page_id, step):
         if why:
             return "%s, so nothing was filled" % why
     return None
+
+
+def read_fills(devtools, page_id, steps):
+    """fill_refused's read of each fill step's element, all in one call, or None when that call fails.
+
+    Args:
+        devtools (Devtools): the tab's process.
+        page_id (int): the tab's page id in it.
+        steps (list[dict]): fill steps that the queue's check has passed.
+    """
+    function = "(...els) => els.map((el, at) => (%s)(el, %s[at]))" % (FILL_JS, json.dumps([s["value"] for s in steps]))
+    try:
+        found = returned(devtools.text("evaluate_script", {"pageId": page_id, "function": function,
+                                                           "args": [step["uid"] for step in steps],
+                                                           "dialogAction": "", "waitForStableDom": False}))
+    except cdp.CdpError:
+        return None
+    return found if isinstance(found, list) and len(found) == len(steps) else None
 
 
 def _unfillable(found, uid, value):
