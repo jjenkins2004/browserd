@@ -5,9 +5,8 @@
 Measures browserd against other browser MCP servers on public benchmarks. Every run is `claude -p` with every
 built-in tool off (`--tools ""`), so the browser MCP server is the only way to the web. The model, prompt and scoring
 stay the same across arms; only the server changes. This folder holds the code; the data (the benchmarks' own repos,
-every run's transcript, the scores) lives in a data folder outside the repo (`paths.DATA`, below). Results through
-2026-09-26 are in `../findings/benchmark.md`; the 2026-09-28 run (`final-mcpu`, `final-ff`) is scored in the data folder
-but not written up yet. `../.claude/skills/benchmark/SKILL.md` walks an agent through a rerun.
+every run's transcript, the scores) lives in a data folder outside the repo (`paths.DATA`, below). Every result is in
+`../findings/benchmark.md`. `../.claude/skills/benchmark/SKILL.md` walks an agent through a rerun.
 
 The suites, each `--suite` of `run.py`:
 
@@ -20,9 +19,8 @@ The suites, each `--suite` of `run.py`:
 | `miniwob` | synthetic form and widget drills | 38 × 2 seeds | the page's own reward |
 | `clicks`, `haystack` | click accuracy on small targets; finding a fact on long pages | 9; 12 | the bench's own |
 
-The last run (2026-09-28, `final-mcpu` and `final-ff`) was `mcpuniverse` and `formfactory`, the ones aimed at what
-browserd is for: research and actions on real sites. `webgames` and `miniwob` test games and drills, and were left
-out; `botwall` was planned and skipped.
+The last run (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`. `miniwob` (drills) and `botwall`
+have not been run in full.
 
     bench/setup.sh                              fill the data folder once
     bench/sites.sh start                        the local sites the suites need (WebGames, FormFactory, MiniWoB++, ...)
@@ -138,7 +136,8 @@ out; `botwall` was planned and skipped.
   formfactory, miniwob and clicks also move its record,
   `results/{formfactory-submissions,miniwob-rewards,click-hits}/<token>.jsonl`, or the set-aside run's record is
   scored with the rerun's. A wifi outage looks the same: set aside the runs of every arm in the outage's window, not
-  just the flagged ones, and resume.
+  just the flagged ones, and resume. A run the plan's session limit cuts off part way counts as done, and only the
+  next run stops the batch: set aside each run whose transcript says "session limit", as well as the flagged ones.
 - **Cleanup is the runner's.** After each run it stops the run's process group, kills orphaned headless Chromes of
   Puppeteer, Playwright and agent-browser, closes the agent-browser session, and closes each browserd session the run
   started on the browserd page (Close session), only those. A run killed by hand leaves its sessions open: close them

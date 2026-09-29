@@ -11,13 +11,16 @@ otherwise.
 
 ## 1. Before anything
 
-- `pgrep -fl "claude -p"` must print nothing: never run beside another batch. Check free memory with
-  `memory_pressure -Q`: a run starts only at 25% free, and other agents on browserd (a batch of job applications, say)
-  count against it.
+- Check free memory with `memory_pressure -Q`: a run starts only at 25% free, and other agents on browserd (a batch of
+  job applications, say) count against it. Another session's `claude -p` batch makes `run.py` refuse to start: do not
+  wait for it, pass `--beside` in each suite's arguments (`"mcpuniverse:--k 2 --beside" formfactory:--beside`) and
+  watch memory.
 - Never restart the main server on 9230. Never delete a run: set it aside in `<data>/results/_invalid/`.
-- Ask the user which suites and arms, and say the cost first. On 2026-09-28, MCP-Universe cost $0.47 a run ($0.35
-  Playwright to $0.72 agent-browser; $91 for 4 arms × 48 runs) and FormFactory $0.50 a form ($0.18 browserd to $1.34
-  agent-browser; $101 for 4 arms × 50), each suite about 70 to 80 minutes for 4 arms, 2 runs at a time.
+- Ask the user which suites and arms, and say the cost first. On 2026-09-29 (`final2`), MCP-Universe cost $0.45 a run
+  on average ($0.33 Playwright to $0.68 agent-browser; $87 for 4 arms × 48 runs), FormFactory $0.47 a form ($0.19
+  browserd to $1.21 agent-browser; $95 for 4 arms × 50) and WebGames $0.65 a run ($0.56 Playwright to $0.77
+  agent-browser; $133 for 4 arms × 51); MCP-Universe and FormFactory about 70 to 80 minutes each for 4
+  arms, 2 runs at a time, WebGames about 2.5 hours.
 
 ## 2. Set up (once, and after a pull)
 
@@ -43,7 +46,7 @@ otherwise.
 
 - `bench/sites.sh start` for a suite with a local site (formfactory, webgames, miniwob, clicks, haystack).
 - `bench/chain.sh <name> <arms> "<suite>[:<run.py args>]"...`, for example
-  `bench/chain.sh final2 next,playwright,devtools,agentbrowser "mcpuniverse:--k 2" formfactory`. Give each
+  `bench/chain.sh final3 next,playwright,devtools,agentbrowser "mcpuniverse:--k 2" formfactory webgames`. Give each
   measurement a `<name>` not yet in `<data>/results/`: a used one resumes that experiment, keeping its done runs from
   whatever commit made them. It detaches itself; progress is in `<data>/results/chain.log` and each suite's
   `<data>/results/<name>-<suite>.log`.
@@ -57,6 +60,9 @@ otherwise.
 - When it stopped on runs that reached no browser ("no browser call succeeded"), set those aside first, as
   `bench/README.md`, "The stops", says (with their formfactory, miniwob or clicks records): they count as done.
 - An outage (wifi, a site down): set aside the runs of every arm in its window, not only the flagged ones, then resume.
+- The plan's session limit ("You've hit your session limit"): the run it cut off part way counts as done. Set aside
+  every run whose transcript says "session limit", with its record, then resume after the reset or under another
+  account.
 - The Mac short on memory: stop the batch (kill the chain, its `run.py`, and each `claude -p` run's process group),
   close the cut-off runs' browserd sessions with `run.close_sessions` on their transcripts and their agent-browser
   sessions with `AGENT_BROWSER_SESSION=<run token> agent-browser close`, and resume later.
