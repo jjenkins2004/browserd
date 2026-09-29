@@ -8,14 +8,16 @@ MCP-Universe and on two small suites of the bench's own.
 batches them, and is slower on lookups and forms. After the fixes its median MCP-Universe run went from 35s to 24s
 (Playwright: 18s), with half the tool errors, but a long tail of runs kept its total cost above the first run's.
 
-Raw data is in `~/Desktop/PROJECTS/browserd-bench/`, whose README says how to run the public suites:
-- transcripts and scores, one folder per experiment in `results/`:
+The bench is `../bench/`, whose README says how to run it:
+- transcripts and scores are in its data folder (`paths.DATA`: `../browserd-bench` beside the repo, or
+  `$BROWSERD_BENCH_DATA`), one folder per experiment in `results/`:
   - `probe1/` (MCP-Universe), `ff1/` (FormFactory), `wg1/` (WebGames): the first comparison;
   - `fix8/` (MCP-Universe after the fixes), `clicks1/` (click accuracy), `hay1/` (the view cap);
   - `_invalid/`, the runs thrown out (below);
-- `report.py <exp>` scores an experiment; `scratch/analyze.py` breaks down its tool use, `scratch/miscalls.py` counts
-  calls of a name browserd does not serve;
-- in `scratch/`: `replay*.py`, `pairrepro.py`, `attach.py` and `pp*.mjs`, the pairing bug's replays and probes (below).
+- `../bench/report.py <exp>` scores an experiment; `../bench/tools/analyze.py` breaks down its tool use, and
+  `../bench/tools/miscalls.py` counts calls of a name browserd does not serve;
+- `../bench/probes/` holds `replay*.py`, `pairrepro.py`, `attach.py` and `pp*.mjs`, the pairing bug's replays and probes
+  (below).
 
 The tool-description experiment that followed is [queue-descriptions.md](queue-descriptions.md).
 
@@ -218,7 +220,7 @@ attaches first, Puppeteer finishes connecting before the tab's own page is attac
 `list_pages` lists no page for the tab. Which child attaches first held steady for a given tab, so each new process
 failed the same way. A fresh throwaway Chrome never prerenders, so the live checks never saw it.
 
-**Measured** by replaying the runs' browserd calls against the Bench Chrome with no agents (`scratch/replay*.py`):
+**Measured** by replaying the runs' browserd calls against the Bench Chrome with no agents (`../bench/probes/replay*.py`):
 
 | | Tabs that failed |
 |---|---|
