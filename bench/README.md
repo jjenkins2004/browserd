@@ -56,7 +56,7 @@ out; `botwall` was planned and skipped.
       mwserver.py     MiniWoB++'s pages on 4390, each reward saved under its run
       clickserver.py  the clicks page on 4395
       hayserver.py    the haystack pages on 4396
-      assets/         sample.pdf, the file a form run uploads
+      assets/         sample.pdf, which setup.sh copies to the data folder's assets/
       tools/          analyze.py (tool use by arm), paired.py (sign tests), miscalls.py, cheats.py, ffmap.py
       probes/         the pairing bug's replays and probes (../findings/benchmark.md, "The pairing bug")
 
@@ -66,6 +66,7 @@ out; `botwall` was planned and skipped.
       results/_invalid/<exp>-<why>/             runs set aside (a broken setup, an outage), never deleted
       MCP-Universe/, formfactory/, webgames/, miniwob-plusplus/    the benchmarks' repos, from setup.sh
       webgames-data/hf-test.jsonl, .venv/, *.log
+      assets/sample.pdf                         formfactory.UPLOAD, from setup.sh
 
 ## Core Abstractions & Shared Pieces
 

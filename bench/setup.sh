@@ -1,11 +1,13 @@
 #!/bin/bash
 # Fill the bench's data folder (paths.DATA): each benchmark's own repo at the commit this bench was built against,
-# WebGames' site built, WebGames' task file, and a venv with Flask for ffserver.py; then fetch the playwright arm's
-# pinned package and say what the agentbrowser and devtools arms still need. Safe to run again: it skips what is there.
+# WebGames' site built, WebGames' task file, a venv with Flask for ffserver.py, and the file a form run uploads; then
+# fetch the playwright arm's pinned package and say what the agentbrowser and devtools arms still need. Safe to run
+# again: it skips what is there.
 set -euo pipefail
 BENCH=$(cd "$(dirname "$0")" && pwd)
 DATA=$(python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import paths; print(paths.DATA)" "$BENCH")
-mkdir -p "$DATA/results" "$DATA/webgames-data"
+mkdir -p "$DATA/results" "$DATA/webgames-data" "$DATA/assets"
+[ -f "$DATA/assets/sample.pdf" ] || cp "$BENCH/assets/sample.pdf" "$DATA/assets/"  # formfactory.UPLOAD
 
 clone() {  # folder, repo, commit
   [ -d "$DATA/$1/.git" ] || git clone -q "$2" "$DATA/$1"

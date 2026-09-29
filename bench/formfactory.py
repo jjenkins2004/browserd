@@ -17,7 +17,9 @@ import paths
 FF = paths.DATA / "formfactory"
 SUBMISSIONS = paths.RESULTS / "formfactory-submissions"
 BASE = "http://127.0.0.1:5055"
-UPLOAD = paths.BENCH / "assets" / "sample.pdf"
+# the file a form run uploads, copied here by setup.sh: Playwright MCP and chrome-devtools-mcp upload only files
+# under the data folder, where runs start
+UPLOAD = paths.DATA / "assets" / "sample.pdf"
 INSTANCES = 2  # gold records per form: the first ones whose documents cut cleanly
 
 # template: (its page, its gold records' file stem). /academic-research/student-registration is left out: it
@@ -342,5 +344,7 @@ def score(task, answer, token):
 
 
 def check():
-    """Refuse to start runs while the server is down."""
+    """Refuse to start runs while the server is down or the file to upload is missing."""
     urllib.request.urlopen(BASE, timeout=5).read()
+    if not UPLOAD.exists():
+        raise SystemExit("%s is missing; run bench/setup.sh" % UPLOAD)
