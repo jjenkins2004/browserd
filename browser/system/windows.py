@@ -23,7 +23,7 @@ from . import Unanswered
 
 __all__ = ["NAME", "CHROME", "CHROME_DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
-           "kill_chrome", "front", "bring", "lock", "detached", "hidden", "listen_for_stop", "request_stop",
+           "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
 
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -292,20 +292,22 @@ def launch_chrome(args):
     # Chrome is started off the user's focus: no window at first (--no-startup-window), and one shown later is shown
     # without taking the focus. DETACHED_PROCESS and a group of its own keep it running past the server.
     startup = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=4)  # SW_SHOWNOACTIVATE
-    return _spawn([CHROME, *args], startup, _DETACHED_PROCESS | _NEW_GROUP, "Chrome")
+    try:
+        return _spawn([CHROME, *args], _DETACHED_PROCESS | _NEW_GROUP, startupinfo=startup, stdin=subprocess.DEVNULL,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    except OSError as exc:
+        raise Unanswered("could not start Chrome: %s" % exc)
 
 
-def _spawn(argv, startup, flags, what, **more):
-    for breakaway in (_BREAKAWAY, 0):
-        try:
-            return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=more.pop("stdout", subprocess.DEVNULL),
-                                    stderr=more.pop("stderr", subprocess.DEVNULL), startupinfo=startup,
-                                    creationflags=flags | breakaway, close_fds=True, **more)
-        except OSError as exc:
-            # A job that allows no breakaway refuses the flag; the process then stays in the job.
-            if breakaway and getattr(exc, "winerror", None) == _ACCESS_DENIED:
-                continue
-            raise Unanswered("could not start %s: %s" % (what, exc))
+def _spawn(argv, flags, **popen):
+    # Out of the job this process runs in, when the job allows it: a terminal's job may end everything in it as the
+    # terminal closes. A job that allows no breakaway refuses the flag, and the process then stays in the job.
+    try:
+        return subprocess.Popen(argv, creationflags=flags | _BREAKAWAY, **popen)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != _ACCESS_DENIED:
+            raise
+    return subprocess.Popen(argv, creationflags=flags, **popen)
 
 
 def kill_chrome(pid):
@@ -384,10 +386,10 @@ def lock(handle):
             time.sleep(0.1)
 
 
-def detached():
-    # A console of its own, never shown, which the server's node children share, so none pops up a window; a group of
-    # its own, so a Ctrl+C where ../start ran does not reach it.
-    return {"creationflags": _NO_WINDOW | _NEW_GROUP}
+def spawn_detached(argv, **popen):
+    # A console of its own, never shown, so no window pops up for it or its children; a group of its own, so a Ctrl+C
+    # where ../start ran does not reach it.
+    return _spawn(argv, _NO_WINDOW | _NEW_GROUP, **popen)
 
 
 def hidden():

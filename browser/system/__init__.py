@@ -23,7 +23,7 @@ says what each OS does in its place.
     front()               the pid of the app the user's focus is in, or None
     bring(pid)            bring an app to the front, and return whether the OS let it
     lock(handle)          hold an exclusive lock on an open file until it is closed, waiting for it
-    detached()            Popen arguments that run a process on past this one, with no window of its own
+    spawn_detached(argv, **popen)  a Popen of a process that runs on past this one, with no window of its own
     hidden()              Popen arguments that give a helper process no window of its own
     listen_for_stop(root, on_request)  call on_request("stop" or "restart") when ../stop or ../restart asks
     request_stop(pid, root, restart)   ask the server that is pid to stop, or restart

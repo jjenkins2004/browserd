@@ -11,7 +11,7 @@ from . import Unanswered
 
 __all__ = ["NAME", "CHROME", "APP", "CHROME_DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
-           "kill_chrome", "front", "bring", "lock", "detached", "hidden", "listen_for_stop", "request_stop",
+           "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
 
 NAME = "macOS"
@@ -111,8 +111,8 @@ def lock(handle):
     fcntl.flock(handle, fcntl.LOCK_EX)
 
 
-def detached():
-    return {"start_new_session": True}
+def spawn_detached(argv, **popen):
+    return subprocess.Popen(argv, start_new_session=True, **popen)
 
 
 def hidden():

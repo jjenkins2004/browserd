@@ -5,8 +5,8 @@ Run in the background by service.py (../start). README.md covers the lifecycle a
 """
 
 import os
-import signal
 import sqlite3
+import sys
 import threading
 import time
 
@@ -431,13 +431,13 @@ def serve():
     # A port another program holds fails the start here, before the pid file is written.
     server = mcp.Server(HOST, PORT, tools, NAME)
     page_server = page.Page(HOST, page.PORT, state, (PORT, page.PORT), chromes, tabs, workers)
-    stopping, signals = threading.Event(), set()
+    stopping, requests = threading.Event(), set()
 
-    def on_signal(number, frame):
-        signals.add(number)
-        # Only SIGHUP, from ../restart, keeps every Chrome and session; a SIGTERM or SIGINT at any point quits them.
-        mcp.log("%s on signal %d" % ("restarting" if signals == {signal.SIGHUP} else "stopping", number))
-        # shutdown waits for serve_forever to return, and that runs on this thread, so it needs another.
+    def on_request(kind):
+        requests.add(kind)
+        # Only a restart, from ../restart, keeps every Chrome and session; a stop at any point quits them.
+        mcp.log("%s, as asked to %s" % ("restarting" if requests == {"restart"} else "stopping", kind))
+        # shutdown waits for serve_forever to return, which may run on the thread that asked, so it needs another.
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     def pause_idle():
@@ -451,11 +451,9 @@ def serve():
                     if stopped:
                         mcp.log("session %s is paused, so %d chrome-devtools-mcp process(es) stopped" % (session.id, stopped))
 
-    # Installed before serving, so a ./stop at any point from here still stops the server and every Chrome, a start
-    # under way included.
-    signal.signal(signal.SIGTERM, on_signal)
-    signal.signal(signal.SIGINT, on_signal)
-    signal.signal(signal.SIGHUP, on_signal)
+    # Listened for before serving, so a ./stop at any point from here still stops the server and every Chrome, a start
+    # under way included: signals on macOS, named events on Windows, which has no SIGHUP and no SIGTERM a process hears.
+    system.listen_for_stop(ROOT, on_request)
     _write_pid()
     chromes.adopt(state.profiles())
     threading.Thread(target=page_server.serve_forever, daemon=True).start()
@@ -467,7 +465,7 @@ def serve():
         stopping.set()
         page_server.shutdown()
         workers.stop_all()
-        if signals != {signal.SIGHUP}:
+        if requests != {"restart"}:
             chromes.quit_all(state.profiles())
             state.close_all(time.time())  # every Chrome quit, so every session and tab with it
         server.server_close()
@@ -478,8 +476,13 @@ def serve():
 
 
 if __name__ == "__main__":
+    # The log holds page titles, URLs and what was typed, which the OS's own code page may not have.
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    if system.python_problem():
+        mcp.log("could not start: %s" % system.python_problem())
+        raise SystemExit(1)
     try:
         serve()
-    except (cdp.CdpError, OSError, sqlite3.Error) as exc:
+    except (cdp.CdpError, OSError, sqlite3.Error, system.Unanswered) as exc:
         mcp.log("could not start: %s" % exc)
         raise SystemExit(1)
