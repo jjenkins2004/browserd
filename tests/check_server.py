@@ -27,8 +27,9 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import (cdp, checked, chromes, dialogs, downloads, focus, mcp, page, pointer, profiles, record, screenshot,
-                     server, service, sessions, steps)
+from browser import (cdp, checked, chromes, devtools, dialogs, downloads, focus, mcp, page, pointer, profiles, record,
+                     screenshot, server, service, sessions, steps, system)
+from browser import devtools as devtools_module  # queue_live names its own chrome-devtools-mcp devtools
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
 from browser.state import Session, State, Tab
@@ -398,7 +399,7 @@ def tabs_offline():
               and shown["url"] == "https://jobs.ashbyhq.com/new", repr((chrome.activated, brought)))
         check("show refuses another session's tab", "no tab of this session" in refusal(lambda: tabs.show(theirs, tab)))
         focus.bring = lambda pid: False
-        check("show fails when macOS does not bring the Chrome to the front", "did not bring that Chrome" in refusal(lambda: tabs.show(mine, tab)))
+        check("show fails when %s does not bring the Chrome to the front" % system.NAME, "did not bring that Chrome" in refusal(lambda: tabs.show(mine, tab)))
         focus.bring = lambda pid: brought.append(pid) or True
 
         check("close refuses another session's tab", "no tab of this session" in refusal(lambda: tabs.close(theirs, tab)))
@@ -560,20 +561,20 @@ def focus_offline():
 
     try:
         browser, lines = kept([created("P1")], [77, 77, FakeEvents.pid])
-        check("a tab a page opened that takes the Mac's focus gives it back to the app that had it",
-              brought == [77] and lines == ["gave the Mac's focus back to pid 77, after a page opened "
+        check("a tab a page opened that takes the focus gives it back to the app that had it",
+              brought == [77] and lines == ["gave the focus back to pid 77, after a page opened "
                                             "https://example.com/P1"], repr((brought, lines)))
         check("keep hears of new targets", ("Target.setDiscoverTargets", {"discover": True}) in browser.calls,
               repr(browser.calls))
         _, lines = kept([created("P1")], [FakeEvents.pid, FakeEvents.pid])
         check("nothing is given back when the School Chrome was in front already, as after Joshua's own click, "
-              "and that is logged", brought == [] and lines == ["left the Mac's focus with this Chrome, which "
+              "and that is logged", brought == [] and lines == ["left the focus with this Chrome, which "
                                                                "had it when a page opened https://example.com/P1"],
               repr((brought, lines)))
         focus.front = lambda: None
         _, lines = kept([created("P1")], [])
-        check("a front app lsappinfo cannot tell is logged, and nothing is given back",
-              brought == [] and lines == ["could not tell which app had the Mac's focus when a page opened "
+        check("a front app the OS cannot tell is logged, and nothing is given back",
+              brought == [] and lines == ["could not tell which app had the focus when a page opened "
                                           "https://example.com/P1"], repr((brought, lines)))
         focus.front = lambda: fronts.pop(0) if fronts else 77
         kept([created("P1", opener=None)], [77, FakeEvents.pid])
@@ -584,9 +585,9 @@ def focus_offline():
         check("a target open before keep started, a frame, other events and a quiet minute are passed over",
               brought == [] and fronts == [77, FakeEvents.pid], repr((brought, fronts)))
         kept([created("P1")], [77])
-        check("a tab that never takes the Mac's focus leaves it alone", brought == [], repr(brought))
+        check("a tab that never takes the focus leaves it alone", brought == [], repr(brought))
         kept([created("P1"), created("P2")], [77, FakeEvents.pid, 78, 78, FakeEvents.pid])
-        check("each tab that takes the Mac's focus has it given back", brought == [77, 78], repr(brought))
+        check("each tab that takes the focus has it given back", brought == [77, 78], repr(brought))
     finally:
         focus.front, focus.bring, focus.TAKE_WAIT = saved
 
@@ -734,14 +735,19 @@ def queue_offline():
               "step 2" in said and "not a tool" in said and "it runs pick, expect, type, paste, wait, move_at, click_down, click_up, click" in said, said)
         check("a step whose tool name is empty is refused", "not an object with a tool name" in load(steps=[{"tool": ""}]))
         inside = os.path.join(workdir, "resume.pdf")
+        # Absolute on this OS, /etc/... on macOS and C:\etc\... on Windows, and outside every folder the file tools may use.
+        hosts, shot = (os.path.join(os.path.abspath(os.sep), "etc", name) for name in ("hosts", "shot.png"))
+        check("the paths outside those folders are absolute here, so what refuses them is where they are",
+              os.path.isabs(hosts) and os.path.isabs(shot) and not devtools.may_touch(hosts) and not devtools.may_touch(shot),
+              repr((hosts, shot)))
         for label, step, words in (
                 ("an argument its tool does not take", {"tool": "click", "uid": "1_1", "bogus": 1}, "does not take bogus"),
                 ("an argument of the wrong type", {"tool": "click", "uid": 5}, "click's uid must be string"),
                 ("a missing argument", {"tool": "click"}, "click needs uid"),
                 ("a value its tool does not allow", {"tool": "take_screenshot", "format": "gif"}, "png|jpeg|webp"),
                 ("true for a number", {"tool": "take_screenshot", "quality": True}, "quality"),
-                ("a file path outside the folders file tools may use", {"tool": "upload_file", "uid": "1_1", "filePaths": [inside, "/etc/hosts"]}, "cannot use /etc/hosts"),
-                ("a screenshot path outside them", {"tool": "take_screenshot", "filePath": "/etc/shot.png"}, "cannot use /etc/shot.png"),
+                ("a file path outside the folders file tools may use", {"tool": "upload_file", "uid": "1_1", "filePaths": [inside, hosts]}, "cannot use %s" % hosts),
+                ("a screenshot path outside them", {"tool": "take_screenshot", "filePath": shot}, "cannot use %s" % shot),
                 ("a take_snapshot filePath", {"tool": "take_snapshot", "filePath": inside}, "record folder"),
                 ("a ~ path", {"tool": "upload_file", "uid": "1_1", "filePaths": ["~/Desktop/resume.pdf"]}, "absolute"),
                 ("a relative path", {"tool": "take_screenshot", "filePath": "shot.png"}, "absolute"),
@@ -846,7 +852,7 @@ def queue_offline():
               "--- 1 fill ok" in report and "--- 3 click FAILED" in report, report)
         check("the report names the steps not run", "--- not run: 4 fill" in report, report)
         check("the report ends with the page as it is now, as a view", report.rstrip().endswith('uid=1_0 RootWebArea "Form"'), report)
-        check("and saves that snapshot whole", open(called("page-now-snapshot.txt")).read().endswith("  uid=1_1 generic\n"))
+        check("and saves that snapshot whole", open(called("page-now-snapshot.txt"), encoding="utf-8").read().endswith("  uid=1_1 generic\n"))
         check("an image a step returned comes back as an image", content[1:] == [image])
 
         class Form(FakeDevtools):
@@ -1020,7 +1026,7 @@ def views(workdir):
     lines = text.split("\n")
     check("a view keeps what came before and after the snapshot", lines[0] == "Clicked." and lines[-2:] == ["## Console messages", "none"], text)
     check("a view's header names where the whole snapshot is saved", lines[1] == "## Latest page snapshot (view; saved whole to %s)" % path, lines[1])
-    check("the whole snapshot is saved there", open(path).read() == SNAPSHOT + "\n")
+    check("the whole snapshot is saved there", open(path, encoding="utf-8").read() == SNAPSHOT + "\n")
     check("a view keeps lines with words and controls, drops the rest, and indents by the kept lines it sits under",
           lines[2:-3] == ['uid=1_0 RootWebArea "Apply" url="https://example.com/apply"',
                           '  uid=1_2 heading "Your details" level="2"',
@@ -1061,7 +1067,7 @@ def views(workdir):
     check("a collapsed select keeps a name and value holding quotes followed by words",
           'uid=1_1 combobox "Pick "one" required" = "foo" bar baz" required (2 options)' in text, text)
     check("a value's own blank line and ## line do not end the snapshot, in the view or the saved file",
-          'uid=1_5 StaticText "Last"' in text and open(path).read() == odd + "\n", text)
+          'uid=1_5 StaticText "Last"' in text and open(path, encoding="utf-8").read() == odd + "\n", text)
     check("a verbose snapshot's InlineTextBox copies of the text above them are left out", "InlineTextBox" not in text, text)
     marked = ('uid=1_0 RootWebArea "M"\n  uid=1_1 combobox "Country" expandable haspopup="menu" value="Canada" '
               '[selected in the DevTools Elements panel]\n    uid=1_2 option "Canada" selectable selected value="Canada"')
@@ -1109,7 +1115,7 @@ def views(workdir):
                                lambda name: os.path.join(workdir, "005-" + name))["content"])
     saved = os.path.join(workdir, "005-step1-reply.txt")
     check("a step's reply longer than REPLY_MOST is cut, and the whole of it saved",
-          "(10 characters more; the whole reply is saved to %s)" % saved in report and open(saved).read() == long + "\n", report[-200:])
+          "(10 characters more; the whole reply is saved to %s)" % saved in report and open(saved, encoding="utf-8").read() == long + "\n", report[-200:])
     lines = "\n".join("line %05d %s" % (n, "y" * 80) for n in range(1000))
     report = text_of(steps.run(FakeDevtools([([{"type": "text", "text": lines}], False)]), 3, [{"tool": "evaluate_script"}],
                                lambda name: os.path.join(workdir, "006-" + name))["content"])
@@ -1486,13 +1492,14 @@ def paste_offline():
     methods = lambda keys: [method for method, _ in keys.calls]
     keys = Keys()
     said = paste(keys, step={"tool": "paste", "text": 'It\'s "a"'})
-    check("paste hands the page its text, checks the focus is where it was handed, presses Meta+V once with Chrome's "
-          "own paste command, sees the paste, and takes the text back",
+    check("paste hands the page its text, checks the focus is where it was handed, presses %s+V once with Chrome's "
+          "own paste command, sees the paste, and takes the text back" % checked.PASTE_KEY,
           methods(keys) == ["Target.attachToTarget", "Runtime.evaluate", "Runtime.evaluate", "Input.dispatchKeyEvent",
                             "Input.dispatchKeyEvent", "Runtime.evaluate", "Runtime.evaluate"]
           and keys.calls[0][1] == {"targetId": "T1", "flatten": True}
           and json.dumps('It\'s "a"') in keys.calls[1][1]["expression"]
-          and keys.calls[3][1].get("commands") == ["paste"] and keys.calls[3][1].get("modifiers") == checked.META
+          and json.dumps(checked.PASTE_PROPERTY) in keys.calls[1][1]["expression"]
+          and keys.calls[3][1].get("commands") == ["paste"] and keys.calls[3][1].get("modifiers") == checked.PASTE_BIT
           and keys.calls[4][1].get("type") == "keyUp" and "undo()" in keys.calls[6][1]["expression"], repr(keys.calls))
     check("and without a uid, says nothing reads the text back", "where the focus is; nothing reads them back" in said, said)
     keys = Keys((None, True, [0, 0], None))
@@ -1503,7 +1510,7 @@ def paste_offline():
     keys = Keys((None, True, [0, 1], None))
     said = refusal(lambda: paste(keys), checked.CheckFailed)
     check("a press the page took whose paste a script of its own had first fails the paste, saying the field "
-          "may hold the Mac's clipboard", "may hold the Mac's clipboard" in said
+          "may hold the clipboard", "may hold the clipboard" in said
           and methods(keys).count("Input.dispatchKeyEvent") == 2, said)
     keys = Keys((None, False, None))
     said = refusal(lambda: paste(keys), checked.CheckFailed)
@@ -1849,8 +1856,12 @@ def recording_offline():
     httpd = serving(tools)
     try:
         described = tools[0]["inputSchema"]["properties"]["steps"]["description"]
-        check("the queue's description fits under Claude Code's cut at about 2,000 characters",
-              len(tools[0]["description"]) < 1900, repr(len(tools[0]["description"])))
+        # The folders it names are named, not spelled out, so its length never hangs on the user's paths.
+        whole = len(tools[0]["description"])
+        check("the queue's description fits under Claude Code's cut at about 2,000 characters, naming the folders "
+              "file tools may use", devtools.ROOTS_TEXT in tools[0]["description"] and whole < 1900, repr(whole))
+        check("and names no path of this machine's, whose length would move it",
+              devtools.DESKTOP not in tools[0]["description"] or system.NAME == "macOS", repr(whole))
         check("and the steps argument's description holds the step catalog",
               "\n  pick(" in described and "\n  take_snapshot(" in described, described[-300:])
         folder = os.path.join(root, "School", sessions.folder(session), "zzzz")
@@ -1866,23 +1877,23 @@ def recording_offline():
         check("a queue given a workspace is refused, naming it and asking for a /mcp reconnect",
               is_error and "workspace" in text and "reconnect browserd with /mcp" in text, text)
         text, is_error = call(httpd, "queue", session=session.id, tab="zzzz", steps=[{"tool": "new_page"}])
-        with open(os.path.join(folder, "002-queue.json")) as handle:
+        with open(os.path.join(folder, "002-queue.json"), encoding="utf-8") as handle:
             asked = json.load(handle)
         check("a queue refused for its arguments or its steps is recorded as sent, with the refusal as what came back",
               is_error and sorted(os.listdir(folder)) == ["001-queue.json", "001-queue.txt", "002-queue.json", "002-queue.txt"]
-              and json.load(open(os.path.join(folder, "001-queue.json"))) == {"session": session.id, "tab": "zzzz",
+              and json.load(open(os.path.join(folder, "001-queue.json"), encoding="utf-8")) == {"session": session.id, "tab": "zzzz",
                                                                                "workspace": root,
                                                                                "steps": [{"tool": "take_snapshot"}]}
               and asked == {"session": session.id, "tab": "zzzz", "steps": [{"tool": "new_page"}]}
-              and open(os.path.join(folder, "002-queue.txt")).read() == "error: %s\n" % text, repr(os.listdir(folder)))
+              and open(os.path.join(folder, "002-queue.txt"), encoding="utf-8").read() == "error: %s\n" % text, repr(os.listdir(folder)))
 
         with open(os.path.join(folder, "steps.json"), "w") as handle:
             json.dump([{"tool": "take_snapshot"}, {"tool": "take_screenshot"}], handle)
         text, is_error = call(httpd, "queue", session=session.id, tab="zzzz", file="steps.json")
         check("a queue that cannot reach its tab is still recorded in the tab's record folder, with the error as what came back",
               is_error and sorted(os.listdir(folder))[4:] == ["003-queue.json", "003-queue.txt", "steps.json"]
-              and "is closed" in open(os.path.join(folder, "003-queue.txt")).read(), repr(os.listdir(folder)))
-        with open(os.path.join(folder, "003-queue.json")) as handle:
+              and "is closed" in open(os.path.join(folder, "003-queue.txt"), encoding="utf-8").read(), repr(os.listdir(folder)))
+        with open(os.path.join(folder, "003-queue.json"), encoding="utf-8") as handle:
             asked = json.load(handle)
         check("the record holds the tab and the steps read from the tab's record folder, the screenshot given its path",
               asked == {"session": session.id, "tab": "zzzz", "steps": [{"tool": "take_snapshot"},
@@ -1891,7 +1902,7 @@ def recording_offline():
         with open(os.path.join(folder, "bad.json"), "w") as handle:
             json.dump([{"tool": "new_page"}], handle)
         text, is_error = call(httpd, "queue", session=session.id, tab="zzzz", file="bad.json")
-        with open(os.path.join(folder, "004-queue.json")) as handle:
+        with open(os.path.join(folder, "004-queue.json"), encoding="utf-8") as handle:
             asked = json.load(handle)
         check("a queue whose file holds a refused step records the file's steps with it",
               is_error and asked == {"session": session.id, "tab": "zzzz", "file": "bad.json", "steps": [{"tool": "new_page"}]},
@@ -1927,34 +1938,44 @@ def quitting():
 
 
 def service_offline():
-    saved = (server.URL, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE, subprocess.Popen)
+    saved = (server.URL, server.PORT, server.ROOT, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE,
+             subprocess.Popen)
+    code = os.path.dirname(os.path.dirname(os.path.abspath(service.__file__)))  # the browser package's folder
     workdir = tempfile.mkdtemp(prefix="browser-service-")
+    stand_ins = []
+
+    def aim(port):
+        """Point service at a port, as both the pid it asks the OS about and the URL it asks MCP at."""
+        server.PORT, server.URL = port, "http://127.0.0.1:%d%s" % (port, mcp.PATH)
+
     try:
-        server.RUN = workdir
+        # A root of the checks' own: never the real server's, so a stop asked here reaches no server but the stand-in
+        # (on Windows the root names the events ../stop and ../restart set), and a start here could not run one.
+        server.ROOT = server.RUN = workdir
         server.PID_FILE = os.path.join(workdir, "server.pid")
         server.LOG_FILE = os.path.join(workdir, "server.log")
         service.LOCK_FILE = os.path.join(workdir, "start.lock")
 
         free = mcp.Server("127.0.0.1", 0, [], "nobody")
-        server.URL = "http://127.0.0.1:%d%s" % (free.server_address[1], mcp.PATH)
+        aim(free.server_address[1])
         free.server_close()
         check("nothing answering is None", service.answering() is None)
 
         ours = serving([], server.NAME)
-        server.URL = "http://127.0.0.1:%d%s" % (ours.server_address[1], mcp.PATH)
+        aim(ours.server_address[1])
         check("the browser MCP server is told apart by its name", service.answering() == server.NAME)
         check("start leaves a running server alone", service.start().startswith("already running"))
         ours.shutdown()
         ours.server_close()
 
         other = serving([], "someone-else")
-        server.URL = "http://127.0.0.1:%d%s" % (other.server_address[1], mcp.PATH)
+        aim(other.server_address[1])
         said = refusal(service.start, SystemExit)
         check("start refuses a port that answers as another program", "someone-else" in said, said)
         other.shutdown()
         other.server_close()
 
-        server.URL = "http://127.0.0.1:%d%s" % (free.server_address[1], mcp.PATH)
+        aim(free.server_address[1])
 
         class Dies:
             pid = 99999
@@ -1969,31 +1990,54 @@ def service_offline():
         subprocess.Popen = Dies
         said = refusal(service.start, SystemExit)
         check("a server that dies while starting says why, from its log", "held by pid 1" in said, said)
-        subprocess.Popen = saved[5]
+        subprocess.Popen = saved[-1]
 
         with open(server.PID_FILE, "w") as handle:
             handle.write(str(os.getpid()))
-        check("stop never signals a pid that is not the browser MCP server", service.stop() == "not running")
+        check("stop never asks a pid that is not the browser MCP server to stop", service.stop() == "not running")
 
         ours = serving([], server.NAME)
-        server.URL = "http://127.0.0.1:%d%s" % (ours.server_address[1], mcp.PATH)
-        # A process ps shows running -m browser.server, which exits 1 on SIGHUP and 2 on SIGTERM.
+        aim(ours.server_address[1])
+        # A process the OS shows running -m browser.server, listening for ../stop and ../restart as the server does
+        # (signals on macOS, named events on Windows), which exits 1 when asked to restart and 2 when asked to stop.
+        script = ("import os, sys, time\n"
+                  "from browser import system\n"
+                  "system.listen_for_stop(sys.argv[1], lambda kind: os._exit({'restart': 1, 'stop': 2}[kind]))\n"
+                  "print('set', flush=True)\n"
+                  "while True:\n"
+                  "    time.sleep(0.05)\n")
         said = {}
-        for name, number, code in (("restart", "HUP", 1), ("stop", "TERM", 2)):
-            stand_in = subprocess.Popen(["/bin/bash", "-c", "trap 'exit 1' HUP; trap 'exit 2' TERM; echo set; "
-                                         "while :; do sleep 0.05; done", "-m", "browser.server"], stdout=subprocess.PIPE, text=True)
+        for name, code_wanted in (("restart", 1), ("stop", 2)):
+            stand_in = subprocess.Popen([sys.executable, "-c", script, workdir, "-m", "browser.server"], cwd=code,
+                                        env=dict(os.environ, PYTHONPATH=code), stdout=subprocess.PIPE, text=True)
+            stand_ins.append(stand_in)
             assert stand_in.stdout is not None
-            stand_in.stdout.readline()  # its traps are set
+            ready = stand_in.stdout.readline()  # it listens
             with open(server.PID_FILE, "w") as handle:
                 handle.write(str(stand_in.pid))
-            said[name] = getattr(service, name)()
-            check("%s sends the server SIG%s and waits for it to exit" % (name, number), stand_in.wait(5) == code, said[name])
+            try:
+                said[name] = getattr(service, name)()
+            except SystemExit as exc:
+                said[name] = "refused: %s" % exc
+            try:
+                exited = stand_in.wait(5)
+            except subprocess.TimeoutExpired:
+                exited = None
+            check("%s asks the server to %s and waits for it to exit" % (name, name),
+                  ready.strip() == "set" and exited == code_wanted, "%r, exit %r, %r" % (ready, exited, said[name]))
         check("restart then starts the server again, which here answers already",
               said["restart"] == "restarted, every Chrome and session kept; already running: %s" % server.URL, said["restart"])
         ours.shutdown()
         ours.server_close()
     finally:
-        server.URL, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE, subprocess.Popen = saved
+        for stand_in in stand_ins:
+            if stand_in.poll() is None:
+                stand_in.kill()
+            stand_in.wait()
+            if stand_in.stdout:
+                stand_in.stdout.close()
+        (server.URL, server.PORT, server.ROOT, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE,
+         subprocess.Popen) = saved
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -2198,14 +2242,11 @@ def page_offline():
 
 
 def front_app():
-    """The frontmost Mac app's name, or None where lsappinfo is missing."""
+    """The pid of the app the user's focus is in, or None where the OS cannot say."""
     try:
-        asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True, timeout=5).stdout.strip()
-        info = subprocess.run(["lsappinfo", "info", "-only", "name", asn], capture_output=True, text=True, timeout=5).stdout
-    except (OSError, subprocess.TimeoutExpired):
+        return system.front()
+    except system.Unanswered:
         return None
-    found = re.search(r'="([^"]*)"', info)
-    return found.group(1) if found else None
 
 
 def live(profile, state):
@@ -2215,7 +2256,7 @@ def live(profile, state):
     tab, info = tabs.open(session, "data:text/html,<title>server scratch</title><h1>hi</h1>")
     try:
         check("a tab opens and reports its title", info.get("title") == "server scratch", repr(info.get("title")))
-        check("opening a tab leaves the Mac's focus where it was", before is None or front_app() == before,
+        check("opening a tab leaves the user's focus where it was", before is None or front_app() == before,
               "%s -> %s" % (before, front_app()))
         found, _ = tabs.list(session)
         check("the new tab is listed under its id", tab in [t for t, _ in found])
@@ -2518,9 +2559,7 @@ def checked_live(httpd, tabs, opened, session):
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
     check("type into a contenteditable element takes a line break and reads the text back", not is_error, text)
 
-    changes = lambda: int(subprocess.run(["osascript", "-l", "JavaScript", "-e", "ObjC.import('AppKit'); "
-                                          "$.NSPasteboard.generalPasteboard.changeCount"], capture_output=True, text=True,
-                                         check=True).stdout)
+    changes = system.clipboard_changes
     changed_before = changes()
     said = 'It\'s "exact"'
     quoted = field("textbox", "Quoted")
@@ -2545,7 +2584,7 @@ def checked_live(httpd, tabs, opened, session):
     check("an editor that puts a paste in itself, and stops it without cancelling Chrome's own insert, gets the text, "
           "and Chrome's insert of the real clipboard is cancelled",
           not is_error and returned(text.split("--- 3")[-1]) == [said, "cancelled"], text)
-    check("and the Mac's clipboard was never written: its change count is what it was before the pastes",
+    check("and the clipboard was never written: its change count is what it was before the pastes",
           changes() == changed_before, str(changed_before))
 
     warned = {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}
@@ -2627,6 +2666,12 @@ def queue_live(profile, state):
         skipped.append("queue")
         print("\nskipped the live queue checks: chrome-devtools-mcp is not installed; run npm ci")
         return
+    node = shutil.which("node")
+    problem = "node is not installed" if node is None else devtools_module._node_problem(node)
+    if problem:
+        skipped.append("queue")
+        print("\nskipped the live queue checks: %s" % problem)
+        return
     workdir = tempfile.mkdtemp(prefix="browser-queue-")
     devtools = Devtools(os.path.join(workdir, "tools.log"))
     try:
@@ -2657,7 +2702,7 @@ def queue_live(profile, state):
         saved = re.search(r"\(view; saved whole to (\S+)\)$", snap_a, re.M)
         check("its snapshot is a view, the whole one saved in the tab's record folder",
               saved is not None and os.path.dirname(saved.group(1)) == os.path.join(home, a)
-              and "RootWebArea" in open(saved.group(1)).read(), snap_a)
+              and "RootWebArea" in open(saved.group(1), encoding="utf-8").read(), snap_a)
 
         spans = {}
 
@@ -2765,7 +2810,7 @@ def queue_live(profile, state):
         went = re.search(r"^--- downloaded %s to (.+)$" % re.escape(name), text, re.M)
         try:
             check("a step that downloads a file says where it went, in the step's own report",
-                  not is_error and went is not None and open(went.group(1)).read() == "hello", text)
+                  not is_error and went is not None and open(went.group(1), encoding="utf-8").read() == "hello", text)
         finally:
             if went:
                 os.remove(went.group(1))  # the check's own file, in the real ~/Downloads, the throwaway Chrome's download folder
@@ -2776,7 +2821,7 @@ def queue_live(profile, state):
         went = re.search(r"^--- downloaded .+ to (.+)$", text, re.M)
         try:
             check("and so does one begun in a popup the step opened",
-                  not is_error and went is not None and open(went.group(1)).read() == "hello popup", text)
+                  not is_error and went is not None and open(went.group(1), encoding="utf-8").read() == "hello popup", text)
         finally:
             if went:
                 os.remove(went.group(1))
@@ -2904,7 +2949,7 @@ def queue_live(profile, state):
         check("a step's argument chrome-devtools-mcp would refuse stops the queue before any step runs, and is recorded as sent",
               is_error and "step 2: take_snapshot does not take bogus" in text and len(added) == 2
               and all(name.endswith(("-queue.json", "-queue.txt")) for name in added)
-              and json.load(open(os.path.join(home, a, added[0])))["steps"][1] == {"tool": "take_snapshot", "bogus": 1},
+              and json.load(open(os.path.join(home, a, added[0]), encoding="utf-8"))["steps"][1] == {"tool": "take_snapshot", "bogus": 1},
               repr(added))
 
         worker = workers.get(a, tabs.target(mine, a), profile)
