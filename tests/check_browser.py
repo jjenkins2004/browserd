@@ -2,7 +2,7 @@
 
 browser/README.md, "Agent Gotchas & Invariants", "Checks", says what each group needs and touches.
 
-    python3 tests/check_browser.py
+    python3 tests/check_browser.py    (py -3 tests\check_browser.py on Windows)
 """
 
 import json
@@ -19,7 +19,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import cdp, launch, mcp
+from browser import cdp, launch, mcp, system
 from browser.profiles import Profile
 from browser.ws import TEXT, WebSocket, WebSocketError
 
@@ -119,21 +119,36 @@ def framing():
 
 
 class Machine:
-    """lsof, ps and the port as a check wants them, so each way the connection goes wrong runs without Chrome."""
+    """The OS as a check wants it: which pids listen on the port, each process's command line, and which holds the
+    folder, so each way the connection goes wrong runs without Chrome, on any OS. owning_mac and owning_windows check
+    how each OS finds the folder's owner."""
 
-    def __init__(self, listening=(), processes=None, answer=None, hidden=0):
+    def __init__(self, owner=None, listening=(), processes=None, answer=None, hidden=0):
+        self.owner = owner
         self.listening = list(listening)
         self.processes = dict(processes or {})
         self.answer = answer
-        self.hidden = hidden  # lsof looks that find nothing yet, as while Chrome starts
+        self.hidden = hidden  # looks at the port that find nothing yet, as while Chrome starts
 
-    def run(self, *command):
-        if command[0].endswith("lsof"):
-            if self.hidden:
-                self.hidden -= 1
-                return ""
-            return "".join("%d\n" % pid for pid in self.listening)
-        return self.processes.get(int(command[-1]), "") + "\n"
+    def listeners(self, port):
+        if self.hidden:
+            self.hidden -= 1
+            return []
+        return sorted(self.listening)
+
+    def command(self, pid):
+        return self.processes.get(pid, "")
+
+    def switches(self, pid):
+        found = {}
+        for word in self.command(pid).split()[1:]:
+            if word.startswith("--"):
+                name, _, value = word[2:].partition("=")
+                found[name] = value
+        return found
+
+    def chrome_owner(self, folder):
+        return self.owner
 
     def get(self, profile, path):
         if self.answer is None or path != "/json/version":
@@ -143,20 +158,12 @@ class Machine:
 
 VERSION = {"Browser": "Chrome/153.0.0.0", "webSocketDebuggerUrl": "ws://127.0.0.1:9/devtools/browser/x"}
 OTHER = "/Applications/Firefox.app/Contents/MacOS/firefox --remote-debugging-port=9223"
+STANDS_IN = ("listeners", "command", "switches", "chrome_owner")
 
 
 def profile_list(folder, names):
-    with open(os.path.join(folder, "Local State"), "w") as handle:
+    with open(os.path.join(folder, "Local State"), "w", encoding="utf-8") as handle:
         json.dump({"profile": {"info_cache": {name: {"name": name} for name in names}}}, handle)
-
-
-def lock(folder, pid):
-    """Chrome's SingletonLock, naming pid as the folder's owner; None removes it."""
-    path = os.path.join(folder, "SingletonLock")
-    if os.path.lexists(path):
-        os.remove(path)
-    if pid is not None:
-        os.symlink("Mac-592.lan-%d" % pid, path)  # a hostname may hold a dash
 
 
 def refusal_error(run):
@@ -178,8 +185,8 @@ def refusal(run):
 
 
 def connecting():
-    """require and launch against a stand-in machine, then against the real lsof and ps."""
-    saved = (cdp._run, cdp._get, launch._open, subprocess.run)
+    """require and launch against a stand-in OS, then against the real one's ports."""
+    saved = ([getattr(system, name) for name in STANDS_IN], cdp._get, launch._open)
     workdir = tempfile.mkdtemp(prefix="browser-connect-")
     try:
         folder = os.path.join(workdir, "Chrome-School")
@@ -191,10 +198,11 @@ def connecting():
             cdp.CHROME, folder, cdp.INPUT_FLAG)
         portless = school.replace(" --remote-debugging-port=9223", "")
 
-        def machine(owner=None, **state):
-            lock(folder, owner)
+        def machine(**state):
             m = Machine(**state)
-            cdp._run, cdp._get = m.run, m.get
+            for name in STANDS_IN:
+                setattr(system, name, getattr(m, name))
+            cdp._get = m.get
             return m
 
         machine(owner=501, listening=[501], processes={501: school}, answer=VERSION)
@@ -212,17 +220,8 @@ def connecting():
               isinstance(refusal_error(lambda: cdp.require(empty)), cdp.NotRunning))
         machine(owner=501, processes={501: portless})
         said = refusal(require)
-        check("the School Chrome without its port is named, with wait and quit", "pid 501" in said and "wait" in said
-              and "Cmd+Q" in said, said)
-        machine(owner=502)
-        check("a lock left by a crash is not a running School Chrome", "not running: nothing is listening" in refusal(require))
-        machine(owner=503, processes={503: "/usr/bin/caffeinate -i " + portless})
-        check("a lock naming a reused pid that is not Chrome is not a running School Chrome",
-              "not running: nothing is listening" in refusal(require))
-
-        machine(owner=504, processes={504: cdp.CHROME + ".bak --type=renderer"})
-        check("a lock owner whose binary only starts like Chrome's is not a running School Chrome",
-              "not running: nothing is listening" in refusal(require))
+        check("the School Chrome without its port is named, with wait and how to quit it", "pid 501" in said
+              and "wait" in said and system.quit_hint(501) in said, said)
 
         machine(listening=[777], processes={777: OTHER}, answer=VERSION)
         said = refusal(require)
@@ -232,7 +231,7 @@ def connecting():
         check("another browser on the port is refused while the School Chrome runs without it",
               "pid 777" in said and "pid 501" in said, said)
         machine(owner=501, listening=[778], processes={501: portless, 778: school}, answer=VERSION)
-        check("a process whose command line copies the School Chrome's is refused: the folder's lock decides",
+        check("a process whose command line copies the School Chrome's is refused: the folder's owner decides",
               "pid 778" in refusal(require))
         other = school.replace(folder, folder + " copy")
         machine(listening=[779], processes={779: other}, answer=VERSION)
@@ -242,6 +241,23 @@ def connecting():
         check("two processes on the port are refused, not one of them checked", "more than one" in said, said)
         machine(listening=[780], answer=VERSION)
         check("a holder that exits before it is named is still refused", "(it has exited)" in refusal(require))
+        m = machine(listening=[781], answer=VERSION)
+
+        def unreadable(pid):
+            raise system.Unanswered("could not read pid %d: Access is denied" % pid)
+
+        system.command = unreadable
+        said = refusal(require)
+        check("a holder the OS will not show is refused, saying so, never taken for one that exited",
+              "pid 781" in said and "Access is denied" in said and "exited" not in said, said)
+
+        def blind(port):
+            raise system.Unanswered("could not run lsof to check which Chrome holds a port (Operation not permitted)")
+
+        machine(owner=501, listening=[501], processes={501: school}, answer=VERSION)
+        system.listeners = blind
+        said = refusal(require)
+        check("a port the OS cannot read is a CdpError, never an empty port", "Operation not permitted" in said, said)
 
         for label, reply in (("a JSON object without a DevTools socket", {"Browser": "x"}), ("a bare JSON number", 7)):
             machine(owner=501, listening=[501], processes={501: school}, answer=reply)
@@ -269,15 +285,19 @@ def connecting():
         os.remove(os.path.join(folder, "Local State"))
         check("a folder with no Local State is refused", "cannot read" in refusal(require))
         profile_list(folder, ["Default"])
+        profile_list(folder, ["Default", "Café"])
+        said = refusal(require)
+        check("a Local State is read as UTF-8, whatever the OS's code page", "Café" in said, said)
+        profile_list(folder, ["Default"])
 
         started = []
 
-        def starting(m, comes_up=True):
+        def starting(m, comes_up=True, exits=None):
             def start(profile):
                 started.append(True)
                 if comes_up:
-                    lock(folder, 501)
-                    m.listening, m.processes[501], m.hidden = [501], school, 2  # the port opens on the third look
+                    m.owner, m.listening, m.processes[501], m.hidden = 501, [501], school, 2  # the port opens on the third look
+                return None if exits is None else FakeChrome(exits)
             del started[:]
             launch._open = start
 
@@ -288,10 +308,10 @@ def connecting():
                          answer=VERSION))
         said = refusal(lambda: launch.launch(profile))
         check("launch refuses a running School Chrome started without %s, and starts nothing" % cdp.INPUT_FLAG,
-              cdp.INPUT_FLAG in said and "Cmd+Q" in said and not started, said)
+              cdp.INPUT_FLAG in said and system.quit_hint(501) in said and not started, said)
         said = refusal(require)
-        check("and require refuses it, so no tool, listing or window uses it, naming its pid to quit",
-              cdp.INPUT_FLAG in said and "kill 501" in said, said)
+        check("and require refuses it, so no tool, listing or window uses it, naming how to quit its pid",
+              cdp.INPUT_FLAG in said and system.quit_hint(501) in said, said)
         starting(machine(answer=VERSION))
         said = refusal(lambda: launch.launch(profile, wait=5))
         check("launch starts Chrome once when nothing is up, and waits for its port", not said and started == [True], said)
@@ -306,6 +326,15 @@ def connecting():
         said = refusal(lambda: launch.launch(profile, wait=0.5))
         check("launch says why when Chrome never opens its port, within the wait",
               "did not answer within" in said and time.monotonic() - began < 3, said)
+        starting(machine(answer=VERSION), comes_up=False, exits=launch.IN_USE)
+        began = time.monotonic()
+        said = refusal(lambda: launch.launch(profile, wait=5))
+        check("a Chrome that exits as another Chrome has the folder under another spelling says so, at once",
+              "spelled another way" in said and time.monotonic() - began < 2, said)
+        starting(machine(answer=VERSION), comes_up=False, exits=0)
+        said = refusal(lambda: launch.launch(profile, wait=0.5))
+        check("a Chrome that hands its launch over and exits is waited on, as one still starting is",
+              "did not answer within" in said, said)
         profile_list(folder, ["Default", "Profile 1"])
         starting(machine(answer=VERSION))
         check("launch refuses a second profile before starting anything",
@@ -328,50 +357,18 @@ def connecting():
         launch._open = will_not_start
         check("launch passes on why Chrome would not start",
               "Unable to find application" in refusal(lambda: launch.launch(profile, wait=0.5)))
-
         launch._open = saved[2]
-        ran = []
-        subprocess.run = lambda args, **kw: (ran.append(args), subprocess.CompletedProcess(args, 0, "", ""))[1]
-        said = refusal(lambda: launch._open(profile))
-        check("Chrome is started as a new copy of the app, in the background, with no window, the port, the folder, "
-              "the profile, and input let through before a page draws",
-              not said and bool(ran) and ran[0][:4] == ["/usr/bin/open", "-gna", cdp.APP, "--args"] and {
-                  "--remote-debugging-port=9223", "--user-data-dir=%s" % folder, "--profile-directory=Default",
-                  "--no-startup-window", cdp.INPUT_FLAG
-              } <= set(ran[0][4:]), repr(ran))
-        subprocess.run = lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "Unable to find application")
-        check("a Chrome that will not start says so", "Unable to find application" in refusal(lambda: launch._open(profile)))
 
-        # The real _run, with a tool that cannot be run.
-        cdp._run = saved[0]
-
-        def missing(args, **kw):
-            raise FileNotFoundError(2, "No such file or directory", args[0])
-
-        subprocess.run = missing
-        check("lsof that cannot run is a CdpError, not a traceback", "could not run" in refusal(lambda: cdp.listener(profile.port)))
-
-        def hangs(args, timeout=None, **kw):
-            if timeout is None:
-                raise AssertionError("%s ran with no timeout" % args[0])
-            raise subprocess.TimeoutExpired(args, timeout)
-
-        subprocess.run = hangs
-        check("lsof that hangs is cut off, and is a CdpError", "could not run" in refusal(lambda: cdp.listener(profile.port)))
-        subprocess.run = lambda args, **kw: subprocess.CompletedProcess(
-            args, 1, "", "lsof: can't get PID byte count: Operation not permitted")
-        check("lsof that is blocked is a CdpError, not an empty port", "Operation not permitted" in refusal(lambda: cdp.listener(profile.port)))
-        subprocess.run = saved[3]
-
-        # The real lsof, ps and HTTP, against ports this check holds itself.
+        # The real OS, against ports this check holds itself.
+        for name, value in zip(STANDS_IN, saved[0]):
+            setattr(system, name, value)
         cdp._get = saved[1]
-        lock(folder, None)
         server = socket.socket()
         server.bind(("127.0.0.1", 0))
         server.listen(1)
         profile = profile._replace(port=server.getsockname()[1])
         try:
-            check("lsof finds the process on the port", cdp.listener(profile.port) == os.getpid(), repr(cdp.listener(profile.port)))
+            check("the OS names the process on the port", cdp.listener(profile.port) == os.getpid(), repr(cdp.listener(profile.port)))
             said = refusal(require)
             check("a real program on the port is refused, by pid and command line",
                   "pid %d" % os.getpid() in said and "python" in said.lower(), said)
@@ -430,6 +427,84 @@ def connecting():
                 child.kill()
                 child.wait()
             decoy.close()
+        if sys.platform == "darwin":
+            owning_mac(folder, profile)
+        else:
+            owning_windows(folder, profile)
+    finally:
+        for name, value in zip(STANDS_IN, saved[0]):
+            setattr(system, name, value)
+        cdp._get, launch._open = saved[1], saved[2]
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+class FakeChrome:
+    """What launch_chrome hands back on Windows: a Popen, here one that has exited with code."""
+
+    def __init__(self, code):
+        self.code = code
+
+    def poll(self):
+        return self.code
+
+
+def lock(folder, pid):
+    """Chrome's SingletonLock on a Mac, naming pid as the folder's owner; None removes it."""
+    path = os.path.join(folder, "SingletonLock")
+    if os.path.lexists(path):
+        os.remove(path)
+    if pid is not None:
+        os.symlink("Mac-592.lan-%d" % pid, path)  # a hostname may hold a dash
+
+
+def owning_mac(folder, profile):
+    """macOS: the folder's owner is whoever holds its SingletonLock, as ps shows it; lsof that fails; open -g."""
+    from browser.system import macos
+    saved = (macos._run, subprocess.run)
+    try:
+        school = "%s --remote-debugging-port=9223 --user-data-dir=%s" % (cdp.CHROME, folder)
+        processes = {501: school, 503: "/usr/bin/caffeinate -i " + school, 504: cdp.CHROME + ".bak --type=renderer"}
+        macos._run = lambda *command: processes.get(int(command[-1]), "") + "\n"
+        lock(folder, 501)
+        check("the SingletonLock's owner running Chrome's binary holds the folder", cdp.owner(folder) == 501)
+        lock(folder, 502)
+        check("a lock left by a crash is not a running School Chrome", cdp.owner(folder) is None)
+        lock(folder, 503)
+        check("a lock naming a reused pid that is not Chrome is not a running School Chrome", cdp.owner(folder) is None)
+        lock(folder, 504)
+        check("a lock owner whose binary only starts like Chrome's is not a running School Chrome", cdp.owner(folder) is None)
+        lock(folder, None)
+        macos._run = saved[0]
+
+        def missing(args, **kw):
+            raise FileNotFoundError(2, "No such file or directory", args[0])
+
+        subprocess.run = missing
+        check("lsof that cannot run is a CdpError, not a traceback", "could not run" in refusal(lambda: cdp.listener(profile.port)))
+
+        def hangs(args, timeout=None, **kw):
+            if timeout is None:
+                raise AssertionError("%s ran with no timeout" % args[0])
+            raise subprocess.TimeoutExpired(args, timeout)
+
+        subprocess.run = hangs
+        check("lsof that hangs is cut off, and is a CdpError", "could not run" in refusal(lambda: cdp.listener(profile.port)))
+        subprocess.run = lambda args, **kw: subprocess.CompletedProcess(
+            args, 1, "", "lsof: can't get PID byte count: Operation not permitted")
+        check("lsof that is blocked is a CdpError, not an empty port", "Operation not permitted" in refusal(lambda: cdp.listener(profile.port)))
+
+        ran = []
+        subprocess.run = lambda args, **kw: (ran.append(args), subprocess.CompletedProcess(args, 0, "", ""))[1]
+        said = refusal(lambda: launch._open(profile))
+        check("Chrome is started as a new copy of the app, in the background, with no window, the port, the folder, "
+              "the profile, and input let through before a page draws",
+              not said and bool(ran) and ran[0][:4] == ["/usr/bin/open", "-gna", macos.APP, "--args"] and {
+                  "--remote-debugging-port=%d" % profile.port, "--user-data-dir=%s" % profile.folder,
+                  "--profile-directory=Default", "--no-startup-window", cdp.INPUT_FLAG
+              } <= set(ran[0][4:]), repr(ran))
+        subprocess.run = lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "Unable to find application")
+        check("a Chrome that will not start says so", "Unable to find application" in refusal(lambda: launch._open(profile)))
+        subprocess.run = saved[1]
 
         # bash's exec -a gives a process Chrome's binary as its argv[0], which is all ps can see.
         fake = subprocess.Popen(["/bin/bash", "-c", 'exec -a "$1" /bin/bash -c "read line"', "_", cdp.CHROME],
@@ -448,9 +523,116 @@ def connecting():
         finally:
             fake.kill()
             fake.wait()
+            lock(folder, None)
     finally:
-        cdp._run, cdp._get, launch._open, subprocess.run = saved
-        shutil.rmtree(workdir, ignore_errors=True)
+        macos._run, subprocess.run = saved
+
+
+# A stand-in for Chrome's hold on a folder: a message-only window of Chrome's class, titled with the folder, in a
+# process of its own. It prints once the window is up, and closes when its stdin does.
+MESSAGE_WINDOW = r"""
+import ctypes, sys
+from ctypes import wintypes
+user32, kernel32 = ctypes.WinDLL("user32", use_last_error=True), ctypes.WinDLL("kernel32")
+PROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+user32.DefWindowProcW.restype = ctypes.c_ssize_t
+user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+proc = PROC(user32.DefWindowProcW)
+class WNDCLASS(ctypes.Structure):
+    _fields_ = [("style", wintypes.UINT), ("proc", PROC), ("extra", ctypes.c_int), ("window_extra", ctypes.c_int),
+                ("instance", wintypes.HINSTANCE), ("icon", wintypes.HICON), ("cursor", wintypes.HANDLE),
+                ("brush", wintypes.HBRUSH), ("menu", wintypes.LPCWSTR), ("name", wintypes.LPCWSTR)]
+kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+instance = kernel32.GetModuleHandleW(None)
+if not user32.RegisterClassW(ctypes.byref(WNDCLASS(0, proc, 0, 0, instance, None, None, None, None, "Chrome_MessageWindow"))):
+    raise SystemExit("RegisterClassW failed: %d" % ctypes.get_last_error())
+user32.CreateWindowExW.restype = wintypes.HWND
+user32.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_int,
+                                   ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.HWND, wintypes.HMENU,
+                                   wintypes.HINSTANCE, wintypes.LPVOID]
+if not user32.CreateWindowExW(0, "Chrome_MessageWindow", sys.argv[1], 0, 0, 0, 0, 0, wintypes.HWND(-3), None, instance, None):
+    raise SystemExit("CreateWindowExW failed: %d" % ctypes.get_last_error())
+print(flush=True)
+sys.stdin.read()
+"""
+
+
+def owning_windows(folder, profile):
+    """Windows: the folder's owner is the process of the Chrome_MessageWindow titled with it, when that process runs
+    Chrome's own image and is no helper of it; a pid it cannot read; how Chrome is started."""
+    from browser.system import windows
+    saved = (windows.CHROME, subprocess.Popen)
+
+    def holding(*more):
+        child = subprocess.Popen([sys.executable, "-c", MESSAGE_WINDOW, folder, *more], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        assert child.stdout is not None
+        child.stdout.readline()  # the window is up
+        return child
+
+    child = holding()
+    helper = holding("--type=renderer")
+    try:
+        check("a window holding the folder in a process that is not Chrome's image holds nothing",
+              cdp.owner(folder) is None)
+        windows.CHROME = sys.executable
+        check("the process of the window titled with the folder, running Chrome's image, holds it",
+              cdp.owner(folder) == child.pid, repr((cdp.owner(folder), child.pid, helper.pid)))
+        check("the folder is found whatever the case of its spelling, as Chrome's own lookup does",
+              cdp.owner(folder.upper()) == child.pid)
+        check("and with a trailing separator, which Chrome's title never has", cdp.owner(folder + os.sep) == child.pid)
+        check("another folder is not held by it", cdp.owner(folder + " copy") is None)
+        child.stdin.close()
+        child.wait(10)
+        check("a helper of Chrome's (--type) holding it is no owner", cdp.owner(folder) is None, repr(cdp.owner(folder)))
+    finally:
+        windows.CHROME = saved[0]
+        for process in (child, helper):
+            process.kill()
+            process.wait()
+
+    said = refusal(lambda: cdp.command(4))  # System
+    check("a process the OS will not let this user read is a CdpError, not one that exited", "could not read pid 4" in said, said)
+    check("a pid no process has has exited", cdp.command(0x7FFFFFF0) == "")
+    check("a network path is refused before anything opens it",
+          all(system.remote_path(path) for path in ("\\\\host\\share\\x", "//host/share/x", "\\\\?\\C:\\x", "\\\\.\\pipe\\x"))
+          and not any(system.remote_path(path) for path in ("C:\\x", "C:x", "\\x", "x")))
+    check("Chrome's switches are read as Chromium reads them on Windows", windows._switches(
+        ["chrome.exe", "--User-Data-Dir=C:\\a b", "/prefetch:4", "-x=1", "--remote-debugging-port=1",
+         "--remote-debugging-port=2", "--", "--after"]) == {"user-data-dir": "C:\\a b", "prefetch:4": "", "x": "1",
+                                                              "remote-debugging-port": "2"})
+
+    ran = []
+
+    class Popen:
+        def __init__(self, args, **kw):
+            ran.append((args, kw))
+            if len(ran) == 1 and kw["creationflags"] & windows._BREAKAWAY:
+                raise PermissionError(13, "Access is denied", None, windows._ACCESS_DENIED)
+            self.pid = 4242
+
+    subprocess.Popen = Popen
+    try:
+        said = refusal(lambda: launch._open(profile))
+        args, kw = ran[-1] if ran else ([], {})
+        check("Chrome is started as its own process, detached, with no window yet and its first shown without the "
+              "focus, the port, the folder, the profile, and input let through before a page draws",
+              not said and args[0] == cdp.CHROME and kw["creationflags"] & windows._DETACHED_PROCESS
+              and kw["startupinfo"].wShowWindow == 4 and {
+                  "--remote-debugging-port=%d" % profile.port, "--user-data-dir=%s" % profile.folder,
+                  "--profile-directory=Default", "--no-startup-window", cdp.INPUT_FLAG} <= set(args[1:]), repr(ran))
+        check("out of the job it runs in if the job lets it, and in it if not",
+              len(ran) == 2 and ran[0][1]["creationflags"] & windows._BREAKAWAY
+              and not ran[1][1]["creationflags"] & windows._BREAKAWAY, repr([kw["creationflags"] for _, kw in ran]))
+
+        def missing(args, **kw):
+            raise FileNotFoundError(2, "The system cannot find the file specified", args[0])
+
+        subprocess.Popen = missing
+        said = refusal(lambda: launch._open(profile))
+        check("a Chrome that will not start says so", "could not start Chrome" in said and "cannot find" in said, said)
+    finally:
+        subprocess.Popen = saved[1]
 
 
 def live():
@@ -463,15 +645,15 @@ def live():
         check("a Chrome of the checks' own, on a new folder, passes require", not said, said)
         if said:
             return
-        check("its lock owner is the process on its port", cdp.listener(profile.port) == cdp.owner(profile.folder))
+        check("the folder's owner is the process on its port", cdp.listener(profile.port) == cdp.owner(profile.folder))
 
-        # The browser that answers has to be the lock's owner, asked over DevTools itself.
+        # The browser that answers has to be the folder's owner, asked over DevTools itself.
         saved = (cdp.require, cdp.owner)
         proven = cdp.require(profile)
         cdp.require, cdp.owner = (lambda p: proven), (lambda folder: 1)
         try:
             said = refusal(lambda: cdp.Browser(profile))
-            check("a browser that answers as another pid than the lock's owner is refused", "not the Check Chrome" in said, said)
+            check("a browser that answers as another pid than the folder's owner is refused", "not the Check Chrome" in said, said)
         finally:
             cdp.require, cdp.owner = saved
 
