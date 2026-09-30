@@ -51,7 +51,8 @@ header lists its settings (a version to pin, where it goes); `browserd uninstall
                       line for your agent to remove it; the records and every profile's Chrome folder stay
 
 Its records (server.pid, server.log, start.lock, state.db with the profiles, sessions and tabs, ports.json,
-devtools-*.log, and calls/) go in `~/Library/Application Support/browserd` on a Mac and `%LOCALAPPDATA%\browserd` on Windows,
+devtools-*.log, calls/, and downloads/<profile>/, where each profile's Chrome saves its downloads, with no Save As
+window) go in `~/Library/Application Support/browserd` on a Mac and `%LOCALAPPDATA%rowserd` on Windows,
 whichever version runs; `BROWSERD_HOME` names another folder.
 
 ## From a clone

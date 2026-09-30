@@ -4,7 +4,7 @@
 
 The browser MCP server: it starts and owns one Chrome per profile and serves tools to Claude Code agents
 over HTTP on `127.0.0.1:9230` (`ports.MCP`), so pages are read and driven with that profile's logins. An agent first calls `session_start {profile, label}`, and passes the session id it
-gets to every other tool but `profile_new` and `profile_delete`, which make and delete a profile. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage the session's own tabs by
+gets to every other tool but `profile_new` and `profile_delete`, which make and delete a profile. `tab_open`, `tab_list` and `tab_close` manage the session's own tabs by
 short tab ids, and `tab_needs_input` marks one as needing the user's input, for the page to show, until its agent clears the mark
 or the tab closes; `queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
 records every call in that tab's record folder, `calls/<profile>/<session>-<label>/<tab>/` in the records folder
@@ -43,7 +43,7 @@ run `npm ci`).
       steps.py     the queue: load, check, run, report; snapshot views
       checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused, read_fills
       dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
-      downloads.py hears a tab's downloads and where each went
+      downloads.py each profile's downloads folder (Folder), and a tab's downloads and where each went (Watcher)
       screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
       pointer.py   the queue's pointer steps: move_at, click_down, click_up
       guard.py     the click guard: a press or keys stopped when the page changed since the agent's screenshot
@@ -110,7 +110,12 @@ one command a timeout of its own in place of `cdp.CALL_WAIT` (a pointer step's 5
 ones, asking `cdp.owner` each time. `ensure(profile)` starts a profile's
 Chrome with `launch.launch` unless it is up, one start at a time per folder, and sends SIGTERM to a Chrome
 it launched but never saw answer. It then runs `focus.keep` for that Chrome on a connection of its own: a
-thread that ends when the Chrome quits and starts again with it. `adopt` does the same for every profile's
+thread that ends when the Chrome quits and starts again with it; and a `downloads.Folder` beside it, which saves
+that Chrome's downloads in `downloads/<profile>/` in the records folder (`server.DOWNLOADS`); `ensure` waits up to
+`downloads.READY_WAIT` (2s) for a new one to take, outside the start lock, so a tab handed out after it is saved
+there, and a Folder that has not taken by then keeps trying, logged once. `adopt` starts every one first and then
+waits for them together; `downloads(profile)` starts one, not waited on, for a Chrome that runs without one, and
+gives a running one's Folder to each tab's `Worker`. `adopt` does the same for every profile's
 Chrome already running as the server starts, `window` is the page's Open Chrome (it brings a running Chrome to the
 front, restoring a minimized window, and opens a blank window only when it has no page open), `quit` (the page's Quit Chrome, and `profiles.delete`) quits one once any start of it under way has
 finished, raising a `CdpError` when it is still running after, and `quit_all` quits every running one that way when the
@@ -276,7 +281,8 @@ same tabs under the same ids. A crash leaves the same.
   no default context. With no page open either, `Tabs` lists no tabs rather than refusing, and
   `tab_open`'s `Target.createTarget` loads it again. No default context beside open pages
   is still refused, since those tabs cannot be told apart.
-- **Nothing but `tab_show` and the page's Open Chrome and Show leaves a profile's Chrome with the user's focus.**
+- **Nothing but the page's Open Chrome and Show leaves a profile's Chrome with the user's focus.** No tool an agent
+  has brings a tab or its Chrome to the front.
   On Windows, `launch` starts Chrome detached with `--no-startup-window` and its first window shown without the focus,
   and a background tab, even in a new window, took no focus (measured); a page's `window.open` popup did, at once,
   and `focus.keep` gave it back before a 20ms poll saw Chrome in front, so `keep` runs there as on a Mac. `bring`
@@ -303,9 +309,9 @@ same tabs under the same ids. A crash leaves the same.
   goes `about:blank`, attach, `Page.enable`, then navigate: Chrome can finish a load before a later
   `Page.enable` would hear it. A navigation the site has not answered by the websocket's 20s
   (`cdp.Late`) leaves the tab open and loading; a URL Chrome refuses is `could not open <url>: <why>`.
-  For `tab_show`, `Target.activateTarget` picks the tab, and `focus.bring` brings the tab's Chrome
-  to the front by pid, which `activateTarget` alone does not do for a Chrome never yet in front; when
-  macOS refuses, `tab_show` fails.
+  For the page's Show (`Tabs.show`), `Target.activateTarget` picks the tab, and `focus.bring` brings the tab's
+  Chrome to the front by pid, which `activateTarget` alone does not do for a Chrome never yet in front; when
+  macOS refuses, Show fails.
 - **`tab_open` never opens its tab in a window of its own.** A tab opened in a new window (as `Target.createTarget`
   opens one in a Chrome with no window open) holds a Google search page Chrome's omnibox prerenders there
   (`warmup.html`), and when Puppeteer attaches that hidden page before the tab's own, Puppeteer finishes connecting
@@ -394,14 +400,32 @@ same tabs under the same ids. A crash leaves the same.
   `dialogAction`, `navigate_page`'s `handleBeforeUnload`, and `handle_dialog`), which answer their own.
   When a queue stops before its `handle_dialog` step runs, the report still says what the answerer
   answered.
-- **A step that begins a download says where it went.** Chrome saves a download where that Chrome's own
-  settings say (`~/Downloads` unless changed), and chrome-devtools-mcp's reply never names it; an agent told nothing
-  failed WebGames' combination-lock task in a benchmark, hunting for the file through `file://` listings. So a tab's
-  `Worker` runs a `downloads.Watcher` from `ensure` until `stop` or `pause`, on a connection of its own to the tab:
-  `Page.enable` for `Page.downloadWillBegin`, which only the tab's own downloads send; `Target.setDiscoverTargets`,
-  to follow the popups it opens, whose downloads send only `Browser.downloadWillBegin`, naming the popup; and
-  `Browser.setDownloadBehavior` with `behavior: default` and `eventsEnabled`, which keeps Chrome's own behaviour and
-  only asks for `Browser.downloadProgress`. After each step, `steps.run` waits up to `steps.DOWNLOAD_WAIT` (5s, or
+- **Each profile's downloads go in its own folder, `downloads/<profile>/` in the records folder, with no window
+  or prompt.** Left to its own settings, a Chrome saves in `~/Downloads` (the Downloads known folder on Windows),
+  opens a Save As window no tool can answer when the profile asks where to save each file, and holds back all but
+  the first of the files a page begins at once behind a "download multiple files" prompt: the download sits
+  `inProgress` for good (all measured). `Browser.setDownloadBehavior` with `behavior: allow` and a `downloadPath`
+  saves every one there, silently. Chrome keeps one such behaviour per browser, not per connection: the last
+  connection to set it wins, and when that connection closes Chrome goes back to its own settings, not to the one
+  set before (measured). So one `downloads.Folder` per Chrome, on a connection of the server's own, is the only
+  thing that sets it; it sets it again on a new connection when its own drops or fails while that Chrome runs
+  (every `downloads.RETRY`, 0.5s, logged once), again every `downloads.AGAIN` (30s) on the same connection, which
+  takes it back from any other program on the port that set its own (a script's `connectOverCDP`), and ends when
+  the Chrome quits. chrome-devtools-mcp never sets it (its Puppeteer only does when given `downloadBehavior`). A download
+  a person begins in that Chrome by hand goes there too while the server runs; through `../restart`, which keeps
+  every Chrome, it goes where the Chrome's own settings say until the new server's `adopt` sets it again.
+- **A step that begins a download says where it went.** chrome-devtools-mcp's reply never names it; an agent told
+  nothing failed WebGames' combination-lock task in a benchmark, hunting for the file through `file://` listings.
+  So a tab's `Worker` runs a `downloads.Watcher` from `ensure` until `stop` or `pause`, on a connection of its own
+  to the tab: `Page.enable` for `Page.downloadWillBegin`, which only the tab's own downloads send, and
+  `Target.setDiscoverTargets`, to follow the popups it opens, whose downloads send only `Browser.downloadWillBegin`,
+  naming the popup. Only the connection that set the behaviour hears the `Browser` events, and only
+  `Browser.downloadProgress` names where a file went, so the `Watcher` asks the profile's `Folder` for each
+  download's state and path, and for those begun in its popups' frames; one the tab's own `Page.downloadProgress`
+  says has ended waits, as still downloading, up to `downloads.BEHIND` (2s) for the `Folder` to hear where it went;
+  one the `Folder` never heard (begun while it was reconnecting) or a tab with no `Folder` (a check's) then reports
+  that it went where Chrome's own settings say. Chrome need not name the path; when it does not, the `Folder`'s
+  file of that name is where it went. After each step, `steps.run` waits up to `steps.DOWNLOAD_WAIT` (5s, or
   the queue's time left) for a download the step began to end, and its report says `downloaded <name> to <path>`,
   that it was canceled or failed, or that it is still downloading; the first step on the tab after it ends then
   says where it went, in this queue or a later one, unless the tab's `Watcher` was stopped or started again
@@ -625,7 +649,7 @@ same tabs under the same ids. A crash leaves the same.
     `tabs_offline` and `session_tools_offline` stand in for Chrome and `osascript`, with `state.db` in a
     temporary folder; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
     `pairing_offline` for a tab's chrome-devtools-mcp and the connection that marks the tab;
-    `dialogs_offline` for the answerer's connection; `downloads_offline` for the watcher's connection; `paste_offline` for chrome-devtools-mcp and
+    `dialogs_offline` for the answerer's connection; `downloads_offline` for the Folder's and the watcher's connections; `paste_offline` for chrome-devtools-mcp and
     the connection that hands the page its text and presses the paste key; `screenshot_offline` for the connection
     a viewport screenshot is taken over; `pointer_offline` for the connection mouse input is sent over; `limits_offline` for a slow tool;
     `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
@@ -648,9 +672,10 @@ same tabs under the same ids. A crash leaves the same.
     guard checks press with no screenshot, on an unchanged spot, on a button that turns blue on hover, under a modal
     raised after the screenshot, and twice for a double click, and type with the focus kept and moved.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
-    them, and close them (`queue_live`'s download checks also save two files in the real `~/Downloads`, the
-    throwaway Chrome keeping Chrome's own download folder, and remove them); a tab already open is never touched. No live check moves the Mac's focus:
-    `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
+    them, and close them; their downloads go in a `Folder` of their own in a temporary folder, never `~/Downloads`
+    (`downloads_live`, run last, sets the throwaway profile to ask where to save each file, and quits and starts
+    its Chrome again to do it); a tab already open is never touched. No live check moves the Mac's focus:
+    `Tabs.show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
   - **Never automated:** `browserd start`, `stop`, `restart`, `setup` and `uninstall` are never run, since each acts on the
     real browserd: stopping quits every profile's Chrome, restarting replaces the one running, and uninstalling
     removes it.

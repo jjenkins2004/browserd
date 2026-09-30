@@ -203,7 +203,7 @@ def check(steps, allowed):
             wrong = pointer.problem(step)
         elif tool in LEFT_OUT:
             wrong = "%s is left out of a queue: %s" % (tool, (
-                "tab_open, tab_list, tab_show and tab_close manage tabs, and the tab argument chooses the page"
+                "tab_open, tab_list and tab_close manage tabs, and the tab argument chooses the page"
                 if tool in PAGE_TOOLS else "it profiles the page, and a queue only reads and drives one"))
         elif tool not in allowed:
             wrong = "%r is not a tool a queue can run; it runs %s (the steps argument's description gives their " \
@@ -690,6 +690,8 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
 def _downloaded(download):
     """The report's line for one download a step began, or one begun earlier that has since ended."""
     if download["state"] == "completed":
+        if download["path"] is None:  # no Folder heard it: it began while its Folder was reconnecting, or with none
+            return "--- downloaded %s, where Chrome's own download settings say" % download["name"]
         return "--- downloaded %s to %s" % (download["name"], download["path"])
     if download["state"] == "canceled":
         return "--- the download of %s was canceled or failed" % download["name"]

@@ -8,6 +8,7 @@ browser/README.md, "Agent Gotchas & Invariants", "Checks", says what each group 
 import base64
 import contextlib
 import http.client
+import http.server
 import io
 import json
 import socket
@@ -27,8 +28,8 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import (cdp, checked, chromes, devtools, dialogs, downloads, focus, mcp, page, paths, pointer, profiles,
-                     record, screenshot, server, service, sessions, steps, system)
+from browser import (cdp, checked, chromes, devtools, dialogs, downloads, focus, launch, mcp, page, paths, pointer,
+                     profiles, record, screenshot, server, service, sessions, steps, system)
 from browser import devtools as devtools_module  # queue_live names its own chrome-devtools-mcp devtools
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
@@ -512,8 +513,9 @@ def session_tools_offline():
         text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, resolved=True)
         check("resolved: true clears the mark", not is_error and opened not in state.needs_input(), text)
         call(httpd, "tab_needs_input", session=session, tab=opened, note="check the form")
-        text, is_error = call(httpd, "tab_show", session=session, tab=opened)
-        check("tab_show answers with the tab's id and URL", not is_error and text.split()[0] == opened, text)
+        status, answer = rpc(httpd, "tools/call", {"name": "tab_show", "arguments": {"session": session, "tab": opened}})
+        check("tab_show is no tool of an agent's: only the page brings a tab to the front",
+              "unknown tool" in json.dumps(answer), repr(answer))
         state.touch(session, 0)
         check("tab_close closes by id", call(httpd, "tab_close", session=session, tabs=[opened]) == ("closed %s" % opened, False))
         check("and closing a tab clears its mark", opened not in state.needs_input(), repr(state.needs_input()))
@@ -1399,23 +1401,141 @@ def will_begin(guid, name, session="S1"):
     return {"method": "Page.downloadWillBegin", "sessionId": session, "params": {"guid": guid, "suggestedFilename": name}}
 
 
+def page_progress(guid, state, session="S1"):
+    return {"method": "Page.downloadProgress", "sessionId": session, "params": {"guid": guid, "state": state}}
+
+
 def progress(guid, state, path=None):
     return {"method": "Browser.downloadProgress", "params": dict({"guid": guid, "state": state}, **({"filePath": path} if path else {}))}
 
 
+def browser_begin(guid, frame, name):
+    return {"method": "Browser.downloadWillBegin", "params": {"guid": guid, "frameId": frame, "suggestedFilename": name}}
+
+
+class FakeFolder:
+    """A profile's downloads.Folder: what it heard of each download, set by a check."""
+
+    def __init__(self, folder="/d/School"):
+        self.heard = {}  # guid -> {frame, name, state, path}
+        self.folder = folder
+
+    def download(self, guid):
+        found = self.heard.get(guid)
+        return dict(found) if found else None
+
+    def begun_in(self, frames):
+        return [guid for guid, download in self.heard.items() if download["frame"] in frames]
+
+
+class FolderConnection:
+    """The connection a downloads.Folder holds: it records what it is asked, hands out `events`, and raises
+    WebSocketError, as a dropped connection does, once `drop` is set."""
+
+    def __init__(self, events=(), refuse=False):
+        self.events, self.asked, self.drop, self.closed, self.refuse = list(events), [], False, False, refuse
+
+    def call(self, method, session=None, **params):
+        self.asked.append((method, params))
+        if self.refuse:
+            raise cdp.CdpError("Browser.setDownloadBehavior: not allowed")
+        return {}
+
+    def next_event(self, timeout):
+        if self.drop:
+            raise WebSocketError("the connection dropped")
+        if self.events:
+            return self.events.pop(0)
+        time.sleep(0.01)
+        return None
+
+    def close(self):
+        self.closed = True
+
+
 def downloads_offline():
-    """downloads.Watcher against a stand-in connection, and steps.run reporting what it took."""
-    connection = FakeDownloads([will_begin("G1", "note.txt"), will_begin("G2", "theirs.txt", "S2"),
-                                progress("G1", "completed", "/Users/x/Downloads/note.txt"), progress("G2", "completed", "/y")])
-    watcher = downloads.Watcher("T1", lambda: connection)
+    """downloads.Folder and downloads.Watcher against stand-in connections, and steps.run reporting what they took."""
+    workdir = tempfile.mkdtemp(prefix="browser-downloads-")
+    try:
+        target = os.path.join(workdir, "downloads", "School")
+        made, running = [], [True]
+
+        def connect():
+            made.append(FolderConnection([browser_begin("G1", "F1", "note.txt"), progress("G1", "inProgress"),
+                                          progress("G1", "completed", os.path.join(target, "note.txt"))]))
+            return made[-1]
+
+        folder = downloads.Folder("School", target, connect, lambda: running[0])
+        folder.start()
+        check("a Folder saves its Chrome's downloads in the profile's folder, which it makes, with no Save As window",
+              folder.ready(2) and made[0].asked == [("Browser.setDownloadBehavior", {
+                  "behavior": "allow", "downloadPath": target, "eventsEnabled": True})] and os.path.isdir(target),
+              repr(made[0].asked))
+        time.sleep(0.1)
+        check("it hears where each download went, and in which frame it began",
+              folder.download("G1") == {"frame": "F1", "name": "note.txt", "state": "completed",
+                                        "path": os.path.join(target, "note.txt")} and folder.begun_in({"F1"}) == ["G1"],
+              repr(folder.download("G1")))
+        made[0].drop = True
+        deadline = time.monotonic() + 3
+        while len(made) < 2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        check("when its connection drops while the Chrome runs, it sets the folder again on a new one, since Chrome goes "
+              "back to its own settings when the connection that set them closes",
+              len(made) == 2 and folder.ready(2) and made[0].closed
+              and made[1].asked[0][0] == "Browser.setDownloadBehavior" and folder.is_alive(), repr(len(made)))
+        running[0] = False
+        made[1].drop = True
+        folder.join(3)
+        check("and it ends once the Chrome has quit", not folder.is_alive() and not folder.alive() and not folder.ready(0))
+
+        refusing, lines = [], []
+        saved_log, mcp.log = mcp.log, lines.append
+        try:
+            folder = downloads.Folder("School", target, lambda: refusing.append(FolderConnection(refuse=True))
+                                      or refusing[-1], lambda: True)
+            folder.start()
+            time.sleep(1.2)
+            folder.stop()
+            folder.join(3)
+        finally:
+            mcp.log = saved_log
+        check("a Chrome that refuses the setting is asked again every RETRY, not at once, and the log says so once",
+              2 <= len(refusing) <= 4 and all(c.closed for c in refusing) and len(lines) == 1
+              and "trying again" in lines[0], "%d tries, %r" % (len(refusing), lines))
+
+        def refused():
+            raise cdp.CdpError("nothing is listening")
+
+        folder = downloads.Folder("School", target, refused, lambda: False)
+        folder.start()
+        folder.join(3)
+        check("a Folder whose Chrome is not running ends at once", not folder.is_alive())
+        stopping = [False]
+        folder = downloads.Folder("School", target, refused, lambda: True, lambda: stopping[0])
+        folder.start()
+        time.sleep(0.2)
+        check("one whose Chrome runs but does not answer keeps trying", folder.is_alive() and not folder.ready(0))
+        stopping[0] = True
+        folder.join(3)
+        check("until the server stops", not folder.is_alive())
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    heard = FakeFolder()
+    heard.heard["G1"] = {"frame": "T1", "name": "note.txt", "state": "completed", "path": "/d/School/note.txt"}
+    heard.heard["G2"] = {"frame": "T2", "name": "theirs.txt", "state": "completed", "path": "/d/School/theirs.txt"}
+    connection = FakeDownloads([will_begin("G1", "note.txt"), will_begin("G2", "theirs.txt", "S2")])
+    watcher = downloads.Watcher("T1", lambda: connection, lambda: heard)
     watcher.start_listening()
     try:
         time.sleep(0.1)
         got = watcher.take(2)
-        check("a download the tab began is taken once it completes, with where it went; another tab's is not",
-              got == [{"name": "note.txt", "state": "completed", "path": "/Users/x/Downloads/note.txt"}], repr(got))
+        check("a download the tab began is taken once it completes, with where the Folder heard it went; another "
+              "tab's is not", got == [{"name": "note.txt", "state": "completed", "path": "/d/School/note.txt"}], repr(got))
         check("and is taken only once", watcher.take(0) == [])
         connection.events.append(will_begin("G3", "big.zip"))
+        heard.heard["G3"] = {"frame": "T1", "name": "big.zip", "state": "inProgress", "path": None}
         time.sleep(0.1)
         started = time.monotonic()
         got = watcher.take(0.3)
@@ -1424,23 +1544,71 @@ def downloads_offline():
         started = time.monotonic()
         check("and a take after that neither waits for it nor takes it again",
               watcher.take(2) == [] and time.monotonic() - started < 0.5)
-        connection.events.append(progress("G3", "canceled"))
-        time.sleep(0.1)
+        heard.heard["G3"]["state"] = "canceled"
         got = watcher.take(0)
         check("it is taken again once it ends", got == [{"name": "big.zip", "state": "canceled", "path": None}], repr(got))
+        connection.events += [will_begin("G6", "late.csv"), page_progress("G6", "completed")]
+        time.sleep(0.1)
+        got = watcher.take(0.3)
+        check("one the tab says completed but the Folder has not yet heard of waits for it, as still downloading",
+              got == [{"name": "late.csv", "state": "inProgress", "path": None}], repr(got))
+        heard.heard["G6"] = {"frame": "T1", "name": "late.csv", "state": "completed", "path": "/d/School/late.csv"}
+        got = watcher.take(2)
+        check("and is taken with where it went once the Folder hears it",
+              got == [{"name": "late.csv", "state": "completed", "path": "/d/School/late.csv"}], repr(got))
+        saved_behind, downloads.BEHIND = downloads.BEHIND, 0.3
+        try:
+            connection.events += [will_begin("G8", "missed.zip"), page_progress("G8", "completed")]
+            time.sleep(0.1)
+            got = watcher.take(2)
+        finally:
+            downloads.BEHIND = saved_behind
+        check("one the Folder never heard, begun while it reconnected, is taken as completed after BEHIND, where to "
+              "unknown, not as downloading for good", got == [{"name": "missed.zip", "state": "completed", "path": None}],
+              repr(got))
     finally:
         watcher.stop()
-    connection = FakeDownloads([created("P1", "T1"), created("P2", "P1"), created("X1", "X0"),
-                                {"method": "Browser.downloadWillBegin", "params": {"guid": "G4", "frameId": "P2", "suggestedFilename": "popped.pdf"}},
-                                {"method": "Browser.downloadWillBegin", "params": {"guid": "G5", "frameId": "X1", "suggestedFilename": "theirs.pdf"}},
-                                progress("G4", "completed", "/d/popped.pdf"), progress("G5", "completed", "/d/theirs.pdf")])
-    watcher = downloads.Watcher("T1", lambda: connection)
+    workdir = tempfile.mkdtemp(prefix="browser-downloads-")
+    try:
+        with open(os.path.join(workdir, "unnamed.pdf"), "w") as handle:
+            handle.write("x")
+        heard = FakeFolder(workdir)
+        heard.heard["G9"] = {"frame": "T1", "name": "unnamed.pdf", "state": "completed", "path": None}
+        heard.heard["G10"] = {"frame": "T1", "name": "gone.pdf", "state": "completed", "path": None}
+        connection = FakeDownloads([will_begin("G9", "unnamed.pdf"), will_begin("G10", "gone.pdf")])
+        watcher = downloads.Watcher("T1", lambda: connection, lambda: heard)
+        watcher.start_listening()
+        try:
+            time.sleep(0.1)
+            got = watcher.take(2)
+        finally:
+            watcher.stop()
+        check("a download Chrome completed without naming its path is the Folder's file of that name, when it is there",
+              got == [{"name": "unnamed.pdf", "state": "completed", "path": os.path.join(workdir, "unnamed.pdf")},
+                      {"name": "gone.pdf", "state": "completed", "path": None}], repr(got))
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    heard = FakeFolder()
+    heard.heard["G4"] = {"frame": "P2", "name": "popped.pdf", "state": "completed", "path": "/d/School/popped.pdf"}
+    heard.heard["G5"] = {"frame": "X1", "name": "theirs.pdf", "state": "completed", "path": "/d/School/theirs.pdf"}
+    connection = FakeDownloads([created("P1", "T1"), created("P2", "P1"), created("X1", "X0")])
+    watcher = downloads.Watcher("T1", lambda: connection, lambda: heard)
     watcher.start_listening()
     try:
         time.sleep(0.1)
         got = watcher.take(2)
         check("a download begun in a page the tab opened, or one that page opened, is the tab's; another tab's popup's is not",
-              got == [{"name": "popped.pdf", "state": "completed", "path": "/d/popped.pdf"}], repr(got))
+              got == [{"name": "popped.pdf", "state": "completed", "path": "/d/School/popped.pdf"}], repr(got))
+    finally:
+        watcher.stop()
+    connection = FakeDownloads([will_begin("G7", "note.txt"), page_progress("G7", "completed")])
+    watcher = downloads.Watcher("T1", lambda: connection)
+    watcher.start_listening()
+    try:
+        time.sleep(0.1)
+        got = watcher.take(2)
+        check("with no Folder, a download the tab began is still taken once it completes, where to unknown",
+              got == [{"name": "note.txt", "state": "completed", "path": None}], repr(got))
     finally:
         watcher.stop()
 
@@ -1475,6 +1643,11 @@ def downloads_offline():
               is not None, report)
         check("and a later step's report says where one still downloading went",
               report.endswith("--- downloaded big.zip to /d/big.zip"), report)
+        report = text_of(steps.run(FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False)]),
+                                   7, [{"tool": "click", "uid": "1_1"}], called,
+                                   watcher=Taken([{"name": "note.txt", "state": "completed", "path": None}]))["content"])
+        check("one no Folder heard says it went where Chrome's own settings say",
+              report.endswith("--- downloaded note.txt, where Chrome's own download settings say"), report)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -2855,7 +3028,10 @@ def queue_live(profile, state):
         devtools.close()
     check("chrome-devtools-mcp lists the form tools a queue needs",
           {"take_snapshot", "fill", "fill_form", "click", "type_text", "press_key", "upload_file", "evaluate_script"} <= set(allowed))
-    tabs, workers = Tabs(state, cdp.Browser), Workers(workdir)
+    # The server's own way with the throwaway Chrome's downloads, so the queue's download checks show chrome-devtools-mcp
+    # leaves them in the profile's folder.
+    folder = live_folder(profile, os.path.join(workdir, "downloads"))
+    tabs, workers = Tabs(state, cdp.Browser), Workers(workdir, downloads_of=lambda profile: folder)
     root = os.path.join(workdir, "calls")
     httpd = serving(server.tab_tools(state, tabs, workers) + [server.queue_tool(state, tabs, workers, allowed, root)],
                     server.NAME)
@@ -2983,23 +3159,18 @@ def queue_live(profile, state):
         text, _ = call(httpd, "queue", session=session, tab=fetched, steps=[{"tool": "take_snapshot"}])
         text, is_error = call(httpd, "queue", session=session, tab=fetched, steps=[{"tool": "click", "uid": uid(text, "link", "Get it")}])
         went = re.search(r"^--- downloaded %s to (.+)$" % re.escape(name), text, re.M)
-        try:
-            check("a step that downloads a file says where it went, in the step's own report",
-                  not is_error and went is not None and open(went.group(1), encoding="utf-8").read() == "hello", text)
-        finally:
-            if went:
-                os.remove(went.group(1))  # the check's own file, in the real ~/Downloads, the throwaway Chrome's download folder
+        check("a step that downloads a file says where it went, in the step's own report: the profile's downloads "
+              "folder, though chrome-devtools-mcp drives the tab",
+              not is_error and went is not None and os.path.dirname(went.group(1)) == folder.folder
+              and open(went.group(1), encoding="utf-8").read() == "hello", text)
         popping = open_tab("<title>popup download scratch</title>"
                            "<a target=_blank href='data:application/octet-stream,hello popup'>Get it</a>")
         text, _ = call(httpd, "queue", session=session, tab=popping, steps=[{"tool": "take_snapshot"}])
         text, is_error = call(httpd, "queue", session=session, tab=popping, steps=[{"tool": "click", "uid": uid(text, "link", "Get it")}])
         went = re.search(r"^--- downloaded .+ to (.+)$", text, re.M)
-        try:
-            check("and so does one begun in a popup the step opened",
-                  not is_error and went is not None and open(went.group(1), encoding="utf-8").read() == "hello popup", text)
-        finally:
-            if went:
-                os.remove(went.group(1))
+        check("and so does one begun in a popup the step opened",
+              not is_error and went is not None and os.path.dirname(went.group(1)) == folder.folder
+              and open(went.group(1), encoding="utf-8").read() == "hello popup", text)
 
         path = os.path.join(workdir, "steps.json")
         with open(path, "w") as handle:
@@ -3180,8 +3351,145 @@ def queue_live(profile, state):
         for tab in opened:
             call(httpd, "tab_close", session=session, tabs=[tab])
         workers.stop_all()
+        folder.stop()
+        folder.join(5)
+        remove_strays("browserd-check-")
         httpd.shutdown()
         httpd.server_close()
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def remove_strays(*prefixes):
+    """Remove this run's files a failing download check left where Chrome's own settings save: the user's Downloads."""
+    real = os.path.expanduser(os.path.join("~", "Downloads"))
+    if system.NAME == "Windows":
+        from browser.system import windows
+        real = windows._known_folder("374DE290-123F-4565-9164-39C4925E467B", real)
+    with contextlib.suppress(OSError):
+        for name in os.listdir(real):
+            if name.startswith(prefixes) and str(os.getpid()) in name:
+                os.remove(os.path.join(real, name))
+
+
+def live_folder(profile, root):
+    """A downloads.Folder on a live profile's Chrome, as Chromes gives one, set before it is returned."""
+    folder = downloads.Folder(profile.name, os.path.join(root, profile.name), lambda: cdp.Browser(profile),
+                              lambda: cdp.owner(profile.folder) is not None)
+    folder.start()
+    folder.ready(10)
+    return folder
+
+
+class Attachments(http.server.BaseHTTPRequestHandler):
+    """/file/<name> is a download of that name; anything else, a page."""
+
+    def do_GET(self):
+        name = self.path.split("/file/", 1)[1] if self.path.startswith("/file/") else None
+        body = ("hello " + name).encode() if name else b"<title>downloads scratch</title><p>page"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream" if name else "text/html")
+        if name:
+            self.send_header("Content-Disposition", 'attachment; filename="%s"' % name)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def downloads_live(profile):
+    """A profile's downloads.Folder on the throwaway Chrome: every file a page begins at once saved, the folder set again
+    when its connection drops, and no Save As window for a profile that asks where to save each file."""
+    workdir = tempfile.mkdtemp(prefix="browser-downloads-live-")
+    files = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Attachments)
+    threading.Thread(target=files.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:%d" % files.server_address[1]
+    # As the server has it: Chromes finds the running Chrome and starts its Folder.
+    keeper = chromes.Chromes(workdir)
+    keeper.adopt([profile])
+    folder = keeper.downloads(profile)
+    browser = cdp.Browser(profile)
+    opened = []
+
+    def begin(*names):
+        """Open a page, begin a download of each name from it at once, and return which of them the folder holds."""
+        target = browser.call("Target.createTarget", url=base + "/", background=True)["targetId"]
+        opened.append(target)
+        session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and browser.call("Runtime.evaluate", session, expression="document.readyState")[
+                "result"].get("value") != "complete":
+            time.sleep(0.1)
+        browser.call("Runtime.evaluate", session, expression="""for (const name of %s) {
+            const link = document.createElement('a'); link.href = '/file/' + name; link.download = name;
+            document.body.append(link); link.click(); }""" % json.dumps(names))
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            held = [name for name in names if os.path.exists(os.path.join(folder.folder, name))]
+            if len(held) == len(names):
+                break
+            time.sleep(0.2)
+        return held
+
+    try:
+        check("Chromes.adopt starts a Folder for a Chrome already running, set before it returns, in "
+              "downloads/<profile>", folder is not None and folder.ready(0) and folder.alive()
+              and folder.folder == os.path.join(workdir, profile.name), repr(folder and folder.folder))
+        names = ["browserd-many-%d-%d.txt" % (os.getpid(), n) for n in range(3)]
+        held = begin(*names)
+        check("every file a page begins at once is saved in the profile's folder, with no \"download multiple files\" "
+              "prompt holding back all but the first", held == names, repr(held))
+        folder._browser.close()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and folder.ready(0):
+            time.sleep(0.05)  # until it hears its connection dropped
+        again = folder.ready(5)
+        name = "browserd-again-%d.txt" % os.getpid()
+        held = begin(name)
+        check("when the Folder's connection drops, it sets the folder again, and downloads still go there",
+              again and held == [name], repr(held))
+
+        # A profile whose Chrome asks where to save each file: Chrome quit, the preference set, and Chrome started again.
+        browser.close()
+        chromes.quit_chrome(profile)
+        folder.join(5)
+        check("the Folder ends once its Chrome has quit", not folder.is_alive())
+        preferences = os.path.join(profile.folder, cdp.PROFILE, "Preferences")
+        with open(preferences, encoding="utf-8") as handle:
+            chosen = json.load(handle)
+        chosen.setdefault("download", {})["prompt_for_download"] = True
+        with open(preferences, "w", encoding="utf-8") as handle:
+            json.dump(chosen, handle)
+        launch.launch(profile)
+        browser = cdp.Browser(profile)
+        # Asked of Chrome's own settings page, so the check below is of a Chrome that really asks where to save.
+        settings = browser.call("Target.createTarget", url="chrome://settings/downloads", background=True)["targetId"]
+        opened.append(settings)
+        session = browser.call("Target.attachToTarget", targetId=settings, flatten=True)["sessionId"]
+        asks, deadline = None, time.monotonic() + 10
+        while asks is None and time.monotonic() < deadline:
+            answer = browser.call("Runtime.evaluate", session, awaitPromise=True, returnByValue=True, expression=(
+                "new Promise(done => chrome.settingsPrivate ? chrome.settingsPrivate.getPref("
+                "'download.prompt_for_download', pref => done(pref.value)) : done(null))"))
+            asks = answer.get("result", {}).get("value")
+            time.sleep(0.2)
+        check("the throwaway Chrome, started again, asks where to save each file", asks is True, repr(asks))
+        folder = live_folder(profile, workdir)
+        name = "browserd-asked-%d.txt" % os.getpid()
+        held = begin(name)
+        check("a profile set to ask where to save each file saves in its folder with no Save As window", held == [name],
+              repr(held))
+    finally:
+        for target in opened:
+            with contextlib.suppress(cdp.CdpError, WebSocketError, OSError):
+                browser.call("Target.closeTarget", targetId=target)
+        browser.close()
+        folder.stop()
+        folder.join(5)
+        remove_strays("browserd-many-", "browserd-again-", "browserd-asked-")
+        files.shutdown()
+        files.server_close()
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -3235,6 +3543,8 @@ if __name__ == "__main__":
                 live(profile, state)
                 print()
                 queue_live(profile, state)
+                print()
+                downloads_live(profile)  # last: it sets the throwaway profile to ask where to save each file
             finally:
                 state.close()
                 shutil.rmtree(workdir, ignore_errors=True)

@@ -30,7 +30,7 @@ def returned(text):
 class Worker:
     """One tab's chrome-devtools-mcp and page id. Hold `lock` for anything that uses them."""
 
-    def __init__(self, tab, target_id, profile, log_dir, connect=None, carried=False):
+    def __init__(self, tab, target_id, profile, log_dir, connect=None, carried=False, downloads_of=None):
         """
         Args:
             tab (str): the tab id, used in messages and the log name.
@@ -41,6 +41,8 @@ class Worker:
                 stand-in.
             carried (bool): the tab is older than this server, so an earlier server's process may have given out uids
                 that are gone.
+            downloads_of (callable | None): a profile's downloads.Folder, or None, as Chromes.downloads gives it;
+                without it the tab's downloads are heard with no Folder to say where they went.
         """
         self.tab = tab
         self.target_id = target_id
@@ -48,6 +50,7 @@ class Worker:
         self.lock = threading.Lock()
         self._log_dir = log_dir
         self.connect = connect or (lambda: cdp.Browser(profile))
+        self._downloads_of = downloads_of or (lambda profile: None)
         self._devtools = None
         self._carried = carried
         self.page_id = None
@@ -91,7 +94,7 @@ class Worker:
     def _listen(self):
         """Hear the tab's downloads, starting a Watcher again if the last one ended, as one that lost the tab does."""
         if self.watcher is None or not self.watcher.is_alive():
-            self.watcher = downloads.Watcher(self.target_id, self.connect)
+            self.watcher = downloads.Watcher(self.target_id, self.connect, lambda: self._downloads_of(self.profile))
             self.watcher.start_listening()
 
     def _pair(self, devtools):
@@ -158,14 +161,16 @@ class Worker:
 class Workers:
     """Every tab's Worker, made on the tab's first queue and stopped when the tab closes."""
 
-    def __init__(self, log_dir, connect=None):
+    def __init__(self, log_dir, connect=None, downloads_of=None):
         """
         Args:
             log_dir (str): where each Worker's devtools-<tab>.log goes.
             connect (callable | None): passed to each Worker.
+            downloads_of (callable | None): passed to each Worker.
         """
         self._log_dir = log_dir
         self._connect = connect
+        self._downloads_of = downloads_of
         self._lock = threading.Lock()
         self._workers = {}
         self.started = time.time()
@@ -183,7 +188,8 @@ class Workers:
             worker = self._workers.get(tab)
             if worker is None:
                 carried = made is not None and made < self.started
-                worker = self._workers[tab] = Worker(tab, target_id, profile, self._log_dir, self._connect, carried)
+                worker = self._workers[tab] = Worker(tab, target_id, profile, self._log_dir, self._connect, carried,
+                                                     self._downloads_of)
             return worker
 
     def drop(self, tab):

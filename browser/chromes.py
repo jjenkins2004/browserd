@@ -1,16 +1,18 @@
-"""Each profile's Chrome: started on its first use, kept off the user's focus, and quit from the page or when the
-server stops.
+"""Each profile's Chrome: started on its first use, kept off the user's focus, its downloads saved in a folder of its
+own, and quit from the page or when the server stops.
 
 README.md, "Core Abstractions & Shared Pieces", has the contract.
 """
 
+import os
 import threading
 import time
 
-from . import cdp, focus, launch, mcp, paths, system
+from . import cdp, downloads, focus, launch, mcp, paths, system
 from .ws import WebSocketError
 
 QUIT_WAIT = 15.0  # seconds quit_chrome waits for a Chrome to exit after Browser.close
+LOOK_AGAIN = 5.0  # seconds before downloads asks again whether a Chrome with no Folder runs
 
 
 def quit_chrome(profile):
@@ -45,10 +47,18 @@ def _give_focus_back(profile):
 
 
 class Chromes:
-    def __init__(self):
+    def __init__(self, downloads_root=None):
+        """
+        Args:
+            downloads_root (str | None): the folder holding each profile's downloads folder, <root>/<profile name>;
+                None leaves every Chrome's downloads where its own settings say, as a check's may.
+        """
         self._lock = threading.Lock()
         self._starting = {}  # folder -> the lock that lets one first use start that Chrome
         self._keepers = {}  # folder -> the thread giving the focus back from that Chrome
+        self._folders = {}  # folder -> that Chrome's downloads.Folder
+        self._looked = {}  # folder -> when downloads last asked the OS whether that Chrome, with no Folder, runs
+        self._downloads_root = downloads_root
         self._stopping = False  # set by quit_all; no Chrome starts after it
 
     def _start_lock(self, folder):
@@ -56,11 +66,13 @@ class Chromes:
             return self._starting.setdefault(folder, threading.Lock())
 
     def ensure(self, profile):
-        """Start a profile's Chrome unless it is up, and keep giving the focus back from it.
+        """Start a profile's Chrome unless it is up, keep giving the focus back from it, and keep its downloads in the
+        profile's folder: a new Folder is waited on up to downloads.READY_WAIT, so a tab handed out after is saved there.
 
         Args:
             profile (Profile): whose Chrome.
         """
+        made = None
         with self._start_lock(profile.folder):
             if self._stopping:
                 raise cdp.CdpError("browserd is stopping, so the %s Chrome is not started" % profile.name)
@@ -74,19 +86,47 @@ class Chromes:
             if not was_up:
                 mcp.log("the %s Chrome: %s" % (profile.name, said))
             self._keep_focus(profile)
+            made = self._keep_downloads(profile)
+        if made is not None:  # waited on outside the start lock, so no other tab_open waits behind it
+            self._settle(made)
 
     def adopt(self, profiles):
-        """Keep giving the focus back from every profile's Chrome already running as the server starts.
+        """Keep giving the focus back from every profile's Chrome already running as the server starts, and save its
+        downloads in its folder again: the setting went with the last server's connection.
 
         Args:
             profiles (list[Profile]): every profile in state.db; one whose Chrome is down is skipped.
         """
+        made = []
         for profile in profiles:
             try:
                 if cdp.owner(profile.folder) is not None:
                     self._keep_focus(profile)
+                    made.append(self._keep_downloads(profile))
             except cdp.CdpError as exc:
                 mcp.log("could not check whether the %s Chrome is running: %s" % (profile.name, exc))
+        for folder in made:  # every Folder started first, so they are waited on together
+            if folder is not None:
+                self._settle(folder)
+
+    def downloads(self, profile):
+        """The downloads.Folder of a profile's Chrome, or None while it has none running. One whose Chrome runs with no
+        Folder, as when adopt could not check it, gets one here, not waited on: a tab carried over from an earlier
+        server may be driven by queues alone, which never ask ensure."""
+        with self._lock:
+            folder = self._folders.get(profile.folder)
+            if folder is not None and folder.alive():
+                return folder
+            if self._downloads_root is None or time.monotonic() - self._looked.get(profile.folder, -LOOK_AGAIN) < LOOK_AGAIN:
+                return None
+            self._looked[profile.folder] = time.monotonic()  # asking the OS whether that Chrome runs is not cheap
+        try:
+            if cdp.owner(profile.folder) is None:
+                return None
+        except cdp.CdpError:
+            return None
+        self._keep_downloads(profile)
+        return self.downloads(profile)
 
     def window(self, profile):
         """Bring a profile's Chrome to the front, starting it if it is down and opening a blank window when it
@@ -146,6 +186,28 @@ class Chromes:
             # A keeper whose Chrome quit has ended; the Chrome started again gets a new one.
             keeper = self._keepers[profile.folder] = threading.Thread(target=_give_focus_back, args=(profile,), daemon=True)
             keeper.start()
+
+    def _keep_downloads(self, profile):
+        """Start a Folder that saves the Chrome's downloads in the profile's folder unless one runs, and return it when
+        this started it, for the caller to _settle; None otherwise."""
+        if self._downloads_root is None:
+            return None
+        with self._lock:
+            folder = self._folders.get(profile.folder)
+            if folder is not None and folder.alive():
+                return None
+            # One whose Chrome quit has ended, or is ending; the Chrome started again gets a new one.
+            folder = self._folders[profile.folder] = downloads.Folder(
+                profile.name, os.path.join(self._downloads_root, profile.name), lambda: cdp.Browser(profile),
+                lambda: cdp.owner(profile.folder) is not None, lambda: self._stopping)
+            folder.start()
+            return folder
+
+    def _settle(self, folder):
+        """Wait for a new Folder's setting to take, up to downloads.READY_WAIT, saying so when it has not."""
+        if not folder.ready():
+            mcp.log("the %s Chrome's downloads are not yet set to go to %s; its Folder keeps trying"
+                    % (folder.name, folder.folder))
 
     def _stop_started(self, profile):
         """Stop a Chrome this start launched but never saw answer, so the next start begins afresh rather than refusing it

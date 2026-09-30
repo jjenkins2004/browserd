@@ -26,6 +26,7 @@ NAME = "browserd"
 ROOT = paths.ROOT
 RUN = paths.RUN
 CALLS = os.path.join(RUN, "calls")
+DOWNLOADS = os.path.join(RUN, "downloads")  # each profile's downloads folder, downloads/<profile>
 PID_FILE = os.path.join(RUN, "server.pid")
 LOG_FILE = os.path.join(RUN, "server.log")
 STATE_FILE = os.path.join(RUN, "state.db")
@@ -100,7 +101,7 @@ again."""
 
 
 def tab_tools(state, tabs, workers, queue=None):
-    """The session_start, tab_open, tab_list, tab_show, tab_close and tab_needs_input tools.
+    """The session_start, tab_open, tab_list, tab_close and tab_needs_input tools.
 
     Args:
         state (State): the profiles, sessions and tabs.
@@ -156,10 +157,6 @@ def tab_tools(state, tabs, workers, queue=None):
                          % outside)
         return "\n".join(lines)
 
-    def tab_show(session, arguments):
-        tab = _text(arguments, "tab")
-        return _line(tab, tabs.show(session, tab))
-
     def tab_close(session, arguments):
         wanted = arguments.get("tabs")
         if not isinstance(wanted, list) or not wanted or not all(isinstance(tab, str) and tab for tab in wanted):
@@ -211,9 +208,6 @@ def tab_tools(state, tabs, workers, queue=None):
                                            "loading, as queue's steps argument takes them, like "
                                            "[{\"tool\": \"take_snapshot\"}] to read it in this call; the reply is "
                                            "its tab id, title and URL, then the queue's report"}
-    by_tab = {"type": "object", "required": ["session", "tab"], "additionalProperties": False,
-              "properties": {"session": session_argument,
-                             "tab": {"type": "string", "description": "a tab id from tab_open or tab_list"}}}
     return [
         {"name": "session_start", "run": _refusing(session_start),
          "description": SESSION_HELP % (sessions.PAUSE_AFTER // 60),
@@ -235,10 +229,6 @@ def tab_tools(state, tabs, workers, queue=None):
                         "popup, a target=_blank link) is your session's too, and gets its id here.",
          "inputSchema": {"type": "object", "required": ["session"], "additionalProperties": False,
                          "properties": {"session": session_argument}}},
-        {"name": "tab_show", "run": _refusing(_in_session(state, tab_show)),
-         "description": "Bring a tab of your session to the front of its Chrome and that Chrome to the front of the "
-                        "screen; return its tab id, title and URL.",
-         "inputSchema": by_tab},
         {"name": "tab_close", "run": _refusing(_in_session(state, tab_close)),
          "description": "Close tabs of your session by their tab ids, every one you name in this one call: to close "
                         "several, list them all in one tab_close, never one call per tab.",
@@ -504,8 +494,8 @@ def _allowed_tools():
 
 def serve():
     os.makedirs(RUN, exist_ok=True)
-    state, chromes = State(STATE_FILE), Chromes()
-    tabs, workers = Tabs(state, cdp.Browser, chromes.ensure), Workers(RUN)
+    state, chromes = State(STATE_FILE), Chromes(DOWNLOADS)
+    tabs, workers = Tabs(state, cdp.Browser, chromes.ensure), Workers(RUN, downloads_of=chromes.downloads)
     allowed = _allowed_tools()
     tools = tab_tools(state, tabs, workers, queue_steps(state, tabs, workers, allowed)) + [
         queue_tool(state, tabs, workers, allowed)] + profile_tools(state, chromes, tabs, workers, (PORT, page.PORT))
