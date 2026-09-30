@@ -19,10 +19,13 @@ PACKAGE = os.path.join(ROOT, "node_modules", "chrome-devtools-mcp", "build", "sr
 # The file tools (upload, screenshots to a path) may only touch these and the temporary folder, which chrome-devtools-mcp
 # always adds. ROOT holds the record folders a queue saves screenshots in, wherever this project sits.
 FILE_ROOTS = [DESKTOP, ROOT, *system.EXTRA_ROOTS]
-# The same, as the queue's description and its refusals name them.
+# The same, as the queue's description names them: its length may not hang on how long the user's paths are, since
+# Claude Code cuts a description at about 2,000 characters. A refusal names them in full, as ROOTS_SPELLED.
 ROOTS_TEXT = ("~/Desktop, /tmp, $TMPDIR or browserd's folder" if system.NAME == "macOS" else
-              "your Desktop (%s), the temporary folder (%s) or browserd's folder (%s)"
-              % (DESKTOP, tempfile.gettempdir(), ROOT))
+              "your Desktop, the temporary folder (%TEMP%) or browserd's folder")
+ROOTS_SPELLED = (ROOTS_TEXT if system.NAME == "macOS" else
+                 "your Desktop (%s), the temporary folder (%s) or browserd's folder (%s)"
+                 % (DESKTOP, tempfile.gettempdir(), ROOT))
 FLAGS = [
     "--no-usage-statistics", "--no-performance-crux",
     "--no-category-performance", "--no-category-network", "--no-category-emulation",

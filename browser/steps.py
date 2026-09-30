@@ -11,7 +11,7 @@ import time
 import urllib.parse
 
 from . import cdp, checked, dialogs, pointer, screenshot, system
-from .devtools import ROOTS_TEXT, may_touch
+from .devtools import ROOTS_SPELLED, may_touch
 
 # Tab tools own opening, closing and choosing tabs, and the rest profile a page, which a queue only reads and drives.
 PAGE_TOOLS = {"new_page", "close_page", "select_page", "list_pages"}
@@ -289,7 +289,7 @@ def _arguments_problem(step, tool):
     for path in [given["filePath"]] if "filePath" in given else given.get("filePaths", []):
         # The server's own folder is browserd's, so a relative or ~ path would land there, not where it reads.
         if "\0" in path or not os.path.isabs(path) or not may_touch(path):
-            return "%s cannot use %s: file paths must be absolute, without ~, and inside %s" % (name, path, ROOTS_TEXT)
+            return "%s cannot use %s: file paths must be absolute, without ~, and inside %s" % (name, path, ROOTS_SPELLED)
     return None
 
 
