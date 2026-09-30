@@ -6,11 +6,10 @@
 import contextlib
 import os
 import shutil
-import signal
 import socket
 import tempfile
 
-from browser import cdp, chromes, launch
+from browser import cdp, chromes, launch, system
 from browser.profiles import Profile
 
 
@@ -19,7 +18,9 @@ def chrome():
     if not os.path.exists(cdp.CHROME):
         yield None
         return
-    folder = tempfile.mkdtemp(prefix="Chrome-Check-")
+    # One spelling of the folder, long and resolved, as a profile's folder always is: Chrome on Windows knows its
+    # folder by the spelling it was given.
+    folder = os.path.realpath(tempfile.mkdtemp(prefix="Chrome-Check-"))
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -32,5 +33,5 @@ def chrome():
         if pid is not None:
             chromes.quit_chrome(profile)
             if cdp.owner(folder) is not None:
-                os.kill(pid, signal.SIGTERM)  # quit_chrome could not reach it, as when it never opened its port
+                system.kill_chrome(pid)  # quit_chrome could not reach it, as when it never opened its port
         shutil.rmtree(folder, ignore_errors=True)

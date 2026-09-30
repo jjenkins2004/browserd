@@ -9,7 +9,7 @@ import threading
 import time
 import urllib.parse
 
-from . import cdp, focus
+from . import cdp, focus, system
 from .state import Tab
 from .ws import WebSocketError
 
@@ -217,7 +217,7 @@ class Tabs:
         browser = self._connect(profile)
         try:
             self._keep_window(browser)
-            # background keeps Chrome from taking the Mac's focus; README.md, "Agent Gotchas".
+            # background keeps Chrome from taking the user's focus; README.md, "Agent Gotchas".
             target = browser.call("Target.createTarget", url="about:blank", background=True)["targetId"]
             with self._lock:
                 # A listing between createTarget and here gave the page a tab of no session's; this session takes it.
@@ -278,8 +278,8 @@ class Tabs:
             info = browser.call("Target.getTargetInfo", targetId=target)["targetInfo"]
             # activateTarget alone does not raise a Chrome never yet in front; README.md, "Agent Gotchas".
             if not focus.bring(browser.pid):
-                raise cdp.CdpError("tab %s is picked in the %s Chrome, but macOS did not bring that Chrome to the front"
-                                   % (tab, browser.profile.name))
+                raise cdp.CdpError("tab %s is picked in the %s Chrome, but %s did not bring that Chrome to the front"
+                                   % (tab, browser.profile.name, system.NAME))
             return info
         finally:
             browser.close()

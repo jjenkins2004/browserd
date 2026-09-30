@@ -2,28 +2,25 @@
 Open Chrome."""
 
 import os
-import subprocess
 import time
 
-from . import cdp
+from . import cdp, system
+
+IN_USE = 21  # chrome.exe's exit code when another Chrome holds the folder under another spelling of it
 
 
 def _open(profile):
-    # -n starts a Chrome of its own, even beside one already open on another folder. -g and no startup window keep
-    # the Mac's focus where it is; README.md, "Agent Gotchas".
-    done = subprocess.run(
-        [
-            "/usr/bin/open", "-gna", cdp.APP, "--args",
+    """Start the profile's Chrome off the user's focus, with no window: README.md, "Agent Gotchas". The Popen of it, or
+    None where the OS hands Chrome off (macOS's open)."""
+    try:
+        return system.launch_chrome([
             "--remote-debugging-port=%d" % profile.port,
             "--user-data-dir=%s" % profile.folder,
             "--profile-directory=%s" % cdp.PROFILE,
             "--no-first-run", "--no-default-browser-check", "--no-startup-window", cdp.INPUT_FLAG,
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if done.returncode != 0:
-        raise cdp.CdpError("could not start Chrome: %s" % (done.stderr.strip() or "open exited %d" % done.returncode))
+        ])
+    except system.Unanswered as exc:
+        raise cdp.CdpError(str(exc))
 
 
 def launch(profile, wait=15.0):
@@ -44,16 +41,22 @@ def launch(profile, wait=15.0):
         # profile's Chrome with its port and cdp.INPUT_FLAG, or require says what it is instead.
         cdp.require(profile)
         return "already running: %s" % profile.endpoint
-    _open(profile)
+    started = _open(profile)
     deadline = time.time() + wait
     while True:
         try:
             cdp.require(profile)
             return "running: %s" % profile.endpoint
         except cdp.CdpError as exc:
+            # A Chrome of its own exits at once when it cannot be one: 0 once it has handed its launch to a Chrome
+            # already on the folder (which require then names), IN_USE when that Chrome was given the folder spelled
+            # another way.
+            if started is not None and started.poll() == IN_USE:
+                raise cdp.CdpError("Chrome would not start on %s: another Chrome has that folder open, given it "
+                                   "spelled another way. Quit that Chrome" % profile.folder)
             if time.time() > deadline:
                 raise cdp.CdpError(
                     "Chrome was started with port %d, but it did not answer within %gs (%s). If a Chrome "
-                    "started (it has a Dock icon, and no window), quit it fully and try again" % (profile.port, wait, exc)
+                    "started (it has no window yet), quit it fully and try again" % (profile.port, wait, exc)
                 )
         time.sleep(0.25)

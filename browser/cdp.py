@@ -8,19 +8,19 @@ endpoint, as profiles.Profile has.
 import http.client
 import json
 import os
-import re
-import subprocess
 import time
 import urllib.error
 import urllib.request
 
+from . import system
 from .ws import Timeout, WebSocket
 
-APP = "/Applications/Google Chrome.app"
-CHROME = APP + "/Contents/MacOS/Google Chrome"
+CHROME = system.CHROME
 PROFILE = "Default"  # the one Chrome profile in every profile's folder
 # Lets key presses and clicks reach a page before it first draws; README.md, "Agent Gotchas", says why.
 INPUT_FLAG = "--allow-pre-commit-input"
+# Every address asked here is 127.0.0.1, which a proxy the OS is set to use must never see.
+LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 CALL_WAIT = 20.0  # seconds a command waits for its answer
@@ -38,20 +38,18 @@ class NotRunning(CdpError):
     """A profile's Chrome that is not running at all."""
 
 
-def _run(*command):
+def _asked(ask, *args):
+    """What the OS answers, with its failure to answer a CdpError: a process list that could not be read is never
+    read as an empty one."""
     try:
-        done = subprocess.run(command, capture_output=True, text=True, errors="replace", timeout=10)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise CdpError("could not run %s to check which Chrome holds a port (%s)" % (command[0], exc))
-    # A blocked lsof exits the way "nothing found" does; only stderr tells them apart.
-    if done.stderr.strip():
-        raise CdpError("could not run %s to check which Chrome holds a port (%s)" % (command[0], done.stderr.strip()))
-    return done.stdout
+        return ask(*args)
+    except system.Unanswered as exc:
+        raise CdpError(str(exc))
 
 
 def _get(profile, path):
     try:
-        with urllib.request.urlopen(profile.endpoint + path, timeout=5) as response:
+        with LOCAL.open(profile.endpoint + path, timeout=5) as response:
             return json.loads(response.read())
     except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
         raise CdpError("the %s Chrome holds port %d, but DevTools did not answer %s (%s)"
@@ -60,16 +58,24 @@ def _get(profile, path):
 
 def command(pid):
     """The command line pid was started with, or "" once it has exited."""
-    return _run("/bin/ps", "-ww", "-o", "command=", "-p", str(pid)).strip()
+    return _asked(system.command, pid)
+
+
+def _shown(pid):
+    """pid's command line for an error message, which one that cannot be read must not stop."""
+    try:
+        return command(pid)[:200] or "(it has exited)"
+    except CdpError as exc:
+        return "(%s)" % exc
 
 
 def listener(port):
     """The pid listening on a port, or None."""
-    pids = sorted(set(_run("/usr/sbin/lsof", "-w", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN", "-t").split()), key=int)
+    pids = _asked(system.listeners, port)
     if len(pids) > 1:
         raise CdpError("port %d is held by more than one process (pids %s), so which one answers cannot be told. "
-                       "Quit all but the profile's Chrome" % (port, ", ".join(pids)))
-    return int(pids[0]) if pids else None
+                       "Quit all but the profile's Chrome" % (port, ", ".join(map(str, pids))))
+    return pids[0] if pids else None
 
 
 def owner(folder):
@@ -78,12 +84,7 @@ def owner(folder):
     Args:
         folder (str): the Chrome's --user-data-dir.
     """
-    try:
-        pid = int(os.readlink(os.path.join(folder, "SingletonLock")).rpartition("-")[2])
-    except (OSError, ValueError):
-        return None
-    # A lock left by a crash can name a pid since reused by something else.
-    return pid if (command(pid) + " ").startswith(CHROME + " ") else None
+    return _asked(system.chrome_owner, folder)
 
 
 def port_of(pid):
@@ -92,8 +93,8 @@ def port_of(pid):
     Args:
         pid (int): the Chrome's pid, as owner gives it.
     """
-    found = re.search(r" --remote-debugging-port=(\d+) ", " %s " % command(pid))
-    return int(found.group(1)) if found else None
+    port = _asked(system.switches, pid).get("remote-debugging-port", "")
+    return int(port) if port.isdigit() else None
 
 
 def check_folder(folder):
@@ -104,7 +105,7 @@ def check_folder(folder):
     """
     path = os.path.join(folder, "Local State")
     try:
-        with open(path) as handle:
+        with open(path, encoding="utf-8") as handle:
             # A new folder's Chrome lists no Chrome profile until its first tab loads one.
             names = sorted(json.load(handle).get("profile", {}).get("info_cache", {}))
     except (OSError, ValueError, AttributeError, TypeError) as exc:
@@ -131,22 +132,21 @@ def require(profile):
     if pid is None:
         raise CdpError(
             "the %s Chrome is running (pid %d) without DevTools on port %d. If it was started seconds ago, wait "
-            "and try again; otherwise Chrome only reads the port at startup, so quit it with kill %d (Cmd+Q quits "
-            "whichever Chrome is in front), and the next tab_open or Open Chrome starts it with its port"
-            % (profile.name, running, profile.port, running)
+            "and try again; otherwise Chrome only reads the port at startup, so quit it with %s, and the next "
+            "tab_open or Open Chrome starts it with its port" % (profile.name, running, profile.port, system.quit_hint(running))
         )
     if pid != running:
         raise CdpError(
             "port %d is held by pid %d, which is not the %s Chrome (%s):\n  %s\n"
             "Quit that; the next tab_open or Open Chrome starts the %s Chrome"
             % (profile.port, pid, profile.name, "that is pid %d" % running if running else "it is not running",
-               command(pid)[:200] or "(it has exited)", profile.name)
+               _shown(pid), profile.name)
         )
-    if INPUT_FLAG not in command(running).split():
+    if INPUT_FLAG[2:] not in _asked(system.switches, running):
         raise CdpError(
             "the %s Chrome running now (pid %d) was started without %s, so a tab that loads in the background drops "
-            "every key press and click. Quit it with kill %d (Cmd+Q quits whichever Chrome is in front); the next "
-            "tab_open or Open Chrome starts it with the flag" % (profile.name, running, INPUT_FLAG, running)
+            "every key press and click. Quit it with %s; the next tab_open or Open Chrome starts it with the flag"
+            % (profile.name, running, INPUT_FLAG, system.quit_hint(running))
         )
     try:
         check_folder(profile.folder)
@@ -170,7 +170,8 @@ class Browser:
         self._ws = WebSocket(require(profile)["webSocketDebuggerUrl"], CALL_WAIT)
         self._last = 0
         self._events = []
-        # lsof sees only this user's processes, so the browser that answered says which process it is.
+        # The OS may not show every process's port (lsof sees only this user's), so the browser that answered says which
+        # process it is.
         answered = [p["id"] for p in self.call("SystemInfo.getProcessInfo")["processInfo"] if p.get("type") == "browser"]
         if answered != [owner(profile.folder)]:
             self.close()

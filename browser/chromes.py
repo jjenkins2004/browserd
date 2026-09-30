@@ -1,14 +1,12 @@
-"""Each profile's Chrome: started on its first use, kept off the Mac's focus, and quit when the server stops.
+"""Each profile's Chrome: started on its first use, kept off the user's focus, and quit when the server stops.
 
 README.md, "Core Abstractions & Shared Pieces", has the contract.
 """
 
-import os
-import signal
 import threading
 import time
 
-from . import cdp, focus, launch, mcp
+from . import cdp, focus, launch, mcp, system
 from .ws import WebSocketError
 
 QUIT_WAIT = 15.0  # seconds quit_chrome waits for a Chrome to exit after Browser.close
@@ -42,14 +40,14 @@ def _give_focus_back(profile):
         for line in focus.keep(cdp.Browser(profile)):
             mcp.log("the %s Chrome: %s" % (profile.name, line))
     except (cdp.CdpError, WebSocketError, OSError) as exc:
-        mcp.log("stopped giving the Mac's focus back from the %s Chrome: %s" % (profile.name, exc))
+        mcp.log("stopped giving the focus back from the %s Chrome: %s" % (profile.name, exc))
 
 
 class Chromes:
     def __init__(self):
         self._lock = threading.Lock()
         self._starting = {}  # folder -> the lock that lets one first use start that Chrome
-        self._keepers = {}  # folder -> the thread giving the Mac's focus back from that Chrome
+        self._keepers = {}  # folder -> the thread giving the focus back from that Chrome
         self._stopping = False  # set by quit_all; no Chrome starts after it
 
     def _start_lock(self, folder):
@@ -57,7 +55,7 @@ class Chromes:
             return self._starting.setdefault(folder, threading.Lock())
 
     def ensure(self, profile):
-        """Start a profile's Chrome unless it is up, and keep giving the Mac's focus back from it.
+        """Start a profile's Chrome unless it is up, and keep giving the focus back from it.
 
         Args:
             profile (Profile): whose Chrome.
@@ -77,7 +75,7 @@ class Chromes:
             self._keep_focus(profile)
 
     def adopt(self, profiles):
-        """Keep giving the Mac's focus back from every profile's Chrome already running as the server starts.
+        """Keep giving the focus back from every profile's Chrome already running as the server starts.
 
         Args:
             profiles (list[Profile]): every profile in state.db; one whose Chrome is down is skipped.
@@ -90,7 +88,7 @@ class Chromes:
                 mcp.log("could not check whether the %s Chrome is running: %s" % (profile.name, exc))
 
     def window(self, profile, url):
-        """Start a profile's Chrome if it is down, and open a window in front of the Mac at url.
+        """Start a profile's Chrome if it is down, and open a window in front at url.
 
         Args:
             profile (Profile): whose Chrome.
@@ -101,7 +99,8 @@ class Chromes:
         try:
             browser.call("Target.createTarget", url=url or "about:blank", newWindow=True)
             if not focus.bring(browser.pid):
-                raise cdp.CdpError("the %s Chrome opened a window, but macOS did not bring it to the front" % profile.name)
+                raise cdp.CdpError("the %s Chrome opened a window, but %s did not bring it to the front"
+                                   % (profile.name, system.NAME))
         finally:
             browser.close()
 
@@ -139,7 +138,4 @@ class Chromes:
             return
         if pid is not None:
             mcp.log("stopping the %s Chrome this start launched (pid %d)" % (profile.name, pid))
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass  # it exited since owner saw it
+            system.kill_chrome(pid)
