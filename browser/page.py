@@ -10,7 +10,7 @@ import os
 import secrets
 import sys
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from typing import cast
 
 from . import cdp, mcp, profiles, sessions
@@ -32,7 +32,7 @@ class Refused(Exception):
     """A button's request the page cannot carry out, in words for the page."""
 
 
-class Page(ThreadingHTTPServer):
+class Page(mcp.Exclusive):
     daemon_threads = True
 
     def __init__(self, host, port, state, reserved, chromes, tabs, workers):
@@ -162,7 +162,7 @@ def _running(profile):
     try:
         return cdp.owner(profile.folder)
     except cdp.CdpError:
-        return None  # ps could not run; the page's next poll asks again
+        return None  # the OS could not say; the page's next poll asks again
 
 
 class Handler(BaseHTTPRequestHandler):

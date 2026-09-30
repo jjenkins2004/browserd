@@ -10,7 +10,7 @@ import sqlite3
 import threading
 import time
 
-from . import cdp, guard, mcp, page, record, sessions, steps
+from . import cdp, devtools, guard, mcp, page, record, sessions, steps, system
 from .chromes import Chromes
 from .devtools import Devtools
 from .state import Session, State
@@ -200,7 +200,7 @@ def tab_tools(state, tabs, workers, queue=None):
         {"name": "tab_open", "run": _refusing(_in_session(state, tab_open)),
          "description": "Open a URL in a new background tab of your session's profile's Chrome, starting that Chrome "
                         "first if it is not running; wait for the tab to load (up to about 30s), and return its tab "
-                        "id, title and URL; a page still loading is returned as it is. The Mac's focus does not move."
+                        "id, title and URL; a page still loading is returned as it is. The user's focus does not move."
                         + (" Given steps, it then runs them on the new tab in this same call, as queue would."
                            if queue else ""),
          "inputSchema": {"type": "object", "required": ["session", "url"], "additionalProperties": False,
@@ -212,7 +212,7 @@ def tab_tools(state, tabs, workers, queue=None):
                          "properties": {"session": session_argument}}},
         {"name": "tab_show", "run": _refusing(_in_session(state, tab_show)),
          "description": "Bring a tab of your session to the front of its Chrome and that Chrome to the front of the "
-                        "Mac; return its tab id, title and URL.",
+                        "screen; return its tab id, title and URL.",
          "inputSchema": by_tab},
         {"name": "tab_close", "run": _refusing(_in_session(state, tab_close)),
          "description": "Close tabs of your session by their tab ids, every one you name in this one call: to close "
@@ -244,9 +244,9 @@ them.
 
 The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A failure makes the result an error, names
 the steps not run, and ends with a view of the page now. A step's reply over %d characters is cut and saved whole in
-the tab's record folder, %s/<profile>/<session>-<label>/<tab>/, which keeps every call and screenshot. A screenshot of
+the tab's record folder, %s, which keeps every call and screenshot. A screenshot of
 the viewport also comes back to you as an image. A step's file paths (filePath, filePaths) must be absolute and inside
-~/Desktop, /tmp, $TMPDIR or browserd's folder. After %gs a queue starts no more steps, and names the steps not run.
+%s. After %gs a queue starts no more steps, and names the steps not run.
 """
 
 STEPS_HELP = """The steps, in order: each {"tool": <name>, ...its arguments}, all checked before any runs. ? marks an
@@ -261,7 +261,7 @@ line as 14:30, a DateTime line as 1957-08-01T14:30 (a month's as 1957-08, a week
 the focus is, so press_key Enter after a one-line text box's fill submits that box. type instead of fill for text of
 100 characters or more. pick for a dropdown you type into (react-select, an autocomplete). paste for text an editor
 changes as it is typed (Slides curls quotes, a code editor closes brackets): click into the editor and select what it
-replaces (Meta+A) first, or give a text box's uid; never set an editor's text with evaluate_script. fill, click and the
+replaces (__KEY__+A) first, or give a text box's uid; never set an editor's text with evaluate_script. fill, click and the
 other steps report success once they act, not once the page takes it: use expect after one whose result matters (pick,
 type, wait and a paste given a uid read the page back themselves). wait for a page still at work, like a resume parser
 after an upload: uid and value for a field it fills (passing at once if the field holds it already), or gone with its
@@ -377,14 +377,16 @@ def queue_tool(state, tabs, workers, allowed, calls=CALLS):
     """The queue tool: the queue's body, from queue_steps, served as an MCP tool; it takes queue_steps' Args."""
     return {
         "name": "queue", "run": _refusing(_in_session(state, queue_steps(state, tabs, workers, allowed, calls))),
-        "description": QUEUE_HELP % (steps.REPLY_MOST, calls, steps.QUEUE_MOST),
+        "description": QUEUE_HELP % (steps.REPLY_MOST, os.path.join(calls, "<profile>", "<session>-<label>", "<tab>", ""),
+                                     devtools.ROOTS_TEXT, steps.QUEUE_MOST),
         "inputSchema": {
             "type": "object", "required": ["session", "tab"], "additionalProperties": False,
             "properties": {
                 "session": {"type": "string", "description": "your session id, from session_start"},
                 "tab": {"type": "string", "description": "a tab id from tab_open or tab_list"},
                 "steps": {"type": "array", "items": {"type": "object"},
-                          "description": STEPS_HELP + steps.describe(allowed)},
+                          "description": STEPS_HELP.replace("__KEY__", system.COMMAND_KEY)
+                                         + steps.describe(allowed)},
                 "file": {"type": "string",
                          "description": "path to a JSON file holding the steps, relative to the tab's record folder "
                                         "or absolute"},

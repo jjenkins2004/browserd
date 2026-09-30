@@ -15,6 +15,8 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
+from . import system
+
 PATH = "/mcp"
 SESSION = "Mcp-Session-Id"
 LIST_CHANGED = {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
@@ -39,7 +41,16 @@ def _content(result):
     return [{"type": "text", "text": result}] if isinstance(result, str) else result
 
 
-class Server(ThreadingHTTPServer):
+class Exclusive(ThreadingHTTPServer):
+    """A server no other may bind beside: a second browserd's bind fails, as README.md's lifecycle needs."""
+    allow_reuse_address = system.REUSE_ADDRESS
+
+    def server_bind(self):
+        system.bind_exclusive(self.socket)
+        super().server_bind()
+
+
+class Server(Exclusive):
     daemon_threads = True
 
     def handle_error(self, request, client_address):

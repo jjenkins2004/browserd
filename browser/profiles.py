@@ -10,13 +10,15 @@ import sqlite3
 import threading
 from typing import NamedTuple
 
-from . import cdp
+from . import cdp, system
 
-GOOGLE = os.path.expanduser("~/Library/Application Support/Google")
+GOOGLE = system.CHROME_DATA  # the folder of Chrome's own folder: README.md says where that is on each OS
 PREFIX = "Chrome-"  # every profile's folder is GOOGLE/Chrome-*, beside Chrome's own GOOGLE/Chrome; a new one is Chrome-<profile name>
 FIRST_PORT, LAST_PORT = 9223, 9299
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,23}")
 NAME_RULE = "a profile's name is a letter, then up to 23 letters, digits or dashes"
+# A profile's name is a folder of .run/calls, and Windows keeps these names for devices, whatever their case.
+DEVICES = re.compile(r"(con|prn|aux|nul|com[1-9]|lpt[1-9])", re.IGNORECASE)
 
 _making = threading.Lock()  # the page answers on threads; two New profile clicks at once would pick the same port
 
@@ -51,6 +53,12 @@ def free_folders(profiles):
 
 
 def _free(port):
+    # A bind on 127.0.0.1 alone misses a program holding the port on another address, which cdp.require then refuses.
+    try:
+        if system.listeners(port):
+            return False
+    except system.Unanswered:
+        pass  # the bind below still finds a port held on 127.0.0.1
     with socket.socket() as probe:
         try:
             probe.bind(("127.0.0.1", port))
@@ -82,6 +90,8 @@ def make(state, name, folder=None, reserved=()):
     """
     if not isinstance(name, str) or not NAME.fullmatch(name):
         raise ProfileError(NAME_RULE)
+    if DEVICES.fullmatch(name):
+        raise ProfileError("%s names a device on Windows, so it cannot name a profile's folders" % name)
     with _making:
         profiles = state.profiles()
         if any(profile.name.lower() == name.lower() for profile in profiles):

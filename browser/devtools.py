@@ -11,14 +11,18 @@ import subprocess
 import tempfile
 import threading
 
-from . import cdp
+from . import cdp, system
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DESKTOP = os.path.expanduser("~/Desktop")
+DESKTOP = system.DESKTOP
 PACKAGE = os.path.join(ROOT, "node_modules", "chrome-devtools-mcp", "build", "src", "bin", "chrome-devtools-mcp.js")
-# The file tools (upload, screenshots to a path) may only touch these and $TMPDIR, which chrome-devtools-mcp always adds.
-# ROOT holds the record folders a queue saves screenshots in, wherever this project sits.
-FILE_ROOTS = [DESKTOP, ROOT, "/private/tmp"]
+# The file tools (upload, screenshots to a path) may only touch these and the temporary folder, which chrome-devtools-mcp
+# always adds. ROOT holds the record folders a queue saves screenshots in, wherever this project sits.
+FILE_ROOTS = [DESKTOP, ROOT, *system.EXTRA_ROOTS]
+# The same, as the queue's description and its refusals name them.
+ROOTS_TEXT = ("~/Desktop, /tmp, $TMPDIR or browserd's folder" if system.NAME == "macOS" else
+              "your Desktop (%s), the temporary folder (%s) or browserd's folder (%s)"
+              % (DESKTOP, tempfile.gettempdir(), ROOT))
 FLAGS = [
     "--no-usage-statistics", "--no-performance-crux",
     "--no-category-performance", "--no-category-network", "--no-category-emulation",
@@ -27,14 +31,40 @@ FLAGS = [
 QUIET = {"CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS": "1", "CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS": "1"}
 CALL_WAIT = 120.0
 START_WAIT = 30.0
+NODE_LEAST = (20, 19)  # chrome-devtools-mcp's own "engines"
 
 
 def may_touch(path):
     """Whether chrome-devtools-mcp's file tools may use path, which it resolves as this does: from this process's
     working folder, links followed."""
-    real = os.path.realpath(os.path.abspath(path))
-    roots = [os.path.realpath(root) for root in FILE_ROOTS + [tempfile.gettempdir()]]
-    return any(os.path.commonpath([real, root]) == root for root in roots)
+    if system.remote_path(path):
+        return False  # decided before any look at the path, which would reach the other machine
+    real = os.path.normcase(os.path.realpath(os.path.abspath(path)))
+    for root in FILE_ROOTS + [tempfile.gettempdir()]:
+        root = os.path.normcase(os.path.realpath(root))
+        try:
+            if os.path.commonpath([real, root]) == root:
+                return True
+        except ValueError:
+            continue  # on another drive
+    return False
+
+
+_node_checked = {}  # node's path -> why it cannot run chrome-devtools-mcp, or None
+
+
+def _node_problem(node):
+    if node not in _node_checked:
+        try:
+            said = subprocess.run([node, "--version"], capture_output=True, text=True, timeout=10,
+                                  **system.hidden()).stdout.strip()
+            found = tuple(int(part) for part in said.lstrip("v").split(".")[:2])
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            found, said = None, "no version"
+        _node_checked[node] = (None if found and found >= NODE_LEAST else
+                               "node at %s is %s, and chrome-devtools-mcp needs %d.%d or later"
+                               % (node, said, *NODE_LEAST))
+    return _node_checked[node]
 
 
 class Devtools:
@@ -50,15 +80,20 @@ class Devtools:
         node = shutil.which("node")
         if node is None:
             raise cdp.CdpError("node is not installed, and chrome-devtools-mcp needs it")
+        if _node_problem(node):
+            raise cdp.CdpError(_node_problem(node))
         if not os.path.exists(PACKAGE):
             raise cdp.CdpError("chrome-devtools-mcp is not installed; run `npm ci` in %s" % ROOT)
         self.log_path = log_path
-        with open(log_path, "a") as log:
+        with open(log_path, "a", encoding="utf-8") as log:
             # Any NODE_DEBUG namespace would copy what is typed into this file: mcp:log writes each tool call's
             # arguments, puppeteer:protocol each CDP message.
             self._process = subprocess.Popen(
                 [node, PACKAGE, *FLAGS, *(["--browser-url=%s" % endpoint] if endpoint else [])], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
-                text=True, env=dict({key: value for key, value in os.environ.items() if key != "NODE_DEBUG"}, **QUIET),
+                # Node speaks UTF-8 whatever the OS's code page; no window of its own on Windows.
+                text=True, encoding="utf-8", errors="replace",
+                env=dict({key: value for key, value in os.environ.items() if key != "NODE_DEBUG"}, **QUIET),
+                **system.hidden(),
             )
         self._messages = queue.Queue()
         self._next_id = 0

@@ -10,8 +10,8 @@ import re
 import time
 import urllib.parse
 
-from . import cdp, checked, dialogs, pointer, screenshot
-from .devtools import may_touch
+from . import cdp, checked, dialogs, pointer, screenshot, system
+from .devtools import ROOTS_TEXT, may_touch
 
 # Tab tools own opening, closing and choosing tabs, and the rest profile a page, which a queue only reads and drives.
 PAGE_TOOLS = {"new_page", "close_page", "select_page", "list_pages"}
@@ -135,9 +135,12 @@ def load(arguments, base):
     if path is not None:
         if not isinstance(path, str) or not path:
             raise StepError("file must be a path")
+        if "\0" in path or system.remote_path(path):
+            raise StepError("could not read steps from %s: a file on another machine is never opened" % path)
         path = os.path.join(base, path)  # an absolute path is kept as it is
         try:
-            with open(path) as handle:
+            # utf-8-sig: Windows PowerShell writes a byte order mark before UTF-8.
+            with open(path, encoding="utf-8-sig") as handle:
                 steps = json.load(handle)
         except (OSError, ValueError) as exc:
             raise StepError("could not read steps from %s: %s" % (path, exc))
@@ -151,6 +154,7 @@ def load(arguments, base):
         if "pageId" in step:
             raise StepError("step %d gives a pageId; the tab argument chooses the page" % number)
         _bare_uids(step)
+        _command_key(step)
     return steps
 
 
@@ -172,6 +176,14 @@ def _bare_uids(step):
     for element in step.get("elements", []) if isinstance(step.get("elements"), list) else []:
         if isinstance(element, dict) and "uid" in element:
             element["uid"] = _bare(element["uid"])
+
+
+def _command_key(step):
+    """Hold a press_key shortcut with this OS's command key: Meta+A, written as on a Mac, is Control+A on Windows, where
+    Meta is the Windows key."""
+    key = step.get("key")
+    if step["tool"] == "press_key" and isinstance(key, str) and system.COMMAND_KEY != "Meta" and "+" in key:
+        step["key"] = "+".join(system.COMMAND_KEY if part == "Meta" else part for part in key.split("+"))
 
 
 def check(steps, allowed):
@@ -277,8 +289,7 @@ def _arguments_problem(step, tool):
     for path in [given["filePath"]] if "filePath" in given else given.get("filePaths", []):
         # The server's own folder is browserd's, so a relative or ~ path would land there, not where it reads.
         if "\0" in path or not os.path.isabs(path) or not may_touch(path):
-            return ("%s cannot use %s: file paths must be absolute, without ~, and inside ~/Desktop, /tmp, $TMPDIR or "
-                    "browserd's folder" % (name, path))
+            return "%s cannot use %s: file paths must be absolute, without ~, and inside %s" % (name, path, ROOTS_TEXT)
     return None
 
 
@@ -442,7 +453,7 @@ def view(text, path, under=None, full=False, find=None, after=None):
     while end > start and not lines[end - 1]:
         end -= 1  # the blank lines before the next section stay where they are
     before, whole, tail = lines[:start - 1], lines[start:end], lines[end:]
-    with open(path, "w", encoding="utf-8") as handle:
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(whole) + "\n")
     nodes, loose = _tree(whole)
     scope = ""
@@ -575,7 +586,7 @@ def _capped(text, path, most=REPLY_MOST):
     """text, or its whole lines within `most` characters once the whole of it is saved to path."""
     if len(text) <= most:
         return text
-    with open(path, "w", encoding="utf-8") as handle:
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text + "\n")
     cut = text.rfind("\n", most // 2, most)  # a long one-line JSON result is cut mid-line, not dropped
     cut = cut if cut > 0 else most

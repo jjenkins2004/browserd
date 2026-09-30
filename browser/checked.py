@@ -9,7 +9,7 @@ import json
 import re
 import time
 
-from . import cdp
+from . import cdp, system
 from .worker import returned
 from .ws import WebSocketError
 
@@ -114,12 +114,13 @@ FOCUS_JS = r"""() => {
     || (el.matches('input') && ['text', 'search', 'email', 'url', 'tel', 'password', 'number'].includes(el.type));
   return text && !el.disabled && !el.readOnly ? {focused: el.type} : {refused: el.tagName.toLowerCase()};
 }"""
-META = 4  # CDP's modifier bit for Meta, the Mac's Command key
-# paste's text, handed to the page in place of the Mac's clipboard by listeners in every same-origin frame; README.md,
+# The paste key's modifier: Meta (Command) on a Mac, Control on Windows.
+PASTE_KEY, PASTE_BIT, PASTE_PROPERTY = system.COMMAND_KEY, system.COMMAND_BIT, system.COMMAND_PROPERTY
+# paste's text, handed to the page in place of the clipboard by listeners in every same-origin frame; README.md,
 # "Agent Gotchas & Invariants", says what they do. It returns why the text cannot reach where the focus is, or null
 # once window.__browserdPaste holds how many pastes (seen) and paste key presses (pressed) arrived, ready(), whether
 # the focus is still where the listeners are, and undo().
-HAND_JS = r"""(text) => {
+HAND_JS = r"""(text, modifier) => {
   const frames = ['IFRAME', 'FRAME', 'OBJECT', 'EMBED', 'FENCEDFRAME'];
   const focused = () => {  // the window the focus is in, or null when that is a frame from another site
     let w = window, el = document.activeElement;
@@ -146,7 +147,7 @@ HAND_JS = r"""(text) => {
     const real = (e) => {
       if (e.inputType === 'insertFromPaste') { e.preventDefault(); e.stopImmediatePropagation(); }
     };
-    const key = (e) => { if (e.metaKey && e.code === 'KeyV') state.pressed++; };
+    const key = (e) => { if (e[modifier] && e.code === 'KeyV') state.pressed++; };
     const listeners = [['paste', swap, true], ['paste', unhandled, false], ['beforeinput', real, true],
                        ['keydown', key, true]];
     listeners.forEach(([type, listener, capture]) => w.addEventListener(type, listener, capture));
@@ -456,7 +457,7 @@ def _holds_text(devtools, page_id, uid, text, focused):
 
 
 def paste(devtools, page_id, step, target, connect):
-    """Put text in with a real paste, Meta+V, which an editor takes as it is: no quotes curled, brackets closed or
+    """Put text in with a real paste, the command key and V, which an editor takes as it is: no quotes curled, brackets closed or
     lines indented, as typing gets.
 
     Args:
@@ -488,7 +489,7 @@ def paste(devtools, page_id, step, target, connect):
 
 
 def _press_paste(target, text, connect):
-    """Hand the tab's page the text in place of the Mac's clipboard (HAND_JS), press Meta+V once, check the page saw
+    """Hand the tab's page the text in place of the clipboard (HAND_JS), press the paste key once, check the page saw
     the paste, and take the text back. The key press carries Chrome's own paste command; README.md, "Agent Gotchas &
     Invariants", says why."""
     browser = connect()
@@ -506,7 +507,7 @@ def _press_paste(target, text, connect):
         pasted = False
         try:
             # Inside the try, so listeners a late or failed install left on the page still come off.
-            refused = evaluate("(%s)(%s)" % (HAND_JS, json.dumps(text)),
+            refused = evaluate("(%s)(%s, %s)" % (HAND_JS, json.dumps(text), json.dumps(PASTE_PROPERTY)),
                                "the page could not be handed the text, so nothing was pasted")
             if refused:
                 raise CheckFailed("%s, which paste cannot hand the text to, so nothing was pasted; click a field "
@@ -514,7 +515,7 @@ def _press_paste(target, text, connect):
             if not evaluate("window.__browserdPaste.ready()", "the page changed before the paste key was pressed, so "
                             "nothing was pasted"):
                 raise CheckFailed("the focus moved where the text was not handed, so the paste key was not pressed")
-            key = {"key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": META}
+            key = {"key": "v", "code": "KeyV", "windowsVirtualKeyCode": 86, "modifiers": PASTE_BIT}
             browser.call("Input.dispatchKeyEvent", session, type="rawKeyDown", commands=["paste"], **key)
             browser.call("Input.dispatchKeyEvent", session, type="keyUp", **key)
             # A press the page takes has run its listeners by now.
@@ -526,7 +527,7 @@ def _press_paste(target, text, connect):
                 return
             if pressed:
                 raise CheckFailed("the page took the paste key, but a script of its own had the paste before the text "
-                                  "handed to it, so the field may hold the Mac's clipboard; check it")
+                                  "handed to it, so the field may hold the clipboard; check it")
             raise CheckFailed("the page took no paste key press, so nothing was pasted")
         finally:
             try:
@@ -673,8 +674,8 @@ def describe():
         "checkbox, radio, or aria-pressed/aria-checked element; option text for a select; the choice a dropdown shows",
         "  type(uid: string, text: string) - Select the text box's text and type text over it with real keys, then fail "
         "unless the field holds text, exactly or with only its spacing and punctuation changed (a masked phone)",
-        "  paste(text: string, uid?: string) - Paste text with Meta+V, so an editor takes it as it is, with no quotes "
-        "curled or brackets closed as typing gets (the page is handed the text; the Mac's clipboard is never written); "
+        "  paste(text: string, uid?: string) - Paste text with " + PASTE_KEY + "+V, so an editor takes it as it is, with no quotes "
+        "curled or brackets closed as typing gets (the page is handed the text; the clipboard is never written); "
         "with uid, over a text box's text, read back as type reads; without, where the focus is, read back by nothing",
         "  wait(gone?: string, uid?: string, value?: string, still?: number, timeout?: number) - Wait for one "
         "condition: until the text in gone, seen on the page within %gs, is off it, or the page has not changed for "

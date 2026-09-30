@@ -34,11 +34,11 @@ class Call:
 
     def asked(self, arguments):
         """Write what the call was asked, as <n>-<tool>.json."""
-        with open(self.path(self._tool + ".json"), "w", encoding="utf-8") as handle:
+        with open(self.path(self._tool + ".json"), "w", encoding="utf-8", newline="\n") as handle:
             json.dump(arguments, handle, indent=2, ensure_ascii=False)
             handle.write("\n")
 
     def answered(self, text):
         """Write what came back, as <n>-<tool>.txt."""
-        with open(self.path(self._tool + ".txt"), "w", encoding="utf-8") as handle:
+        with open(self.path(self._tool + ".txt"), "w", encoding="utf-8", newline="\n") as handle:
             handle.write(text.rstrip("\n") + "\n")
