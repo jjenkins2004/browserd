@@ -389,7 +389,15 @@ same tabs under the same ids. A crash leaves the same.
   device pixels, saved as `<n>-step<k>-screenshot.png` (or its format's) and reported by path, not as an image:
   chrome-devtools-mcp attaches an image only when no path is given. A page gets `screenshot.ANSWER_WAIT` (5s) to
   answer `Page.getLayoutMetrics`, which it never does while a dialog is open, before the step fails saying to answer
-  the dialog first.
+  the dialog first. On Windows, Chrome draws a background tab about once a second, and a capture of one waits for a
+  frame that, measured, sometimes never came (one in two clipped captures hung for 60s, and every capture after the
+  first to hang); a second capture brings it. So a capture is asked again every `screenshot.NUDGE` (0.5s) until one
+  answers (`cdp.Browser.call`'s `nudge`; answers to the others are dropped): 48 of 48 then answered, the longest in
+  2s, the median 0.2s. A step that waits on a frame (a screenshot, the guard's capture, chrome-devtools-mcp's wait
+  after a click) may so take up to about 2s more on Windows than on a Mac. Every profile's Chrome on Windows also
+  starts with overlay scrollbars (`system.CHROME_FLAGS`), as a Mac's are: Windows' own take 15px of the viewport, and
+  a background tab's viewport flipped between the two widths as it was laid out (1234 to 1219 CSS px), which the guard
+  reads as the viewport changing size.
 - **The pointer steps are a hand's three moves: `move_at x,y`, `click_down` and `click_up`.** A click is the three
   in turn, a drag puts a second `move_at` between the press and the let-go, and a hover is a `move_at` alone, so no
   step repeats another's work. `pointer.run` sends each as one `Input.dispatchMouseEvent` on a connection of its own
