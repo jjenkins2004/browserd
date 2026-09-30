@@ -18,6 +18,7 @@ def _open(profile):
             "--user-data-dir=%s" % profile.folder,
             "--profile-directory=%s" % cdp.PROFILE,
             "--no-first-run", "--no-default-browser-check", "--no-startup-window", cdp.INPUT_FLAG,
+            *system.CHROME_FLAGS,
         ])
     except system.Unanswered as exc:
         raise cdp.CdpError(str(exc))

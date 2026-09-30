@@ -9,7 +9,7 @@ import subprocess
 
 from . import Unanswered
 
-__all__ = ["NAME", "CHROME", "APP", "CHROME_DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
+__all__ = ["NAME", "CHROME", "CHROME_FLAGS", "APP", "CHROME_DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
            "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
@@ -17,6 +17,7 @@ __all__ = ["NAME", "CHROME", "APP", "CHROME_DATA", "DESKTOP", "EXTRA_ROOTS", "CO
 NAME = "macOS"
 APP = "/Applications/Google Chrome.app"
 CHROME = APP + "/Contents/MacOS/Google Chrome"
+CHROME_FLAGS = []  # scrollbars on a Mac already overlay the page
 CHROME_DATA = os.path.expanduser("~/Library/Application Support/Google")
 DESKTOP = os.path.expanduser("~/Desktop")
 EXTRA_ROOTS = ["/private/tmp"]

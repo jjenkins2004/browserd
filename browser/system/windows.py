@@ -21,7 +21,7 @@ from ctypes import wintypes
 
 from . import Unanswered
 
-__all__ = ["NAME", "CHROME", "CHROME_DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
+__all__ = ["NAME", "CHROME", "CHROME_FLAGS", "CHROME_DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
            "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
@@ -133,6 +133,9 @@ def _find_chrome():
 
 NAME = "Windows"
 CHROME = _find_chrome()
+# Scrollbars that overlay the page, as a Mac's do: Windows' own take 15px of the viewport, and a background tab's
+# viewport flips between the two widths as it is laid out, which moves every point read off a screenshot.
+CHROME_FLAGS = ["--enable-features=OverlayScrollbar"]
 CHROME_DATA = os.path.realpath(os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local"),
                                             "Google"))
 DESKTOP = _known_folder("B4BFCC3A-DB2C-424C-B029-7FE99A87C641", os.path.expanduser(r"~\Desktop"))

@@ -4,6 +4,7 @@ says what each OS does in its place.
 
     NAME             the OS, as a sentence names it: "macOS" or "Windows"
     CHROME           Chrome's binary; a profile's Chrome is a process of it
+    CHROME_FLAGS     switches every profile's Chrome starts with on this OS, besides launch's own
     CHROME_DATA      the folder holding Chrome's own folder, where each profile's Chrome-<name> folder sits beside it
     DESKTOP          the user's Desktop folder
     EXTRA_ROOTS      folders beside DESKTOP, browserd's own and the temporary folder that chrome-devtools-mcp's file tools
