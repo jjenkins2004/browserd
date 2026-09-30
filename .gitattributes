@@ -1,0 +1,5 @@
+# The repo is LF everywhere, and its sh launchers break as CRLF, so a checkout on Windows with core.autocrlf keeps LF.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.pdf binary
+*.png binary
