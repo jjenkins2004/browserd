@@ -10,10 +10,15 @@ agent starts with `session_start {profile, label}`, and sees only its session's 
     ./stop     stops the server, which quits every profile's Chrome with it and closes every session
     ./restart  restarts the server alone: every Chrome keeps running and every session stays open
 
+It runs on macOS and Windows 11, with the same tools, page and behaviour. On Windows, `browserd start`,
+`browserd stop` and `browserd restart` (browserd.cmd, from cmd or PowerShell) are the three; `./start` and the
+others also run in Git Bash. Each OS needs Google Chrome, Python 3 (on Windows the python.org or Store
+one, run as `py -3`; not MSYS2's), and Node 20.19 or later for chrome-devtools-mcp.
+
 ## Layout
 
-    start, stop, restart    launchers for browser/service.py
-    browser/                the server: tabs, the queue, and its own README
+    start, stop, restart    launchers for browser/service.py; browserd.cmd is the three on Windows
+    browser/                the server: tabs, the queue, and its own README; browser/system/ is what differs by OS
     package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
     .run/                   gitignored: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs), devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     tests/                  check_browser.py, check_server.py; throwaway.py, the live checks' own Chrome
@@ -33,8 +38,10 @@ browserd call and has them from its next turn; one that connected to a browserd 
 
 ## Tests
 
-    python3 tests/check_browser.py    66 checks: framing, a profile's Chrome proof, launch
+    python3 tests/check_browser.py    framing, a profile's Chrome proof, launch; each OS's own owner and launch checks
     python3 tests/check_server.py     protocol, tab ids, sessions, focus, queue, recording, profiles, page, service
+
+On Windows, `py -3 tests\check_browser.py` and `py -3 tests\check_server.py`.
 
 The live groups start a Chrome of their own on a new folder and a free port, and quit it after, so
 they never touch a profile's Chrome; `check_server.py`'s queue checks need `npm ci` done.

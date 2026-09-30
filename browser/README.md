@@ -25,7 +25,8 @@ run `npm ci`).
       launch.py    starts a profile's Chrome, or adopts one already up
       chromes.py   each profile's Chrome: started on first use, focus kept, quit at stop
       tabs.py      tab ids in state.db; open, list, show, close, hand over
-      focus.py     the Mac's focus: which app has it; gives it back from tabs pages open
+      focus.py     the user's focus: which app has it; gives it back from tabs pages open
+      system/      what differs by OS, behind one set of names: macos.py, windows.py
       mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch
       server.py    the server process: tools, page, pid file
       service.py   ../start, ../stop, ../restart: background start, locked; stop and restart by pid
@@ -44,7 +45,7 @@ run `npm ci`).
       sessions.py  session ids, labels, record folder names, when a session is paused
       page.py      the browserd page on 9231: GET /state, and a POST per button
       ui/          the page itself: one file per part, and each part's states; its own README
-    ../start, ../stop, ../restart  launchers
+    ../start, ../stop, ../restart  launchers; ../browserd.cmd is the three on Windows
     ../.run/                    gitignored: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
     ../tests/check_server.py    protocol, tab ids, sessions, focus, queue, recording, profiles, page, service; live tabs, queue
@@ -52,6 +53,25 @@ run `npm ci`).
     ../tests/throwaway.py       the live checks' own Chrome, on a new folder and a free port
 
 ## Core Abstractions & Shared Pieces
+
+**`system`** is everything browserd asks of the OS, one set of names in `system/__init__.py`, each given by
+`system/macos.py` or `system/windows.py`; nothing else runs an OS tool or calls an OS API. What each OS does:
+
+| | macOS | Windows |
+|---|---|---|
+| Chrome's binary | `/Applications/Google Chrome.app` | `BROWSERD_CHROME`, else App Paths, else Program Files |
+| profile folders beside Chrome's own | `~/Library/Application Support/Google` | `%LOCALAPPDATA%\Google` |
+| the folder's owner | `SingletonLock`'s pid, `ps` showing Chrome's binary | `Chrome_MessageWindow` titled with the folder; its process's image is Chrome's, no `--type` |
+| a port's listeners | `lsof` | the TCP table (`GetExtendedTcpTable`), IPv4 and IPv6 |
+| a command line | `ps` (words joined by spaces) | `NtQueryInformationProcess`, split by `CommandLineToArgvW` |
+| starting Chrome | `open -gna`, no window | the binary, detached, its first window shown without the focus |
+| the app in front, bringing one | `lsappinfo`, AppKit through `osascript` | the foreground window; `SetForegroundWindow`, shared input, `SwitchToThisWindow` |
+| `../stop`, `../restart` | SIGTERM, SIGHUP | two named events per checkout and user |
+| the command key (paste, `Meta+A`) | Meta (Command) | Control |
+
+A process the OS will not let this user read raises `system.Unanswered` (a `CdpError` to callers), never reads as
+one that exited. `system.remote_path` refuses a network share, `\\?\` or `\\.\` path before anything opens it,
+which on Windows would send the user's credentials to that host.
 
 **`cdp.require(profile)`** is the proof that a profile's port is that profile's Chrome, and every connection
 goes through it: `cdp.Browser(profile)` and `launch.launch(profile)` both call it. It checks against the
@@ -76,10 +96,13 @@ the server's threads; the file is gitignored, so each person's profiles stay the
 whatever its case. Not a Chrome
 profile: a folder taken over must hold no Chrome profile but Chrome's `Default` one.
 **`profiles.make`**, which only the page's New profile button calls, adds one: either a new folder,
-`~/Library/Application Support/Google/Chrome-<name>`, made empty, or one of `profiles.free_folders` (a
+`<system.CHROME_DATA>/Chrome-<name>` (`~/Library/Application Support/Google/Chrome-<name>` on a Mac,
+`%LOCALAPPDATA%\Google\Chrome-<name>` on Windows), made empty, or one of `profiles.free_folders` (a
 `Chrome-*` folder there that no profile uses) taken over with its logins, once `cdp.check_folder` passes.
 Its port is the one that folder's Chrome already runs with, when no profile has it; otherwise the lowest from 9223
-to 9299 that no profile has, the server does not hold (9230, 9231), and nothing listens on.
+to 9299 that no profile has, the server does not hold (9230, 9231), and nothing listens on, on any address. A
+name Windows keeps for a device (`CON`, `NUL`, `COM1`...) is refused on every OS, since it names a folder of
+`.run/calls`.
 
 **`page.Page`** serves the page on 9231 on a thread of the server's own. `GET /` is `page.assemble()`: `ui/page.html` with
 `ui/page.css` and the scripts of `page.PARTS` put in, read again on every load. `GET /state` gives
@@ -164,14 +187,16 @@ step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view s
 `<n>-page-now-reply.txt`.
 
 **Server lifecycle**, in `server.serve()`: open `.run/state.db`, ask a chrome-devtools-mcp process for its
-tool list (no browser needed), bind 9230 and the page's 9231, install SIGTERM/SIGINT/SIGHUP handlers, write
+tool list (no browser needed), bind 9230 and the page's 9231 (exclusively: on Windows `SO_REUSEADDR` would let a
+second server bind beside the first), listen for `../stop` and `../restart` (`system.listen_for_stop`), write
 `.run/server.pid`, `chromes.adopt` every profile's Chrome already running, then serve the page on a thread and
 the tools. Record folders and devtools logs are never removed. Another thread looks every `server.PAUSE_POLL`
 (60s) for sessions paused, and `Workers.pause`s their tabs. No Chrome starts with the server, and one quitting
 leaves the server up. When the server stops, every tab's process is stopped, `chromes.quit_all` sends each
 running Chrome `Browser.close` and waits for it to exit (one not exited 15s later is logged, and the server
-stops anyway), and every open session and tab is marked closed. On SIGHUP alone, which `../restart` sends, only
-the tabs' processes are stopped (a SIGTERM or SIGINT at any point still quits everything): every Chrome keeps
+stops anyway), and every open session and tab is marked closed. On a restart alone, which `../restart` asks for
+(SIGHUP on a Mac, the restart event on Windows), only the tabs' processes are stopped (a stop, SIGTERM or SIGINT
+at any point still quits everything): every Chrome keeps
 running and every session stays open for the server that `../restart` starts next, whose listings find the
 same tabs under the same ids. A crash leaves the same.
 
@@ -187,24 +212,38 @@ same tabs under the same ids. A crash leaves the same.
   - the listener is not the profile's Chrome;
   - the profile's Chrome was started without `cdp.INPUT_FLAG`;
   - no DevTools answer comes back;
-  - `lsof` or `ps` cannot run, hangs past 10s, or prints an error, since a blocked `lsof` reads
-    like an empty port.
-- **A profile's Chrome is whoever holds `SingletonLock` in its folder.** That symlink ends in the
-  owning pid, and `ps` must show that pid's command line starting with Chrome's binary, so a lock
-  left by a crash is not trusted. A command line alone never is: `ps` joins arguments with spaces,
-  and argv[0] can be set to anything. `Browser()` also asks the browser that answered for its own
-  pid (`SystemInfo.getProcessInfo`), because `lsof` sees only this user's processes.
+  - the OS cannot say who listens or what a process is (`lsof` or `ps` cannot run, hangs past 10s, or
+    prints an error, since a blocked `lsof` reads like an empty port; Windows will not let this user read the
+    process).
+- **A profile's Chrome is whoever holds its folder as Chrome itself tells.** On a Mac that is `SingletonLock` in
+  the folder: that symlink ends in the owning pid, and `ps` must show that pid's command line starting with
+  Chrome's binary, so a lock left by a crash is not trusted. A command line alone never is: `ps` joins arguments
+  with spaces, and argv[0] can be set to anything. On Windows it is the message-only window of class
+  `Chrome_MessageWindow` titled with the folder, which a second Chrome given the folder finds and hands its launch
+  to; its process must run Chrome's own image (the file, not argv[0]) and name no `--type` (a helper's). Windows
+  matches the title whatever its case, but only as the folder was spelled at launch, so a profile's folder is
+  always given in one spelling, long and resolved; a Chrome given another (an 8.3 name) exits 21, which `launch`
+  names. Chrome makes no `SingletonLock` there, and its `lockfile` is never opened: an open at the moment a Chrome
+  starts would make that Chrome fail. `Browser()` also asks the browser that answered for its own pid
+  (`SystemInfo.getProcessInfo`), because `lsof` sees only this user's processes, and Windows lets a process bind a
+  port on another address beside Chrome's.
 - **`require` proves the browser, not the tab.** An Incognito, Guest or other Chrome profile's window is
   another browser context, and `Tabs` neither lists such a tab nor gives it an id, only counting
   it. Chrome's default context is its last-used Chrome profile, and `Local State` reaches disk seconds
   after a Chrome profile is added, so for those seconds a new Chrome profile's tab would pass. No Chrome
   profile is ever to be added to a profile's folder.
-- **A Chrome with no window open has no Chrome profile loaded.** macOS keeps Chrome running after
-  its last window closes, and Chrome then unloads its Chrome profile, so `Target.getBrowserContexts` names
+- **A Chrome with no window open has no Chrome profile loaded.** Chrome keeps running after its last window
+  closes (macOS keeps every app running; on Windows the debugging port keeps it, measured), and Chrome then
+  unloads its Chrome profile, so `Target.getBrowserContexts` names
   no default context. With no page open either, `Tabs` lists no tabs rather than refusing, and
   `tab_open`'s `Target.createTarget` loads it again. No default context beside open pages
   is still refused, since those tabs cannot be told apart.
-- **Nothing but `tab_show` and the page's Open Chrome and Show leaves a profile's Chrome with the Mac's focus.** Chrome raises itself over
+- **Nothing but `tab_show` and the page's Open Chrome and Show leaves a profile's Chrome with the user's focus.**
+  On Windows, `launch` starts Chrome detached with `--no-startup-window` and its first window shown without the focus,
+  and a background tab, even in a new window, took no focus (measured); a page's `window.open` popup did, at once,
+  and `focus.keep` gave it back before a 20ms poll saw Chrome in front, so `keep` runs there as on a Mac. `bring`
+  tries `SetForegroundWindow`, then with its input joined to the app in front, then `SwitchToThisWindow`, and never
+  presses a key (a stray Alt would reach the app in front). On a Mac: Chrome raises itself over
   the app in front each time it shows a window. macOS lets it at launch, even under `open -g`, and
   after that only once Chrome has been in front at least once. So `launch` starts it with `open -g`
   and `--no-startup-window`: with no window, the tabs it had open when it last quit do not come back, and the first
@@ -454,8 +493,11 @@ same tabs under the same ids. A crash leaves the same.
     text short (a `maxlength`) fails, saying so.
   - **`paste`** exists because editors change text as it is typed (Slides curls quotes and capitalizes a
     new line; a code editor closes brackets and indents lines), and a real paste is taken as it is. It
-    presses Meta+V over the server's own connection to the tab with Chrome's `paste` command, since on a
-    Mac a key press alone, as `press_key` sends it, pastes nothing. Chrome reads the Mac's clipboard into
+    presses the command key and V (Meta+V on a Mac, Control+V on Windows, `checked.PASTE_KEY`) over the server's own
+    connection to the tab with Chrome's `paste` command, since on a Mac a key press alone, as `press_key` sends it,
+    pastes nothing; the command carries the paste on Windows too, and the listeners count presses of that OS's key.
+    A `press_key` shortcut written with Meta is held with Control on Windows (`steps._command_key`), where Meta is
+    the Windows key. Chrome reads the clipboard into
     that paste, and nothing writes the clipboard: first `checked.HAND_JS` puts listeners in every
     same-origin frame, and they hand the paste event the text as its `clipboardData`, insert the text
     themselves when no page script cancelled or stopped the paste, cancel and stop Chrome's own insert of
@@ -518,17 +560,21 @@ same tabs under the same ids. A crash leaves the same.
   was restarted, the next report opens with a note that they are gone. A step failing with
   chrome-devtools-mcp's "No page found" (it renumbered its pages after reconnecting) stops the
   process, so the next queue re-pairs.
-- **chrome-devtools-mcp's file tools may only touch `devtools.FILE_ROOTS`: `~/Desktop`, this project's
-  folder (which holds the record folders) and `/private/tmp` (all `--workspace`), and `$TMPDIR`, which
-  it always adds.** `steps.check` refuses a `filePath` or `filePaths` outside them
-  (`devtools.may_touch`), or relative, before any step runs: the server's working folder is this
-  project's, so a relative or `~` path would land inside it. Usage statistics and CrUX are off, and the performance, network and
+- **chrome-devtools-mcp's file tools may only touch `devtools.FILE_ROOTS`: the Desktop (`~/Desktop`, or on
+  Windows the Desktop known folder, wherever OneDrive moved it), this project's folder (which holds the record
+  folders) and, on a Mac, `/private/tmp` (all `--workspace`), and the temporary folder, which it always adds.**
+  `steps.check` refuses a `filePath` or `filePaths` outside them (`devtools.may_touch`, which compares them
+  case-folded and refuses a network path before resolving it), or relative, before any step runs: the server's
+  working folder is this project's, so a relative or `~` path would land inside it. A `file` of steps on a network
+  path is never read either; one is read as UTF-8, a byte order mark (Windows PowerShell's) skipped. Usage statistics and CrUX are off, and the performance, network and
   emulation tools are not loaded.
 - **No tool types a password safely.** A queue's chrome-devtools-mcp steps refuse nothing, and every
   step's arguments are recorded in the tab's record folder, and a refused call's in `../.run/server.log` too.
 - **Checks.**
-  - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for `lsof`,
-    `ps`, the lock and the port, then runs the real `lsof` and `ps` against ports it holds itself.
+  - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for the OS
+    (`system.listeners`, `command`, `switches`, `chrome_owner`) and the port, then asks the real OS about ports it
+    holds itself; `owning_mac` checks the lock, `ps`, `lsof` and `open`, and `owning_windows` a real
+    `Chrome_MessageWindow` in a process of its own, a pid it cannot read, and how Chrome is started.
     `tabs_offline` and `session_tools_offline` stand in for Chrome and `osascript`, with `state.db` in a
     temporary folder; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
     `pairing_offline` for a tab's chrome-devtools-mcp and the connection that marks the tab;
