@@ -27,8 +27,8 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import (cdp, checked, chromes, devtools, dialogs, downloads, focus, mcp, page, pointer, profiles, record,
-                     screenshot, server, service, sessions, steps, system)
+from browser import (cdp, checked, chromes, devtools, dialogs, downloads, focus, mcp, page, paths, pointer, profiles,
+                     record, screenshot, server, service, sessions, steps, system)
 from browser import devtools as devtools_module  # queue_live names its own chrome-devtools-mcp devtools
 from browser.devtools import PACKAGE, Devtools
 from browser.profiles import Profile
@@ -1954,8 +1954,9 @@ def service_offline():
         server.PORT, server.URL = port, "http://127.0.0.1:%d%s" % (port, mcp.PATH)
 
     try:
-        # A root of the checks' own: never the real server's, so a stop asked here reaches no server but the stand-in
-        # (on Windows the root names the events ../stop and ../restart set), and a start here could not run one.
+        # A records folder of the checks' own: never the real server's, so a stop asked here reaches no server but the
+        # stand-in (on Windows that folder names the events browserd stop and restart set), and a start here could not
+        # run one.
         server.ROOT = server.RUN = workdir
         server.PID_FILE = os.path.join(workdir, "server.pid")
         server.LOG_FILE = os.path.join(workdir, "server.log")
@@ -2043,6 +2044,44 @@ def service_offline():
                 stand_in.stdout.close()
         (server.URL, server.PORT, server.ROOT, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE,
          subprocess.Popen) = saved
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def paths_offline():
+    """Where the records go: .run in a checkout, the user's own folder in an installed copy, BROWSERD_HOME over both;
+    and browserd status and version."""
+    saved = (paths.ROOT, os.environ.get("BROWSERD_HOME"), server.PORT, server.URL, server.RUN)
+    workdir = tempfile.mkdtemp(prefix="browser-paths-")
+    try:
+        os.environ.pop("BROWSERD_HOME", None)
+        paths.ROOT = workdir
+        check("an installed copy keeps its records in the user's own folder", paths._run() == system.DATA, paths._run())
+        with open(os.path.join(workdir, ".git"), "w") as handle:
+            handle.write("gitdir: elsewhere\n")  # a worktree's
+        check("a checkout keeps its records in .run beside the code", paths._run() == os.path.join(workdir, ".run"),
+              paths._run())
+        os.environ["BROWSERD_HOME"] = os.path.join("~", "records")
+        check("BROWSERD_HOME names the records folder over either, ~ expanded",
+              paths._run() == os.path.join(os.path.expanduser("~"), "records"), paths._run())
+        check("the version is read from VERSION, and unknown without one", paths.version() == "unknown")
+        with open(os.path.join(workdir, "VERSION"), "w") as handle:
+            handle.write("1.2.3\n")
+        check("browserd version names the version and the folder", service.version() == "browserd 1.2.3 (%s)" % workdir,
+              service.version())
+
+        free = mcp.Server("127.0.0.1", 0, [], "nobody")
+        server.PORT = free.server_address[1]
+        server.URL = "http://127.0.0.1:%d%s" % (server.PORT, mcp.PATH)
+        free.server_close()
+        server.RUN = workdir
+        check("browserd status says not running, and where the records are",
+              service.status() == "not running (records in %s)" % workdir, service.status())
+    finally:
+        paths.ROOT, home, server.PORT, server.URL, server.RUN = saved
+        if home is None:
+            os.environ.pop("BROWSERD_HOME", None)
+        else:
+            os.environ["BROWSERD_HOME"] = home
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -3049,6 +3088,8 @@ if __name__ == "__main__":
     print()
     quitting()
     service_offline()
+    print()
+    paths_offline()
     print()
     with throwaway.chrome() as profile:
         if profile is None:

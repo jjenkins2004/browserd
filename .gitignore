@@ -4,3 +4,4 @@ applications/workspaces/*/run/*.png
 applications/workspaces/*/run/*.jpeg
 applications/workspaces/*/run/*.webp
 __pycache__/
+.python

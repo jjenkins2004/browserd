@@ -6,6 +6,7 @@ says what each OS does in its place.
     CHROME           Chrome's binary; a profile's Chrome is a process of it
     CHROME_FLAGS     switches every profile's Chrome starts with on this OS, besides launch's own
     CHROME_DATA      the folder holding Chrome's own folder, where each profile's Chrome-<name> folder sits beside it
+    DATA             where an installed browserd keeps its records, the user's own; a git checkout keeps them in .run
     DESKTOP          the user's Desktop folder
     EXTRA_ROOTS      folders beside DESKTOP, browserd's own and the temporary folder that chrome-devtools-mcp's file tools
                      may touch
@@ -26,8 +27,9 @@ says what each OS does in its place.
     lock(handle)          hold an exclusive lock on an open file until it is closed, waiting for it
     spawn_detached(argv, **popen)  a Popen of a process that runs on past this one, with no window of its own
     hidden()              Popen arguments that give a helper process no window of its own
-    listen_for_stop(root, on_request)  call on_request("stop" or "restart") when ../stop or ../restart asks
-    request_stop(pid, root, restart)   ask the server that is pid to stop, or restart
+    listen_for_stop(run, on_request)  call on_request("stop" or "restart") when browserd stop or restart asks the
+                                      server whose records folder is run
+    request_stop(pid, run, restart)   ask the server that is pid, whose records folder is run, to stop, or restart
     quit_hint(pid)        how the user quits a Chrome by pid, for an error message
     remote_path(path)     whether a path names another machine (a network share), which is never opened
     python_problem()      why this Python cannot run browserd, or None

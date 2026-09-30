@@ -1,0 +1,16 @@
+#!/bin/sh
+# browserd start, stop, restart, status or version, on macOS or in Git Bash on Windows (browserd.cmd is cmd's and
+# PowerShell's). Works from any directory, and through a symlink to it, as Homebrew and install.sh put it on the PATH.
+# BROWSERD_PYTHON picks the Python; otherwise the one install.sh checked, in .python, or python3. Git Bash uses Windows'
+# own (py -3): its python3 may be MSYS2's.
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
+done
+cd "$(dirname "$self")" || exit 1
+if [ -z "${BROWSERD_PYTHON:-}" ] && [ -f .python ]; then
+  exec "$(cat .python)" -m browser.service "$@"
+fi
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) PY=${BROWSERD_PYTHON:-py -3} ;; *) PY=${BROWSERD_PYTHON:-python3} ;; esac
+exec $PY -m browser.service "$@"

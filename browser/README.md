@@ -6,8 +6,9 @@ The browser MCP server: it starts and owns one Chrome per profile and serves too
 over HTTP on `127.0.0.1:9230`, so pages are read and driven with that profile's logins. An agent first calls `session_start {profile, label}`, and passes the session id it
 gets to every other tool. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage the session's own tabs by
 short tab ids; `queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
-records every call in that tab's record folder, `../.run/calls/<profile>/<session>-<label>/<tab>/`. The
-browserd page, at `http://127.0.0.1:9231/`, lists the profiles kept in `../.run/state.db` as a strip of
+records every call in that tab's record folder, `calls/<profile>/<session>-<label>/<tab>/` in the records folder
+(`paths.RUN`: `../.run/` in a checkout, the user's own folder in an installed copy). The
+browserd page, at `http://127.0.0.1:9231/`, lists the profiles kept in the records folder's `state.db` as a strip of
 profile tabs and shows one profile's sessions and tabs at a time; it makes new profiles, opens a profile's Chrome,
 shows, closes and hands over tabs, and closes sessions.
 Python standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`;
@@ -29,7 +30,8 @@ run `npm ci`).
       system/      what differs by OS, behind one set of names: macos.py, windows.py
       mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch
       server.py    the server process: tools, page, pid file
-      service.py   ../start, ../stop, ../restart: background start, locked; stop and restart by pid
+      service.py   browserd start, stop, restart: background start, locked; stop and restart by pid; status, version
+      paths.py     ROOT, this project's folder; RUN, the records folder; the version, from ../VERSION
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
       worker.py    one tab's process, paired with its page; Workers registry
       steps.py     the queue: load, check, run, report; snapshot views
@@ -45,8 +47,8 @@ run `npm ci`).
       sessions.py  session ids, labels, record folder names, when a session is paused
       page.py      the browserd page on 9231: GET /state, and a POST per button
       ui/          the page itself: one file per part, and each part's states; its own README
-    ../start, ../stop, ../restart  launchers; ../browserd.cmd is the three on Windows
-    ../.run/                    gitignored: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
+    ../browserd, ../browserd.cmd  the command, on macOS and Windows; ../start, ../stop, ../restart run it
+    ../.run/                    gitignored, a checkout's records folder: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
     ../tests/check_server.py    protocol, tab ids, sessions, focus, queue, recording, profiles, page, service; live tabs, queue
     ../tests/check_browser.py   framing, a profile's Chrome proof, launch; live proof, tab load
@@ -570,7 +572,7 @@ same tabs under the same ids. A crash leaves the same.
   process, so the next queue re-pairs.
 - **chrome-devtools-mcp's file tools may only touch `devtools.FILE_ROOTS`: the Desktop (`~/Desktop`, or on
   Windows the Desktop known folder, wherever OneDrive moved it), this project's folder (which holds the record
-  folders) and, on a Mac, `/private/tmp` (all `--workspace`), and the temporary folder, which it always adds.**
+  folders in a checkout; an installed copy's records folder, outside it, is added) and, on a Mac, `/private/tmp` (all `--workspace`), and the temporary folder, which it always adds.**
   `steps.check` refuses a `filePath` or `filePaths` outside them (`devtools.may_touch`, which compares them
   case-folded and refuses a network path before resolving it), or relative, before any step runs: the server's
   working folder is this project's, so a relative or `~` path would land inside it. A `file` of steps on a network

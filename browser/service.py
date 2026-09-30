@@ -1,5 +1,6 @@
-"""../start, ../stop and ../restart: run the browser MCP server in the background; stop it and every profile's Chrome
-with it; or restart the server alone."""
+"""browserd start, stop and restart (../start, ../stop and ../restart in a checkout): run the browser MCP server in the
+background; stop it and every profile's Chrome with it; or restart the server alone. browserd status and version say
+whether it runs, and which browserd this is."""
 
 import json
 import os
@@ -9,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import cdp, server, system
+from . import cdp, paths, server, system
 
 START_WAIT = 40.0
 STOP_WAIT = 25.0
@@ -81,7 +82,7 @@ def _start():
         raise SystemExit("port %d answers as %r, not the browser MCP server; quit that program first" % (server.PORT, name))
     offset = os.path.getsize(server.LOG_FILE) if os.path.exists(server.LOG_FILE) else 0
     # UTF-8 whatever the OS's own code page: the log holds page titles, URLs and what was typed.
-    env = dict(os.environ, PYTHONPATH=server.ROOT, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
+    env = dict(os.environ, PYTHONPATH=server.ROOT, BROWSERD_HOME=server.RUN, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     with open(server.LOG_FILE, "a") as log:
         child = system.spawn_detached(
             [sys.executable, "-m", "browser.server"], cwd=server.ROOT, env=env,
@@ -97,7 +98,7 @@ def _start():
         time.sleep(0.3)
     # Asked to stop as ../stop asks, so any Chrome it started is quit; one not yet listening is ended outright.
     try:
-        system.request_stop(child.pid, server.ROOT, restart=False)
+        system.request_stop(child.pid, server.RUN, restart=False)
     except system.Unanswered:
         child.terminate()
     raise SystemExit("the browser MCP server did not answer within %gs, so it was asked to stop:\n%s"
@@ -113,7 +114,7 @@ def _stop(restart):
                              % (server.PORT, server.PID_FILE))
         return False
     try:
-        system.request_stop(pid, server.ROOT, restart)
+        system.request_stop(pid, server.RUN, restart)
     except system.Unanswered as exc:
         raise SystemExit(str(exc))
     deadline = time.time() + STOP_WAIT
@@ -141,13 +142,42 @@ def restart():
     return _locked(run)
 
 
+def status():
+    """A line saying whether the server runs, and where it keeps its records."""
+    if answering() != server.NAME:
+        return "not running (records in %s)" % server.RUN
+    return "running: %s, and the page at %s (pid %s, records in %s)" % (server.URL, server.PAGE_URL, _pid() or "unknown",
+                                                                         server.RUN)
+
+
+def version():
+    return "browserd %s (%s)" % (paths.version(), paths.ROOT)
+
+
+USAGE = """usage: browserd <command>
+
+  start     start the server in the background; each profile's Chrome starts on its first use
+  stop      stop the server, which quits every profile's Chrome with it and closes every session
+  restart   restart the server alone: every Chrome keeps running and every session stays open
+  status    say whether the server is running, and where its records are
+  version   say which browserd this is, and where it is installed
+
+Agents connect at %s; register it once with
+  claude mcp add -s user --transport http browserd %s""" % (server.URL, server.URL)
+
+
 def main():
     problem = system.python_problem()
     if problem:
         raise SystemExit(problem)
-    commands = {"start": start, "stop": stop, "restart": restart}
+    commands = {"start": start, "stop": stop, "restart": restart, "status": status, "version": version}
+    if len(sys.argv) == 2 and sys.argv[1] in ("help", "-h", "--help"):
+        print(USAGE)
+        return
+    if len(sys.argv) == 2 and sys.argv[1] == "--version":
+        sys.argv[1] = "version"
     if len(sys.argv) != 2 or sys.argv[1] not in commands:
-        raise SystemExit("usage: ./start, ./stop or ./restart (browserd start, stop or restart on Windows), with no arguments")
+        raise SystemExit(USAGE)
     print(commands[sys.argv[1]]())
 
 

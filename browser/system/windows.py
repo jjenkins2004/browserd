@@ -21,7 +21,7 @@ from ctypes import wintypes
 
 from . import Unanswered
 
-__all__ = ["NAME", "CHROME", "CHROME_FLAGS", "CHROME_DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
+__all__ = ["NAME", "CHROME", "CHROME_FLAGS", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
            "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
@@ -138,6 +138,7 @@ CHROME = _find_chrome()
 CHROME_FLAGS = ["--enable-features=OverlayScrollbar"]
 CHROME_DATA = os.path.realpath(os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local"),
                                             "Google"))
+DATA = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local"), "browserd")
 DESKTOP = _known_folder("B4BFCC3A-DB2C-424C-B029-7FE99A87C641", os.path.expanduser(r"~\Desktop"))
 EXTRA_ROOTS = []
 COMMAND_KEY, COMMAND_BIT, COMMAND_PROPERTY = "Control", 2, "ctrlKey"
@@ -399,21 +400,22 @@ def hidden():
     return {"creationflags": _NO_WINDOW}
 
 
-def _events(root):
-    # Named after browserd's folder, so two checkouts never stop each other; in the session's own namespace (Local\),
-    # and made with the default security, which lets only this user open them.
-    tag = hashlib.sha1(os.path.normcase(os.path.realpath(root)).encode("utf-8")).hexdigest()[:12]
+def _events(run):
+    # Named after the server's records folder, not its code's, so two checkouts never stop each other and an installed
+    # copy's new version stops the old one it replaced; in the session's own namespace (Local\), and made with the
+    # default security, which lets only this user open them.
+    tag = hashlib.sha1(os.path.normcase(os.path.realpath(run)).encode("utf-8")).hexdigest()[:12]
     return {"stop": "Local\\browserd-%s-stop" % tag, "restart": "Local\\browserd-%s-restart" % tag}
 
 
 _held = []  # the events the server waits on, kept open for its life
 
 
-def listen_for_stop(root, on_request):
+def listen_for_stop(run, on_request):
     signal.signal(signal.SIGINT, lambda number, frame: on_request("stop"))
     signal.signal(signal.SIGBREAK, lambda number, frame: on_request("stop"))
     kinds, handles = [], []
-    for kind, name in _events(root).items():
+    for kind, name in _events(run).items():
         handle = _CreateEventW(None, False, False, name)  # auto-reset, not set
         if not handle:
             raise Unanswered("could not make the event %s: %s" % (name, ctypes.WinError(ctypes.get_last_error()).strerror))
@@ -434,8 +436,8 @@ def listen_for_stop(root, on_request):
     threading.Thread(target=wait, daemon=True).start()
 
 
-def request_stop(pid, root, restart):
-    name = _events(root)["restart" if restart else "stop"]
+def request_stop(pid, run, restart):
+    name = _events(run)["restart" if restart else "stop"]
     handle = _OpenEventW(_EVENT_MODIFY_STATE, False, name)
     if not handle:
         raise Unanswered("the browser MCP server (pid %d) is not listening for ../stop and ../restart: %s"

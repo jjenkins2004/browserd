@@ -1,6 +1,3 @@
 #!/bin/sh
 # Stop the browser MCP server, which quits every profile's Chrome with it. Works from any directory.
-# Git Bash on Windows too, with Windows' own Python (py -3): its python3 may be MSYS2's. BROWSERD_PYTHON picks another.
-cd "$(dirname "$0")" || exit 1
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) PY=${BROWSERD_PYTHON:-py -3} ;; *) PY=${BROWSERD_PYTHON:-python3} ;; esac
-exec $PY -m browser.service stop "$@"
+exec "$(dirname "$0")/browserd" stop "$@"

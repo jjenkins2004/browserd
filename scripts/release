@@ -1,0 +1,39 @@
+#!/bin/sh
+# Cut a release of browserd, from a clean main that matches origin's:
+#
+#     scripts/release 0.2.0
+#
+# It sets VERSION, commits it and tags v0.2.0, and pushes both at once: install.sh and install.ps1 install the tag that
+# VERSION on main names, so they have the release from then on. Then it points Formula/browserd.rb at the tag's archive,
+# with the sha256 GitHub serves it with, and pushes that, for Homebrew. Runs on macOS and in Git Bash.
+set -eu
+
+REPO=jjenkins2004/browserd
+fail() { printf 'release: %s\n' "$*" >&2; exit 1; }
+
+version=${1:-}
+printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || fail "usage: scripts/release <version>, like 0.2.0"
+tag=v$version
+cd "$(dirname "$0")/.."
+
+[ "$(git rev-parse --abbrev-ref HEAD)" = main ] || fail "not on main"
+[ -z "$(git status --porcelain)" ] || fail "the working tree has changes; commit or stash them first"
+git fetch -q origin main --tags
+[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || fail "main is not origin/main; pull or push first"
+! git rev-parse -q --verify "refs/tags/$tag" >/dev/null || fail "$tag already exists"
+
+printf '%s\n' "$version" > VERSION
+git diff --quiet VERSION || git commit -q -m "release: $tag" VERSION
+git tag -a "$tag" -m "browserd $version"
+git push -q --atomic origin main "$tag"
+echo "pushed $tag: install.sh and install.ps1 install it now"
+
+url=https://github.com/$REPO/archive/refs/tags/$tag.tar.gz
+if command -v sha256sum >/dev/null 2>&1; then sum="sha256sum"; else sum="shasum -a 256"; fi
+sha=$(curl -fsSL "$url" | $sum | cut -d' ' -f1)
+[ ${#sha} -eq 64 ] || fail "could not read $url's sha256; set it in Formula/browserd.rb by hand"
+sed -e "s|^  url \".*\"|  url \"$url\"|" -e "s|^  sha256 \".*\"|  sha256 \"$sha\"|" Formula/browserd.rb > Formula/browserd.rb.new
+mv Formula/browserd.rb.new Formula/browserd.rb
+git commit -q -m "Formula: browserd $version" Formula/browserd.rb
+git push -q origin main
+echo "pushed Formula/browserd.rb at $tag ($sha): brew upgrade browserd installs it now"

@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 
-from . import cdp, devtools, guard, mcp, page, record, sessions, steps, system
+from . import cdp, devtools, guard, mcp, page, paths, record, sessions, steps, system
 from .chromes import Chromes
 from .devtools import Devtools
 from .state import Session, State
@@ -23,8 +23,8 @@ PORT = 9230
 URL = "http://%s:%d%s" % (HOST, PORT, mcp.PATH)
 PAGE_URL = "http://%s:%d/" % (HOST, page.PORT)
 NAME = "browserd"
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUN = os.path.join(ROOT, ".run")
+ROOT = paths.ROOT
+RUN = paths.RUN
 CALLS = os.path.join(RUN, "calls")
 PID_FILE = os.path.join(RUN, "server.pid")
 LOG_FILE = os.path.join(RUN, "server.log")
@@ -453,7 +453,7 @@ def serve():
 
     # Listened for before serving, so a ./stop at any point from here still stops the server and every Chrome, a start
     # under way included: signals on macOS, named events on Windows, which has no SIGHUP and no SIGTERM a process hears.
-    system.listen_for_stop(ROOT, on_request)
+    system.listen_for_stop(RUN, on_request)
     _write_pid()
     chromes.adopt(state.profiles())
     threading.Thread(target=page_server.serve_forever, daemon=True).start()

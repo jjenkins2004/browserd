@@ -11,21 +11,24 @@ import subprocess
 import tempfile
 import threading
 
-from . import cdp, system
+from . import cdp, paths, system
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = paths.ROOT
 DESKTOP = system.DESKTOP
 PACKAGE = os.path.join(ROOT, "node_modules", "chrome-devtools-mcp", "build", "src", "bin", "chrome-devtools-mcp.js")
 # The file tools (upload, screenshots to a path) may only touch these and the temporary folder, which chrome-devtools-mcp
-# always adds. ROOT holds the record folders a queue saves screenshots in, wherever this project sits.
-FILE_ROOTS = [DESKTOP, ROOT, *system.EXTRA_ROOTS]
+# always adds. paths.RUN holds the record folders a queue saves screenshots in: inside ROOT in a checkout, the user's
+# own folder in an installed copy.
+_OWN = [ROOT] + ([] if os.path.normcase(paths.RUN).startswith(os.path.normcase(ROOT) + os.sep) else [paths.RUN])
+FILE_ROOTS = [DESKTOP, *_OWN, *system.EXTRA_ROOTS]
 # The same, as the queue's description names them: its length may not hang on how long the user's paths are, since
 # Claude Code cuts a description at about 2,000 characters. A refusal names them in full, as ROOTS_SPELLED.
-ROOTS_TEXT = ("~/Desktop, /tmp, $TMPDIR or browserd's folder" if system.NAME == "macOS" else
-              "your Desktop, the temporary folder (%TEMP%) or browserd's folder")
-ROOTS_SPELLED = (ROOTS_TEXT if system.NAME == "macOS" else
-                 "your Desktop (%s), the temporary folder (%s) or browserd's folder (%s)"
-                 % (DESKTOP, tempfile.gettempdir(), ROOT))
+_FOLDERS = "browserd's folder" if len(_OWN) == 1 else "browserd's folders"
+ROOTS_TEXT = ("~/Desktop, /tmp, $TMPDIR or %s" % _FOLDERS if system.NAME == "macOS" else
+              "your Desktop, the temporary folder (%%TEMP%%) or %s" % _FOLDERS)
+ROOTS_SPELLED = ("%s (%s)" % (ROOTS_TEXT, " and ".join(_OWN)) if system.NAME == "macOS" else
+                 "your Desktop (%s), the temporary folder (%s) or %s (%s)"
+                 % (DESKTOP, tempfile.gettempdir(), _FOLDERS, " and ".join(_OWN)))
 FLAGS = [
     "--no-usage-statistics", "--no-performance-crux",
     "--no-category-performance", "--no-category-network", "--no-category-emulation",

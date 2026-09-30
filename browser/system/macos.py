@@ -9,7 +9,7 @@ import subprocess
 
 from . import Unanswered
 
-__all__ = ["NAME", "CHROME", "CHROME_FLAGS", "APP", "CHROME_DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
+__all__ = ["NAME", "CHROME", "CHROME_FLAGS", "APP", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
            "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
@@ -19,6 +19,7 @@ APP = "/Applications/Google Chrome.app"
 CHROME = APP + "/Contents/MacOS/Google Chrome"
 CHROME_FLAGS = []  # scrollbars on a Mac already overlay the page
 CHROME_DATA = os.path.expanduser("~/Library/Application Support/Google")
+DATA = os.path.expanduser("~/Library/Application Support/browserd")
 DESKTOP = os.path.expanduser("~/Desktop")
 EXTRA_ROOTS = ["/private/tmp"]
 COMMAND_KEY, COMMAND_BIT, COMMAND_PROPERTY = "Meta", 4, "metaKey"  # the Command key
@@ -120,14 +121,14 @@ def hidden():
     return {}
 
 
-def listen_for_stop(root, on_request):
+def listen_for_stop(run, on_request):
     # Only SIGHUP, from ../restart, keeps every Chrome and session.
     signal.signal(signal.SIGTERM, lambda number, frame: on_request("stop"))
     signal.signal(signal.SIGINT, lambda number, frame: on_request("stop"))
     signal.signal(signal.SIGHUP, lambda number, frame: on_request("restart"))
 
 
-def request_stop(pid, root, restart):
+def request_stop(pid, run, restart):
     try:
         os.kill(pid, signal.SIGHUP if restart else signal.SIGTERM)
     except OSError as exc:
