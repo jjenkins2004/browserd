@@ -170,6 +170,7 @@ class Browser:
         self._ws = WebSocket(require(profile)["webSocketDebuggerUrl"], CALL_WAIT)
         self._last = 0
         self._events = []
+        self._unanswered = set()  # ids of commands whose answers are no longer waited for
         # The OS may not show every process's port (lsof sees only this user's), so the browser that answered says which
         # process it is.
         answered = [p["id"] for p in self.call("SystemInfo.getProcessInfo")["processInfo"] if p.get("type") == "browser"]
@@ -180,22 +181,47 @@ class Browser:
                                                      profile.name, profile.name))
         self.pid = answered[0]
 
-    def call(self, method, session=None, wait=None, **params):
-        self._last += 1
-        message_id = self._last
-        message = {"id": message_id, "method": method, "params": params}
-        if session:
-            message["sessionId"] = session
-        self._ws.settimeout(wait or CALL_WAIT)  # whatever a wait_for or next_event before it left
-        self._ws.send(json.dumps(message))
+    def call(self, method, session=None, wait=None, nudge=None, **params):
+        """A command's result.
+
+        Args:
+            wait (float | None): seconds to wait for its answer, in place of CALL_WAIT.
+            nudge (float | None): send the command again each time this many seconds pass without an answer, and take
+                the first answer to any of them. Page.captureScreenshot of a tab Chrome is not drawing, as a background
+                tab on Windows, can wait for a frame that never comes until another capture asks for one.
+        """
+        sent = []
+
+        def send():
+            self._last += 1
+            message = {"id": self._last, "method": method, "params": params}
+            if session:
+                message["sessionId"] = session
+            self._ws.send(json.dumps(message))
+            sent.append(self._last)
+
+        deadline = time.monotonic() + (wait or CALL_WAIT)
+        send()
         while True:
+            left = deadline - time.monotonic()
+            # Whatever a wait_for or next_event before it left, the socket waits no longer than the next nudge.
+            self._ws.settimeout(max(0.01, min(left, nudge) if nudge else left))
             try:
                 answer = json.loads(self._ws.recv())
             except Timeout:
-                raise Late("%s did not answer in time" % method)
-            if answer.get("id") != message_id:
+                if time.monotonic() >= deadline:
+                    self._unanswered.update(sent)
+                    raise Late("%s did not answer in time" % method)
+                if nudge:
+                    send()
+                continue
+            if answer.get("id") in self._unanswered:
+                self._unanswered.discard(answer["id"])  # a late answer to a command already given up or answered
+                continue
+            if answer.get("id") not in sent:
                 self._events.append(answer)
                 continue
+            self._unanswered.update(set(sent) - {answer["id"]})
             if "error" in answer:
                 raise CdpError("%s: %s" % (method, answer["error"].get("message", answer["error"])))
             return answer.get("result", {})

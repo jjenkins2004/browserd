@@ -11,6 +11,9 @@ from .ws import WebSocketError
 
 FORMAT, QUALITY = "jpeg", 80  # a quarter of a PNG's bytes, which every later request of a conversation carries again
 ANSWER_WAIT = 5.0  # seconds the page has to answer before a screenshot fails, as it never does while a dialog is open
+# Seconds a capture waits before asking again: Chrome on Windows can hold a background tab's capture for a frame that
+# only another capture brings (measured: every capture answered within 3s nudged, where one in two hung for 60s).
+NUDGE = 0.5
 LONGEST = 2000  # pixels on the image's longer side; Claude Code shrinks a larger image, moving every point read off it
 
 
@@ -80,7 +83,7 @@ def capture(browser, session, kind, quality, scale):
     clip = {"x": css["pageX"], "y": css["pageY"], "width": css["clientWidth"], "height": css["clientHeight"],
             "scale": fit * css["clientWidth"] / device["clientWidth"]}
     extra = {} if kind == "png" else {"quality": quality}
-    data = browser.call("Page.captureScreenshot", session, format=kind, clip=clip, **extra)["data"]
+    data = browser.call("Page.captureScreenshot", session, nudge=NUDGE, format=kind, clip=clip, **extra)["data"]
     return data, css, fit
 
 
