@@ -1,5 +1,5 @@
-"""What each installer put where, for browserd uninstall to take away: the code's folder, the command on the PATH, and
-browserd in Claude Code. The records folder and each profile's Chrome folder are never touched.
+"""What each installer put where, for browserd uninstall to take away: the code's folder and the command on the PATH.
+The records folder and each profile's Chrome folder are never touched, nor any agent's own registration of browserd.
 
     Homebrew     <prefix>/Cellar/browserd/<version>/libexec; brew uninstall browserd removes it and its command
     install.sh   <prefix>/app, the prefix ~/.local/share/browserd unless BROWSERD_PREFIX named another; the command a
@@ -14,9 +14,6 @@ import shutil
 import subprocess
 
 from . import system
-
-UNREGISTER = ["mcp", "remove", "-s", "user", "browserd"]  # claude's arguments, as the README registers it
-
 
 class Install:
     """One installer's browserd: the folder its code is in, removed whole, and what else that installer put here."""
@@ -34,7 +31,6 @@ class Install:
         lines += ["%s (the browserd command)" % command for command in self.commands]
         if self.path_entry:
             lines.append("%s from your PATH" % self.path_entry)
-        lines.append("browserd from Claude Code's MCP servers (claude %s)" % " ".join(UNREGISTER))
         return lines
 
 
@@ -71,7 +67,7 @@ def _links_to(target):
 def remove(install):
     """Take away what install.removes() names, once the caller has stopped the server, and return what was done, a line
     each."""
-    said = [_unregister()]
+    said = []
     if install.by == "Homebrew":
         if not install.brew or subprocess.run([install.brew, "uninstall", "browserd"]).returncode:
             raise SystemExit("brew uninstall browserd did not finish; run it yourself")
@@ -91,16 +87,3 @@ def remove(install):
         raise SystemExit("\n".join(said + ["could not remove %s (%s); delete it yourself" % (install.folder, exc)]))
     return said + ["removed %s" % install.folder if gone else "%s goes once this command has exited" % install.folder]
 
-
-def _unregister():
-    claude = shutil.which("claude")
-    if not claude:
-        return "Claude Code is not on the PATH; if it has browserd, remove it with: claude %s" % " ".join(UNREGISTER)
-    try:
-        done = subprocess.run([claude] + UNREGISTER, capture_output=True, text=True, errors="replace", timeout=30)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return "could not remove browserd from Claude Code (%s); run: claude %s" % (exc, " ".join(UNREGISTER))
-    if done.returncode:
-        lines = (done.stderr or done.stdout).strip().splitlines()
-        return "Claude Code removed no browserd (%s)" % (lines[-1] if lines else "exit %d" % done.returncode)
-    return "removed browserd from Claude Code"

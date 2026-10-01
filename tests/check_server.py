@@ -2059,8 +2059,8 @@ def service_offline():
             check("%s asks the server to %s and waits for it to exit" % (name, name),
                   ready.strip() == "set" and exited == code_wanted, "%r, exit %r, %r" % (ready, exited, said[name]))
         check("restart then starts the server again, which here answers already",
-              said["restart"].startswith("restarted, every Chrome and session kept; already running on port %d: %s\n"
-                                         % (server.PORT, server.URL)), said["restart"])
+              said["restart"].startswith("restarted, every Chrome and session kept\nalready running  pid ")
+              and "  MCP        %s\n" % server.URL in said["restart"], said["restart"])
         ours.shutdown()
         ours.server_close()
     finally:
@@ -2103,8 +2103,8 @@ def paths_offline():
         free.server_close()
         server.RUN = workdir
         check("browserd status says not running, the ports start serves on, and where the records are",
-              service.status() == "not running; start serves on port %d, and the page on port %d (records in %s)"
-              % (server.PORT, page.PORT, workdir), service.status())
+              service.status() == "not running\n  MCP        %s\n  dashboard  http://127.0.0.1:%d/\n  records    %s"
+              % (server.URL, page.PORT, service._home(workdir)), service.status())
     finally:
         paths.ROOT, home, server.PORT, server.URL, server.RUN = saved
         if home is None:

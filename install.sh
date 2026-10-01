@@ -103,5 +103,5 @@ esac
 
 say ""
 say "next:"
+say "  browserd setup    the ports, and the line to paste to your agent"
 say "  browserd start"
-say "  claude mcp add -s user --transport http browserd http://127.0.0.1:9230/mcp"

@@ -149,6 +149,6 @@
 
     Write-Host ''
     Write-Host 'next:'
+    Write-Host '  browserd setup    the ports, and the line to paste to your agent'
     Write-Host '  browserd start'
-    Write-Host '  claude mcp add -s user --transport http browserd http://127.0.0.1:9230/mcp'
 }

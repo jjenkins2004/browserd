@@ -30,6 +30,7 @@ says what each OS does in its place.
     remove_own_folder(folder)    remove the folder this browserd runs from; True once gone, False when it goes after
                                  this process exits
     drop_from_user_path(folder)  take a folder off the user's PATH, and return whether it was on it
+    ansi(stream)          whether a terminal stream shows ANSI colors, turning them on where the OS needs it
     listen_for_stop(run, on_request)  call on_request("stop" or "restart") when browserd stop or restart asks the
                                       server whose records folder is run
     request_stop(pid, run, restart)   ask the server that is pid, whose records folder is run, to stop, or restart

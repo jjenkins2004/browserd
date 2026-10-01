@@ -3,18 +3,19 @@
 ## Module TL;DR
 
 The browser MCP server: it starts and owns one Chrome per profile and serves tools to Claude Code agents
-over HTTP on `127.0.0.1:9230`, so pages are read and driven with that profile's logins. An agent first calls `session_start {profile, label}`, and passes the session id it
+over HTTP on `127.0.0.1:9230` (`ports.MCP`), so pages are read and driven with that profile's logins. An agent first calls `session_start {profile, label}`, and passes the session id it
 gets to every other tool but `profile_new` and `profile_delete`, which make and delete a profile. `tab_open`, `tab_list`, `tab_show` and `tab_close` manage the session's own tabs by
 short tab ids, and `tab_needs_input` marks one as needing the user's input, for the page to show, until its agent clears the mark
 or the tab closes; `queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
 records every call in that tab's record folder, `calls/<profile>/<session>-<label>/<tab>/` in the records folder
 (`paths.RUN`: `../.run/` in a checkout, the user's own folder in an installed copy). The
-browserd page, at `http://127.0.0.1:9231/`, lists the profiles kept in the records folder's `state.db` as a strip of
+browserd page (the dashboard, in what the command prints), at `http://127.0.0.1:9231/` (`ports.PAGE`), lists the profiles kept in the records folder's `state.db` as a strip of
 profile tabs and shows one profile's sessions and tabs at a time; it makes and deletes profiles, opens and quits a profile's Chrome,
 shows and closes tabs, and closes sessions.
 Python standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`;
 run `npm ci`).
 
+    browserd setup      choose the two ports, and print the line that connects an agent
     browserd start      start the server in the background; no Chrome starts with it
     browserd stop       stop the server, which quits every profile's Chrome and closes every session
     browserd restart    restart the server alone, leaving every Chrome and session as it is
@@ -32,7 +33,9 @@ run `npm ci`).
       system/      what differs by OS, behind one set of names: macos.py, windows.py
       mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch
       server.py    the server process: tools, page, pid file
-      service.py   browserd start, stop, restart: background start, locked; stop and restart by pid; status, version, uninstall
+      service.py   browserd start, stop, restart: background start, locked; stop and restart by pid; status, version, setup, uninstall
+      ports.py     the MCP port and the page's: 9230 and 9231, or ports.json's
+      colors.py    the command's colors, for a terminal only
       installs.py  what each installer put where, for browserd uninstall
       paths.py     ROOT, this project's folder; RUN, the records folder; the version, from ../VERSION
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
@@ -48,10 +51,10 @@ run `npm ci`).
       profiles.py  Profile (name, folder, port); what a new profile is given; deleting one
       state.py     .run/state.db: the profiles, sessions, tabs and their `needs_input` marks
       sessions.py  session ids, labels, record folder names, when a session is paused
-      page.py      the browserd page on 9231: GET /state, and a POST per button
+      page.py      the browserd page on ports.PAGE: GET /state, and a POST per button
       ui/          the page itself: one file per part, and each part's states; its own README
     ../browserd, ../browserd.cmd  the command, on macOS and Windows
-    ../.run/                    gitignored, a checkout's records folder: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
+    ../.run/                    gitignored, a checkout's records folder: server.pid, server.log, start.lock, state.db, ports.json, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
     ../tests/check_server.py    protocol, tab ids, sessions, focus, queue, recording, profiles, page, service; live tabs, queue
     ../tests/check_browser.py   framing, a profile's Chrome proof, launch; live proof, tab load
@@ -72,6 +75,7 @@ run `npm ci`).
 | starting Chrome | `open -gna`, no window | the binary, detached, its first window shown without the focus |
 | the app in front, bringing one | `lsappinfo`, AppKit through `osascript` | the foreground window; `SetForegroundWindow`, shared input, `SwitchToThisWindow` |
 | `browserd stop`, `restart` | SIGTERM, SIGHUP | two named events per checkout and user |
+| the command's colors | on in a terminal | on in a console once asked (`ENABLE_VIRTUAL_TERMINAL_PROCESSING`) |
 | `browserd uninstall` removing its own folder | at once | by a process of its own, once browserd has exited; its `bin` taken off the user's PATH |
 | the command key (paste, `Meta+A`) | Meta (Command) | Control |
 
@@ -82,8 +86,16 @@ which on Windows would send the user's credentials to that host.
 **`installs.find`** is `browserd uninstall`'s map of what each installer put where (its docstring lists the three
 layouts); `service.uninstall` says what it removes and keeps, asks y/N, stops the server, then `installs.remove` runs
 `brew uninstall browserd` for Homebrew, or removes the code's folder and the command install.sh linked or install.ps1
-put on the PATH, and runs `claude mcp remove -s user browserd`. A git checkout is refused. The records folder and
-every profile's Chrome folder are never touched.
+put on the PATH. A git checkout is refused. The records folder and every profile's Chrome folder are never touched,
+and neither is any agent's registration of browserd: uninstall prints a line for the user to paste to their agent.
+
+**`ports.MCP`** and **`ports.PAGE`** are the two ports the server binds, read from the records folder's `ports.json`
+as each process starts (9230 and 9231 without one, or with one that is not two different ports from 1024 to 65535).
+`browserd setup` asks for each, Enter keeping it, refusing a port a profile's Chrome has, the other port, or one
+another program listens on (the running server may keep its own); saves them; restarts a running server in a process
+of its own, which reads the new ports as it starts; and prints `service.CONNECT`, the line the user pastes to their
+agent, which registers browserd itself. browserd never edits an agent's settings: an agent keeps the address it
+registered, so after the MCP port changes its registration needs that line again and its open sessions a reconnect.
 
 **`cdp.require(profile)`** is the proof that a profile's port is that profile's Chrome, and every connection
 goes through it: `cdp.Browser(profile)` and `launch.launch(profile)` both call it. It checks against the
@@ -115,7 +127,7 @@ profile: a folder taken over must hold no Chrome profile but Chrome's `Default` 
 `%LOCALAPPDATA%\Google\Chrome-<name>` on Windows), made empty, or one of `profiles.free_folders` (a
 `Chrome-*` folder there that no profile uses) taken over with its logins, once `cdp.check_folder` passes.
 Its port is the one that folder's Chrome already runs with, when no profile has it; otherwise the lowest from 9223
-to 9299 that no profile has, the server does not hold (9230, 9231), and nothing listens on, on any address. A
+to 9299 that no profile has, the server does not hold (`ports.MCP`, `ports.PAGE`), and nothing listens on, on any address. A
 name Windows keeps for a device (`CON`, `NUL`, `COM1`...) is refused on every OS, since it names a folder of
 `.run/calls`. **`profiles.delete`**, which the
 page's Delete profile and the `profile_delete` tool call, removes one from `state.db` first, so no `session_start` or `tab_open` finds it meanwhile, then quits its Chrome, so a
@@ -128,7 +140,7 @@ of `profiles.free_folders`, whatever its case, so a deleted profile whose folder
 passes `close_sessions=False`, and is refused while the profile has an open session (no agent ends one, below),
 checked once the profile is removed.
 
-**`page.Page`** serves the page on 9231 on a thread of the server's own. `GET /` is `page.assemble()`: `ui/page.html` with
+**`page.Page`** serves the page on `ports.PAGE` on a thread of the server's own. `GET /` is `page.assemble()`: `ui/page.html` with
 `ui/page.css` and the scripts of `page.PARTS` put in, read again on every load. `GET /state` gives
 every profile with its Chrome's pid (or `null`, not running), `error` when its Chrome's tabs could not be
 listed, its open sessions (active or paused) with their
@@ -213,7 +225,7 @@ step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view s
 `<n>-page-now-reply.txt`.
 
 **Server lifecycle**, in `server.serve()`: open `.run/state.db`, ask a chrome-devtools-mcp process for its
-tool list (no browser needed), bind 9230 and the page's 9231 (exclusively: on Windows `SO_REUSEADDR` would let a
+tool list (no browser needed), bind `ports.MCP` and the page's `ports.PAGE` (exclusively: on Windows `SO_REUSEADDR` would let a
 second server bind beside the first), listen for `browserd stop` and `restart` (`system.listen_for_stop`), write
 `.run/server.pid`, `chromes.adopt` every profile's Chrome already running, then serve the page on a thread and
 the tools. Record folders and devtools logs are never removed. Another thread looks every `server.PAUSE_POLL`
@@ -316,18 +328,18 @@ same tabs under the same ids. A crash leaves the same.
 - **A tab opened by hand is no session's** until `/handover` gives it to one. It gets a tab id at the next listing, but
   no session's `tab_list` shows it before then. A tab
   closed outside the server is marked closed at the next listing or use, and its id stays refused.
-- **The MCP port, 9230, refuses any request with an `Origin` header, a `Host` other than
-  `127.0.0.1:9230` or `localhost:9230`, or a body that is not `application/json`.** A web page
+- **The MCP port, `ports.MCP`, refuses any request with an `Origin` header, a `Host` other than
+  `127.0.0.1:<that port>` or `localhost:<that port>`, or a body that is not `application/json`.** A web page
   open in any Chrome could otherwise POST to it and drive the browser.
-- **The page has a port of its own, 9231,** so the MCP port keeps refusing every request with an `Origin`. Every
-  page request must carry a `Host` of `127.0.0.1:9231` or `localhost:9231`, and no `Origin` but the page's own;
+- **The page has a port of its own, `ports.PAGE`,** so the MCP port keeps refusing every request with an `Origin`. Every
+  page request must carry a `Host` of `127.0.0.1:<that port>` or `localhost:<that port>`, and no `Origin` but the page's own;
   a POST must carry that one. `GET /state` and every POST must also carry `X-Browserd-Token`, a random value
   written into the page when it is served and new each start. A web page open in any Chrome
   cannot read the token, since the page sends no CORS headers, and cannot frame the page to steer a click
   (`frame-ancestors 'none'`).
 - **`browserd stop` and `restart` only signal a pid whose command line runs `-m browser.server`.** A stale pid file
   can name a reused pid. `browserd start` holds `.run/start.lock` while it checks and spawns, and treats
-  anything answering on 9230 under another server name as a refusal.
+  anything answering on the MCP port under another server name as a refusal.
 - **One chrome-devtools-mcp process runs one tool call at a time** (one `Mutex` in its
   `McpServer`, taken by every `ToolHandler.handle`), so a single shared process would put every
   tab in one line. Each tab gets its own, about 180MB each.
@@ -639,6 +651,6 @@ same tabs under the same ids. A crash leaves the same.
     them, and close them (`queue_live`'s download checks also save two files in the real `~/Downloads`, the
     throwaway Chrome keeping Chrome's own download folder, and remove them); a tab already open is never touched. No live check moves the Mac's focus:
     `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
-  - **Never automated:** `browserd start`, `stop`, `restart` and `uninstall` are never run, since each acts on the
+  - **Never automated:** `browserd start`, `stop`, `restart`, `setup` and `uninstall` are never run, since each acts on the
     real browserd: stopping quits every profile's Chrome, restarting replaces the one running, and uninstalling
     removes it.

@@ -24,7 +24,7 @@ from . import Unanswered
 
 __all__ = ["NAME", "CHROME", "CHROME_FLAGS", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
-           "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "remove_own_folder", "drop_from_user_path", "listen_for_stop", "request_stop",
+           "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "remove_own_folder", "drop_from_user_path", "ansi", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
 
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -70,6 +70,8 @@ _GetWindowTextLengthW = _declare(_user32.GetWindowTextLengthW, ctypes.c_int, win
 _AttachThreadInput = _declare(_user32.AttachThreadInput, wintypes.BOOL, wintypes.DWORD, wintypes.DWORD, wintypes.BOOL)
 _GetCurrentThreadId = _declare(_kernel32.GetCurrentThreadId, wintypes.DWORD)
 _SwitchToThisWindow = _declare(_user32.SwitchToThisWindow, None, wintypes.HWND, wintypes.BOOL)
+_GetConsoleMode = _declare(_kernel32.GetConsoleMode, wintypes.BOOL, wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+_SetConsoleMode = _declare(_kernel32.SetConsoleMode, wintypes.BOOL, wintypes.HANDLE, wintypes.DWORD)
 _SendMessageTimeoutW = _declare(_user32.SendMessageTimeoutW, ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
                                 wintypes.WPARAM, wintypes.LPCWSTR, wintypes.UINT, wintypes.UINT,
                                 ctypes.POINTER(ctypes.c_size_t))
@@ -96,6 +98,7 @@ _INFO_LENGTH_MISMATCH = 0xC0000004
 _HWND_MESSAGE = wintypes.HWND(-3)
 _HWND_BROADCAST = wintypes.HWND(0xFFFF)
 _WM_SETTINGCHANGE, _SMTO_ABORTIFHUNG = 0x001A, 0x0002
+_VIRTUAL_TERMINAL = 0x0004  # ENABLE_VIRTUAL_TERMINAL_PROCESSING: the console reads ANSI codes
 _TCP_LISTENERS = 3  # TCP_TABLE_OWNER_PID_LISTENER
 _EVENT_MODIFY_STATE = 0x0002
 _DETACHED_PROCESS, _NEW_GROUP, _NO_WINDOW, _BREAKAWAY = 0x00000008, 0x00000200, 0x08000000, 0x01000000
@@ -453,6 +456,18 @@ def drop_from_user_path(folder):
     _SendMessageTimeoutW(_HWND_BROADCAST, _WM_SETTINGCHANGE, 0, "Environment", _SMTO_ABORTIFHUNG, 5000,
                          ctypes.byref(ctypes.c_size_t()))
     return True
+
+
+def ansi(stream):
+    # Windows 10's console reads ANSI codes once asked to; one that will not, or a stream that is no console, shows none.
+    try:
+        handle = msvcrt.get_osfhandle(stream.fileno())
+    except (OSError, ValueError):
+        return False
+    mode = wintypes.DWORD()
+    if not _GetConsoleMode(handle, ctypes.byref(mode)):
+        return False
+    return bool(mode.value & _VIRTUAL_TERMINAL or _SetConsoleMode(handle, mode.value | _VIRTUAL_TERMINAL))
 
 
 def _events(run):

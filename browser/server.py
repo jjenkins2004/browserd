@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 
-from . import cdp, devtools, guard, mcp, page, paths, profiles, record, sessions, steps, system
+from . import cdp, devtools, guard, mcp, page, paths, ports, profiles, record, sessions, steps, system
 from .chromes import Chromes
 from .devtools import Devtools
 from .state import Session, State
@@ -19,7 +19,7 @@ from .worker import Workers
 from .ws import WebSocketError
 
 HOST = "127.0.0.1"
-PORT = 9230
+PORT = ports.MCP
 URL = "http://%s:%d%s" % (HOST, PORT, mcp.PATH)
 PAGE_URL = "http://%s:%d/" % (HOST, page.PORT)
 NAME = "browserd"

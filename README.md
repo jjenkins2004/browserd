@@ -24,10 +24,14 @@ Windows, from PowerShell (into `%LOCALAPPDATA%\Programs\browserd`, with its `bin
 
     irm https://raw.githubusercontent.com/jjenkins2004/browserd/main/install.ps1 | iex
 
-Then, from any terminal, and once to register it with Claude Code at user scope, so every session has it:
+Then, from any terminal:
 
+    browserd setup
     browserd start
-    claude mcp add -s user --transport http browserd http://127.0.0.1:9230/mcp
+
+`browserd setup` asks for the MCP and dashboard ports, Enter keeping 9230 and 9231, and prints a line to paste
+to your agent (Claude Code or any other MCP client), which registers browserd itself. Run it again to change
+the ports.
 
 Running an installer again updates browserd, and a server that was running is restarted on the new version
 with every Chrome and session kept; after `brew upgrade browserd`, run `browserd restart`. Each installer's
@@ -35,17 +39,19 @@ header lists its settings (a version to pin, where it goes); `browserd uninstall
 
 ## Use
 
+    browserd setup    the ports, 9230 for MCP and 9231 for the dashboard unless changed, and the line to
+                      paste to your agent; a running server restarts on new ones
     browserd start    the server, in the background; each profile's Chrome starts on its first use. The
-                      browserd page, http://127.0.0.1:9231/, makes profiles and shows their sessions and tabs
+                      dashboard, http://127.0.0.1:9231/, makes profiles and shows their sessions and tabs
     browserd stop     stops the server, which quits every profile's Chrome with it and closes every session
     browserd restart  restarts the server alone: every Chrome keeps running and every session stays open
     browserd status   whether the server is running, on which ports, and where its records are
     browserd version  which browserd this is, and where it is installed
-    browserd uninstall  stops the server and removes browserd, its command and its Claude Code registration,
-                      after asking; the records and every profile's Chrome folder, logins and all, stay
+    browserd uninstall  stops the server and removes browserd and its command, after asking, and prints the
+                      line for your agent to remove it; the records and every profile's Chrome folder stay
 
-Its records (server.pid, server.log, start.lock, state.db with the profiles, sessions and tabs, devtools-*.log,
-and calls/) go in `~/Library/Application Support/browserd` on a Mac and `%LOCALAPPDATA%\browserd` on Windows,
+Its records (server.pid, server.log, start.lock, state.db with the profiles, sessions and tabs, ports.json,
+devtools-*.log, and calls/) go in `~/Library/Application Support/browserd` on a Mac and `%LOCALAPPDATA%\browserd` on Windows,
 whichever version runs; `BROWSERD_HOME` names another folder.
 
 ## From a clone
@@ -63,14 +69,14 @@ A git checkout runs as it is, and keeps its records in `.run/` beside the code: 
     VERSION                 the version on main, which install.sh and install.ps1 install as its tag, v<VERSION>
     install.sh, install.ps1 the macOS and Windows installers, run from GitHub; Formula/browserd.rb is Homebrew's
     scripts/release         cuts a release: VERSION, the tag, and the formula's archive and sha256
-    .run/                   gitignored, a checkout's records: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs, needs_input), devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
+    .run/                   gitignored, a checkout's records: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs, needs_input), ports.json, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     tests/                  check_browser.py, check_server.py; throwaway.py, the live checks' own Chrome
     preview/                every state of the page's parts from made-up data: `python3 preview/preview.py`, then http://127.0.0.1:9320/
     bench/                  the benchmarks against other browser MCP servers, their scripts, and how to rerun them
     .claude/skills/         benchmark: a rerun's steps, for an agent
 
 `browser/README.md` is the one to read before changing any of it: the Chrome proof, the tab ids, the
-queue's checked steps, and what each tool refuses. Agents connect over HTTP at `http://127.0.0.1:9230/mcp`.
+queue's checked steps, and what each tool refuses. Agents connect over HTTP at `http://127.0.0.1:9230/mcp`, or the port `browserd setup` chose.
 After a restart that changed the tools, a Claude Code session already open lists them again at its next
 browserd call and has them from its next turn; one that connected to a browserd from before
 `tools.listChanged` needs `/mcp` to reconnect once. `browser/README.md` says why.

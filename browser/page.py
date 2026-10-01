@@ -1,4 +1,4 @@
-"""The browserd page, http://127.0.0.1:9231/: every profile, its Chrome, its sessions and their tabs, and the buttons
+"""The browserd page, the dashboard, on ports.PAGE (9231 unless browserd setup chose another): every profile, its Chrome, its sessions and their tabs, and the buttons
 that make or delete a profile, open or quit its Chrome, show or close a tab, and close sessions.
 
 One page, ui/page.html with ui/'s parts put in, that polls GET /state and POSTs its buttons. README.md, "Agent Gotchas & Invariants",
@@ -13,10 +13,10 @@ import time
 from http.server import BaseHTTPRequestHandler
 from typing import cast
 
-from . import cdp, mcp, profiles, sessions
+from . import cdp, mcp, ports, profiles, sessions
 from .ws import WebSocketError
 
-PORT = 9231
+PORT = ports.PAGE
 UI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 # The page's parts, each ui/<part>.js, put into ui/page.html's one script in this order.
 PARTS = ("base", "header", "needs", "profile_tab", "profile", "session", "tab", "by_hand", "new_profile", "page")

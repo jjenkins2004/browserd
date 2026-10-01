@@ -29,9 +29,9 @@ class Browserd < Formula
       browserd needs Google Chrome:
         brew install --cask google-chrome
 
-      Start the server, and register it once with Claude Code:
+      Choose the ports and get the line to paste to your agent, then start the server:
+        browserd setup
         browserd start
-        claude mcp add -s user --transport http browserd http://127.0.0.1:9230/mcp
 
       After brew upgrade browserd, run browserd restart: every Chrome and session is kept.
     EOS
