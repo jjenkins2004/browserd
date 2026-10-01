@@ -3,9 +3,9 @@
 ## Module TL;DR
 
 Long, bounded browser tasks for a demo of browserd: a real agent doing an hour-scale job on real sites, in the user's own
-logged-in Chrome (the `personal` profile), ending in Google files, with the tab it works in recorded as a timelapse. Each task names its entities, its sources (pinned
-where they can be), its fields and the exact files and slides it ends in, so a longer run means the harness struggled,
-not that the model chose to dig deeper. Each task has an answer key wherever the sources hold still.
+logged-in Chrome (the `personal` profile), ending in Google files, with the tab it works in recorded as a timelapse.
+Each task names its entities, its sources (pinned where they can be), its fields and the exact files and slides it ends
+in, so a longer run means the harness struggled, not that the model chose to dig deeper. Each task has an answer key wherever the sources hold still.
 
 ## Directory Layout
 
@@ -20,6 +20,7 @@ not that the model chose to dig deeper. Each task has an answer key wherever the
         key.json    the 3 November highs; fares are live, so it has none
       run.sh        one run: a clean Claude Code on claude-sonnet-5-5 with the task's prompt, record.py beside it
       record.py     the timelapse: the session's working tab, captured over DevTools, into frames/ and video.mp4
+      grade.py      checks a run's deck (and capex's Sheet) against the key, and trip's fares against its records
 
 ## Core Abstractions & Shared Pieces
 
@@ -35,6 +36,12 @@ not that the model chose to dig deeper. Each task has an answer key wherever the
 - **The working tab** is the one whose record folder (`.run/calls/<profile>/<session>-<label>/<tab>/`) changed last:
   each queue writes there. `record.py` finds the session by its label in `state.db`, maps the tab to its DevTools target
   (`tabs.target`) and captures it on a connection of its own, so browserd never knows and the tab need not be in front.
+- **A grade** is `grade.py capex <deck URL> <sheet URL>` or `grade.py trip <deck URL> [--session ID]`: the deck's
+  `.pptx` export and the Sheet's `.xlsx`, fetched with the profile's cookies from a background tab of its own on
+  docs.google.com (closed after), read with `zipfile` and ElementTree, then one ok/BAD line per check and a score.
+  Text is compared through `norm` (compatibility forms, dashes, quotes, spacing, case). Trip's fares, times and airlines
+  must appear in the text records of the run's session, the newest labelled "weekend trip" unless `--session` names
+  one.
 
 ## Agent Gotchas & Invariants (⚠️)
 
@@ -44,7 +51,12 @@ not that the model chose to dig deeper. Each task has an answer key wherever the
 - `--safe-mode` would hide the user's setup too, but it also drops `--mcp-config`'s servers: a run would have no
   browserd. A fresh `CLAUDE_CONFIG_DIR` works but needs its own login.
 - A run's folder is never reused: a second run needs a new name, so no recording is overwritten.
-- `record.py` imports browserd from this checkout and reads the records `browser/paths.py` names: run it from the
-  checkout the server on 9230 runs from, or set `BROWSERD_HOME` to that server's records.
+- `record.py` and `grade.py` import browserd from this checkout and read the records `browser/paths.py` names: run
+  them from the checkout the server on 9230 runs from, or set `BROWSERD_HOME` to that server's records.
+- The grader's tab is opened over DevTools, not through browserd, so it is in no session, and its fetch must wait for
+  docs.google.com's own page: the tab's first context, about:blank's, goes when the page loads.
+- No export shows that slide 6's chart is linked to the Sheet, or that column H is formatted as a percent: those are
+  left to the eye. That a Sheets chart reaches the `.xlsx` export as `xl/charts/` is untested: a run with a chart is
+  the first proof.
 - Keep the profile's Chrome window open, even behind others: a minimized window may stop drawing frames (untested).
 - SEC refuses a User-Agent without a contact address: `key.py` sends a placeholder one, `SEC_USER_AGENT` a real one.
