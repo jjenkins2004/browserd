@@ -1,10 +1,10 @@
 """Which of FormFactory's gold keys name no field of their form by its label: how formfactory.ALIASES was made.
 
-    python3 bench/tools/ffmap.py
+    python3 experiments/bench/tools/ffmap.py
 """
 import json,re,glob,os,sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # bench/, for paths
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # experiments/bench/, for paths
 import paths  # noqa: E402
 os.chdir(paths.DATA / "formfactory")  # its templates/ and data/ are read from there
 from html.parser import HTMLParser

@@ -26,5 +26,5 @@ echo "d76d51fffb6e69dba399f658a1fca80b0501703d7e46e20fd6848f8d81a3a03c  $TASKS" 
 
 npx -y @playwright/mcp@0.0.82 --help > /dev/null  # the playwright arm's pinned version, fetched before any run
 command -v agent-browser > /dev/null || echo "the agentbrowser arm needs: npm i -g agent-browser@0.38.1 && agent-browser install"
-[ -x "$BENCH/../node_modules/.bin/chrome-devtools-mcp" ] || echo "the devtools arm needs browserd's own: npm ci, in $BENCH/.."
+[ -x "$BENCH/../../node_modules/.bin/chrome-devtools-mcp" ] || echo "the devtools arm needs browserd's own: npm ci, in $BENCH/../.."
 echo "data folder ready: $DATA"

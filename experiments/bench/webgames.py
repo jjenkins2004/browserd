@@ -3,7 +3,7 @@
 Each challenge shows a password once solved; a run passes when its final message holds that password, as
 WebGames' own Inspect scorer checks. The site must be up first:
 
-    bench/sites.sh start
+    experiments/bench/sites.sh start
 """
 import json
 import urllib.request

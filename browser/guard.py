@@ -1,7 +1,7 @@
 """The click guard: a queue's pointer press, or its keys, stopped when the page changed there since the last viewport
 screenshot the agent got, so a click read off that screenshot does not land on a popup the agent never saw.
 
-README.md, "Agent Gotchas & Invariants", gives the checks and when each runs; ../findings/real-sites.md measured
+README.md, "Agent Gotchas & Invariants", gives the checks and when each runs; ../experiments/findings/real-sites.md measured
 them (the setting below) on 19 real sites and 126 agent runs.
 """
 

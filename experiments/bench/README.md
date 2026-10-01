@@ -6,7 +6,7 @@ Measures browserd against other browser MCP servers on public benchmarks. Every 
 built-in tool off (`--tools ""`), so the browser MCP server is the only way to the web. The model, prompt and scoring
 stay the same across arms; only the server changes. This folder holds the code; the data (the benchmarks' own repos,
 every run's transcript, the scores) lives in a data folder outside the repo (`paths.DATA`, below). Every result is in
-`../findings/benchmark.md`. `../.claude/skills/benchmark/SKILL.md` walks an agent through a rerun.
+`../findings/benchmark.md`. `../../.claude/skills/benchmark/SKILL.md` walks an agent through a rerun.
 
 The suites, each `--suite` of `run.py`:
 
@@ -22,15 +22,15 @@ The suites, each `--suite` of `run.py`:
 The last run (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`. `miniwob` (drills) and `botwall`
 have not been run in full.
 
-    bench/setup.sh                              fill the data folder once
-    bench/sites.sh start                        the local sites the suites need (WebGames, FormFactory, MiniWoB++, ...)
-    python3 bench/nextserver.py --tree <tree>   browserd from a worktree of its own, on 9250, for the next arm
-    bench/chain.sh <name> <arms> "<suite>[:<run.py args>]"...     suites one after another, detached
-    python3 bench/run.py --exp <name> --suite <suite> --arms <arms>
-                                                one suite, in the foreground; always pass --arms, whose default is
-                                                every arm, the main server's included
-    python3 bench/report.py <exp>               score an experiment, compare its arms
-    bench/sites.sh stop
+    experiments/bench/setup.sh                              fill the data folder once
+    experiments/bench/sites.sh start                        the local sites the suites need (WebGames, FormFactory, MiniWoB++, ...)
+    python3 experiments/bench/nextserver.py --tree <tree>   browserd from a worktree of its own, on 9250, for the next arm
+    experiments/bench/chain.sh <name> <arms> "<suite>[:<run.py args>]"...     suites one after another, detached
+    python3 experiments/bench/run.py --exp <name> --suite <suite> --arms <arms>
+                                                            one suite, in the foreground; always pass --arms, whose default is
+                                                            every arm, the main server's included
+    python3 experiments/bench/report.py <exp>               score an experiment, compare its arms
+    experiments/bench/sites.sh stop
 
 ## Directory Layout
 
@@ -58,7 +58,7 @@ have not been run in full.
       tools/          analyze.py (tool use by arm), paired.py (sign tests), miscalls.py, cheats.py, ffmap.py
       probes/         the pairing bug's replays and probes (../findings/benchmark.md, "The pairing bug")
 
-    <data folder>/    paths.DATA: ../../browserd-bench beside the repo, or $BROWSERD_BENCH_DATA
+    <data folder>/    paths.DATA: ../../../browserd-bench beside the repo, or $BROWSERD_BENCH_DATA
       results/<exp>/  config.json, one <arm>/<task>-r<n>.jsonl transcript and .err per run, scores.json
       results/<exp>.log, results/chain.log      each run's line; each chain's starts, stops and ends
       results/_invalid/<exp>-<why>/             runs set aside (a broken setup, an outage), never deleted

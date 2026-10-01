@@ -362,7 +362,7 @@ same tabs under the same ids. A crash leaves the same.
   description, which Claude Code passes whole. `QUEUE_HELP` must still say that the catalog's tools run only as
   steps: without its "Never pass pageId", "every tool a step may name" and "never tools to call by themselves"
   lines, agents call a queue step's name, like `navigate_page`, as a top-level tool (measured in
-  `../findings/queue-descriptions.md`).
+  `../experiments/findings/queue-descriptions.md`).
 - **Claude Code reads the tool list when a Claude Code session connects, and again only when told it changed.**
   So `initialize` declares `tools.listChanged` and gives an `Mcp-Session-Id`, and a request under an `Mcp-Session-Id`
   this process did not give (one from before a restart) is answered as an event stream:
@@ -457,7 +457,7 @@ same tabs under the same ids. A crash leaves the same.
   read off a screenshot can meet a popup that opened while the agent thought, or one its own last click opened. Each
   queue gets a `guard.Guard` over its tab's Worker; its reference is the last viewport screenshot a reply gave before
   the queue arrived, each taken through `Guard.capture`, which first bumps a counter that `guard.PAGE_JS`, a
-  MutationObserver kept in the page, stamps changes with. Measured in `../findings/real-sites.md` (19 sites, 126 agent
+  MutationObserver kept in the page, stamps changes with. Measured in `../experiments/findings/real-sites.md` (19 sites, 126 agent
   runs), its setting is:
   - **pixels (S1):** over 10% of the 24 CSS px square around the point, or 75% of its central 8 px, changed by more
     than 64 in a channel, against a fresh capture of the same format and scale;

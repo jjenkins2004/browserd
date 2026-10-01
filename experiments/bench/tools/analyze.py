@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tool-use breakdown of an experiment: per arm, the tools called, errors, result sizes, queue batching.
 
-    python3 bench/tools/analyze.py ff1
+    python3 experiments/bench/tools/analyze.py ff1
 """
 import collections
 import json
@@ -9,7 +9,7 @@ import statistics
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # bench/, for paths
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # experiments/bench/, for paths
 import paths  # noqa: E402
 
 

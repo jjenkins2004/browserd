@@ -1,14 +1,14 @@
 """Count calls of a name browserd does not serve (a queue step called as a top-level tool, most often), and the call
 before each, in an experiment's browserd transcripts.
 
-    python3 bench/tools/miscalls.py probe1 browserd
+    python3 experiments/bench/tools/miscalls.py probe1 browserd
 """
 import collections
 import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # bench/, for paths
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # experiments/bench/, for paths
 import paths  # noqa: E402
 SERVED = {"session_start", "tab_open", "tab_list", "tab_show", "tab_close", "queue"}
 

@@ -5,7 +5,7 @@ input FormFactory's own batch processor gives a model). ffserver.py saves each r
 and a run passes when that submission holds the gold value of every field it can be scored on. The server must be
 up first:
 
-    bench/sites.sh start
+    experiments/bench/sites.sh start
 """
 import json
 import re
@@ -347,4 +347,4 @@ def check():
     """Refuse to start runs while the server is down or the file to upload is missing."""
     urllib.request.urlopen(BASE, timeout=5).read()
     if not UPLOAD.exists():
-        raise SystemExit("%s is missing; run bench/setup.sh" % UPLOAD)
+        raise SystemExit("%s is missing; run experiments/bench/setup.sh" % UPLOAD)

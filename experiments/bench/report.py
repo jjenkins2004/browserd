@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Score an experiment's transcripts and compare its arms.
 
-    python3 bench/report.py probe1
+    python3 experiments/bench/report.py probe1
 
 Prints a summary per arm and a task-by-arm pass table, and writes results/<exp>/scores.json. The experiment's
 config.json names its suite (MCP-Universe's when it names none), which scores each run.

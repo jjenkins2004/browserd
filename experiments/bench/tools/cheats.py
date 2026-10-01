@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Flag WebGames runs whose tool calls read scripts, source or network responses, or name the password.
 
-    python3 bench/tools/cheats.py wg1
+    python3 experiments/bench/tools/cheats.py wg1
 """
 import json, re, sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # bench/, for paths and webgames
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # experiments/bench/, for paths and webgames
 import paths  # noqa: E402
 import webgames  # noqa: E402
 

@@ -1,8 +1,8 @@
 #!/bin/bash
 # Start or stop the local sites the suites run against, each detached with its log in the data folder:
 #
-#     bench/sites.sh start     WebGames 4380, FormFactory 5055, MiniWoB++ 4390, clicks 4395, haystack 4396
-#     bench/sites.sh stop
+#     experiments/bench/sites.sh start     WebGames 4380, FormFactory 5055, MiniWoB++ 4390, clicks 4395, haystack 4396
+#     experiments/bench/sites.sh stop
 set -o pipefail
 BENCH=$(cd "$(dirname "$0")" && pwd)
 DATA=$(python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import paths; print(paths.DATA)" "$BENCH")
@@ -32,7 +32,7 @@ case "${1:-}" in
     done
     ;;
   *)
-    echo "usage: bench/sites.sh start|stop"
+    echo "usage: experiments/bench/sites.sh start|stop"
     exit 1
     ;;
 esac

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run each task through `claude -p` once per arm and repeat: same model, same prompt, only the browser MCP differs.
 
-    python3 bench/run.py --exp probe1 [--suite mcpuniverse] [--arms next,playwright] [--k 1] [--jobs 2] [--tasks sports]
+    python3 experiments/bench/run.py --exp probe1 [--suite mcpuniverse] [--arms next,playwright] [--k 1] [--jobs 2] [--tasks sports]
 
 Each run's stream-json transcript lands in the data folder's results/<exp>/<arm>/<task>-r<n>.jsonl. A run whose
 transcript already ends in a result is skipped, so running the same --exp again finishes what is missing.

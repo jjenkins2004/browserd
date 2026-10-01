@@ -1,8 +1,8 @@
 """browserd's server from a worktree, run beside the main one on ports of its own, with that worktree's own .run/ for
 its state, logs and records, so the main server (9230) is never restarted. Only the ports differ from the tree's code.
 
-    python3 bench/nextserver.py --tree PATH [--port N]      serve, in the foreground: MCP on N, the page on N+1
-    python3 bench/nextserver.py --tree PATH --profile NAME  first add a profile (its own Chrome folder and port) there
+    python3 experiments/bench/nextserver.py --tree PATH [--port N]      serve, in the foreground: MCP on N, the page on N+1
+    python3 experiments/bench/nextserver.py --tree PATH --profile NAME  first add a profile (its own Chrome folder and port) there
 
 The tree is a git worktree of its own, never the checkout the main server runs from, whose .run/ it would share; the
 port defaults to 9250.

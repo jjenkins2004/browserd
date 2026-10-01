@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """FormFactory's own Flask app on 127.0.0.1:5055, with each submission saved under the run that made it.
 
-    bench/sites.sh start
+    experiments/bench/sites.sh start
 
 FormFactory's routes hand every POST to save_submission_to_json, which appends it to one file per form; runs of
 the same form at once would land together, and request.form.to_dict() keeps only the first of a field's values.

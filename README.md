@@ -72,7 +72,7 @@ A git checkout runs as it is, and keeps its records in `.run/` beside the code: 
     .run/                   gitignored, a checkout's records: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs, needs_input), ports.json, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     tests/                  check_browser.py, check_server.py; throwaway.py, the live checks' own Chrome
     preview/                every state of the page's parts from made-up data: `python3 preview/preview.py`, then http://127.0.0.1:9320/
-    bench/                  the benchmarks against other browser MCP servers, their scripts, and how to rerun them
+    experiments/            what measures browserd: bench/, the benchmarks against other browser MCP servers, and findings/, what each experiment found
     .claude/skills/         benchmark: a rerun's steps, for an agent
 
 `browser/README.md` is the one to read before changing any of it: the Chrome proof, the tab ids, the
