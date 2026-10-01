@@ -14,6 +14,10 @@ not that the model chose to dig deeper. Each task has an answer key wherever the
         prompt.md   the task as the agent gets it: 4 10-Ks, then a Sheet with a chart and a 6-slide deck
         key.py      builds key.json from EDGAR's XBRL facts, each checked against the filing's text
         key.json    the 24 values in $ millions, each company's growth, slide title and lines
+      trip/
+        prompt.md   the task: 3 cities' nonstop fares on Google Flights and November highs, then a 6-slide deck
+        key.py      builds key.json: each city's November high from the pinned Wikipedia revision
+        key.json    the 3 November highs; fares are live, so it has none
 
 ## Core Abstractions & Shared Pieces
 
@@ -24,6 +28,7 @@ not that the model chose to dig deeper. Each task has an answer key wherever the
 
 ## Agent Gotchas & Invariants (⚠️)
 
-- The sources are pinned so a key stays right: capex names each 10-K by its accession. A new filing is a new task
+- The sources are pinned so a key stays right: capex names each 10-K by its accession, trip each Wikipedia page by
+  its revision (`oldid`). Fares move by the minute, so no key can hold them. A new filing is a new task
   version: change `FILINGS` in `key.py` and the URLs in `prompt.md` together, then run `key.py` again.
 - SEC refuses a User-Agent without a contact address: `key.py` sends a placeholder one, `SEC_USER_AGENT` a real one.

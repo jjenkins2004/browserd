@@ -1,0 +1,22 @@
+{
+  "cities": [
+    {
+      "city": "Seattle",
+      "airport": "SEA",
+      "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1377723485",
+      "nov_high_f": "52.1"
+    },
+    {
+      "city": "Denver",
+      "airport": "DEN",
+      "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1377063237",
+      "nov_high_f": "52.9"
+    },
+    {
+      "city": "Chicago",
+      "airport": "ORD",
+      "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1377352940",
+      "nov_high_f": "49.6"
+    }
+  ]
+}
