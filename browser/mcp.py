@@ -67,7 +67,7 @@ class Server(Exclusive):
             host (str): address to bind; only 127.0.0.1 is meant.
             port (int): port to bind; 0 picks a free one.
             tools (list[dict]): each has name, description, inputSchema, and run(arguments) -> str | list | dict.
-            name (str): serverInfo name, which ../start reads to tell this server from another program.
+            name (str): serverInfo name, which browserd start reads to tell this server from another program.
             version (str): serverInfo version.
         """
         self.tools = {tool["name"]: tool for tool in tools}

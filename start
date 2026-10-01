@@ -1,3 +1,0 @@
-#!/bin/sh
-# Start the browser MCP server in the background; each profile's Chrome starts on its first use. Works from any directory.
-exec "$(dirname "$0")/browserd" start "$@"

@@ -15,9 +15,10 @@ shows and closes tabs, and closes sessions.
 Python standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`;
 run `npm ci`).
 
-    ../start    start the server in the background; no Chrome starts with it
-    ../stop     stop the server, which quits every profile's Chrome and closes every session
-    ../restart  restart the server alone, leaving every Chrome and session as it is
+    browserd start      start the server in the background; no Chrome starts with it
+    browserd stop       stop the server, which quits every profile's Chrome and closes every session
+    browserd restart    restart the server alone, leaving every Chrome and session as it is
+    browserd uninstall  stop the server and remove an installed browserd; its records and Chrome folders stay
 
 ## Directory Layout
 
@@ -31,7 +32,8 @@ run `npm ci`).
       system/      what differs by OS, behind one set of names: macos.py, windows.py
       mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch
       server.py    the server process: tools, page, pid file
-      service.py   browserd start, stop, restart: background start, locked; stop and restart by pid; status, version
+      service.py   browserd start, stop, restart: background start, locked; stop and restart by pid; status, version, uninstall
+      installs.py  what each installer put where, for browserd uninstall
       paths.py     ROOT, this project's folder; RUN, the records folder; the version, from ../VERSION
       devtools.py  MCP client for one chrome-devtools-mcp process over stdio
       worker.py    one tab's process, paired with its page; Workers registry
@@ -48,7 +50,7 @@ run `npm ci`).
       sessions.py  session ids, labels, record folder names, when a session is paused
       page.py      the browserd page on 9231: GET /state, and a POST per button
       ui/          the page itself: one file per part, and each part's states; its own README
-    ../browserd, ../browserd.cmd  the command, on macOS and Windows; ../start, ../stop, ../restart run it
+    ../browserd, ../browserd.cmd  the command, on macOS and Windows
     ../.run/                    gitignored, a checkout's records folder: server.pid, server.log, start.lock, state.db, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
     ../tests/check_server.py    protocol, tab ids, sessions, focus, queue, recording, profiles, page, service; live tabs, queue
@@ -69,12 +71,19 @@ run `npm ci`).
 | a command line | `ps` (words joined by spaces) | `NtQueryInformationProcess`, split by `CommandLineToArgvW` |
 | starting Chrome | `open -gna`, no window | the binary, detached, its first window shown without the focus |
 | the app in front, bringing one | `lsappinfo`, AppKit through `osascript` | the foreground window; `SetForegroundWindow`, shared input, `SwitchToThisWindow` |
-| `../stop`, `../restart` | SIGTERM, SIGHUP | two named events per checkout and user |
+| `browserd stop`, `restart` | SIGTERM, SIGHUP | two named events per checkout and user |
+| `browserd uninstall` removing its own folder | at once | by a process of its own, once browserd has exited; its `bin` taken off the user's PATH |
 | the command key (paste, `Meta+A`) | Meta (Command) | Control |
 
 A process the OS will not let this user read raises `system.Unanswered` (a `CdpError` to callers), never reads as
 one that exited. `system.remote_path` refuses a network share, `\\?\` or `\\.\` path before anything opens it,
 which on Windows would send the user's credentials to that host.
+
+**`installs.find`** is `browserd uninstall`'s map of what each installer put where (its docstring lists the three
+layouts); `service.uninstall` says what it removes and keeps, asks y/N, stops the server, then `installs.remove` runs
+`brew uninstall browserd` for Homebrew, or removes the code's folder and the command install.sh linked or install.ps1
+put on the PATH, and runs `claude mcp remove -s user browserd`. A git checkout is refused. The records folder and
+every profile's Chrome folder are never touched.
 
 **`cdp.require(profile)`** is the proof that a profile's port is that profile's Chrome, and every connection
 goes through it: `cdp.Browser(profile)` and `launch.launch(profile)` both call it. It checks against the
@@ -205,16 +214,16 @@ step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view s
 
 **Server lifecycle**, in `server.serve()`: open `.run/state.db`, ask a chrome-devtools-mcp process for its
 tool list (no browser needed), bind 9230 and the page's 9231 (exclusively: on Windows `SO_REUSEADDR` would let a
-second server bind beside the first), listen for `../stop` and `../restart` (`system.listen_for_stop`), write
+second server bind beside the first), listen for `browserd stop` and `restart` (`system.listen_for_stop`), write
 `.run/server.pid`, `chromes.adopt` every profile's Chrome already running, then serve the page on a thread and
 the tools. Record folders and devtools logs are never removed. Another thread looks every `server.PAUSE_POLL`
 (60s) for sessions paused, and `Workers.pause`s their tabs. No Chrome starts with the server, and one quitting
 leaves the server up. When the server stops, every tab's process is stopped, `chromes.quit_all` sends each
 running Chrome `Browser.close` and waits for it to exit (one not exited 15s later is logged, and the server
-stops anyway), and every open session and tab is marked closed. On a restart alone, which `../restart` asks for
+stops anyway), and every open session and tab is marked closed. On a restart alone, which `browserd restart` asks for
 (SIGHUP on a Mac, the restart event on Windows), only the tabs' processes are stopped (a stop, SIGTERM or SIGINT
 at any point still quits everything): every Chrome keeps
-running and every session stays open for the server that `../restart` starts next, whose listings find the
+running and every session stays open for the server that `browserd restart` starts next, whose listings find the
 same tabs under the same ids. A crash leaves the same.
 
 ## Agent Gotchas & Invariants (⚠️)
@@ -276,7 +285,7 @@ same tabs under the same ids. A crash leaves the same.
   only when Chrome draws the page, and it never draws a background tab by itself, so without the flag
   such a tab drops input indefinitely (measured: 40 of 40 first key presses on fresh background tabs dropped). `launch`
   `cdp.require` refuses a profile's Chrome whose command line lacks the flag, naming its pid to quit, so no tool,
-  listing or window uses one, a Chrome kept through `../restart` from before the flag included.
+  listing or window uses one, a Chrome kept through `browserd restart` from before the flag included.
 - **Tabs open in the background.** `Tabs.open` creates the tab with `background: true`, so the
   Mac's focus never moves; without it, `Target.createTarget` brings Chrome to the front. Opening
   goes `about:blank`, attach, `Page.enable`, then navigate: Chrome can finish a load before a later
@@ -297,7 +306,7 @@ same tabs under the same ids. A crash leaves the same.
   placeholder, so two opens at once make one placeholder. The placeholder stays open until its Chrome quits or it is
   closed by hand, and the next `tab_open` with no window open opens another.
 - **No agent ends a session.** An agent would end one while its task still needed it, so only Joshua
-  closes one: on the page (Close session, or Delete profile for every one of its profile's) or with `../stop`;
+  closes one: on the page (Close session, or Delete profile for every one of its profile's) or with `browserd stop`;
   `profile_delete` is refused while its profile has one open. `Tabs.close_session` marks the
   session closed before it closes its tabs, so any call of the session's made meanwhile is refused. A session is paused after 30 minutes without a call, which stops its tabs' chrome-devtools-mcp processes;
   any call resumes it. A closed session's id is refused, pointing at `session_start`. Every agent, a subagent
@@ -316,8 +325,8 @@ same tabs under the same ids. A crash leaves the same.
   written into the page when it is served and new each start. A web page open in any Chrome
   cannot read the token, since the page sends no CORS headers, and cannot frame the page to steer a click
   (`frame-ancestors 'none'`).
-- **`../stop` and `../restart` only signal a pid whose command line runs `-m browser.server`.** A stale pid file
-  can name a reused pid. `../start` holds `.run/start.lock` while it checks and spawns, and treats
+- **`browserd stop` and `restart` only signal a pid whose command line runs `-m browser.server`.** A stale pid file
+  can name a reused pid. `browserd start` holds `.run/start.lock` while it checks and spawns, and treats
   anything answering on 9230 under another server name as a refusal.
 - **One chrome-devtools-mcp process runs one tool call at a time** (one `Mutex` in its
   `McpServer`, taken by every `ToolHandler.handle`), so a single shared process would put every
@@ -610,7 +619,7 @@ same tabs under the same ids. A crash leaves the same.
     `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
     and a folder's running Chrome, `profile_tools_offline` for the Google folder and the profile's Chrome, and `page_offline` for Chrome, `focus.bring` and each tab's Worker, with `.run/state.db` and the Google
     folder each in a temporary folder;
-    `service_offline` for the spawned server, with real `ps`, and for the server `../stop` and `../restart`
+    `service_offline` for the spawned server, with real `ps`, and for the server `browserd stop` and `restart`
     signal, a process that runs `-m browser.server` in its command line.
   - **Live:** the live groups start a Chrome of their own, `throwaway.chrome()`, on a new folder under
     `$TMPDIR` and a free port, and quit it after, so no live check touches a profile's Chrome; with no
@@ -630,5 +639,6 @@ same tabs under the same ids. A crash leaves the same.
     them, and close them (`queue_live`'s download checks also save two files in the real `~/Downloads`, the
     throwaway Chrome keeping Chrome's own download folder, and remove them); a tab already open is never touched. No live check moves the Mac's focus:
     `tab_show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
-  - **Never automated:** `../start`, `../stop` and `../restart` are never run, since each acts on the real
-    browserd: stopping quits every profile's Chrome, and restarting replaces the one running.
+  - **Never automated:** `browserd start`, `stop`, `restart` and `uninstall` are never run, since each acts on the
+    real browserd: stopping quits every profile's Chrome, restarting replaces the one running, and uninstalling
+    removes it.

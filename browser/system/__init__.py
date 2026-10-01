@@ -27,6 +27,9 @@ says what each OS does in its place.
     lock(handle)          hold an exclusive lock on an open file until it is closed, waiting for it
     spawn_detached(argv, **popen)  a Popen of a process that runs on past this one, with no window of its own
     hidden()              Popen arguments that give a helper process no window of its own
+    remove_own_folder(folder)    remove the folder this browserd runs from; True once gone, False when it goes after
+                                 this process exits
+    drop_from_user_path(folder)  take a folder off the user's PATH, and return whether it was on it
     listen_for_stop(run, on_request)  call on_request("stop" or "restart") when browserd stop or restart asks the
                                       server whose records folder is run
     request_stop(pid, run, restart)   ask the server that is pid, whose records folder is run, to stop, or restart

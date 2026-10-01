@@ -1,3 +1,0 @@
-#!/bin/sh
-# Restart the browser MCP server alone: every profile's Chrome and every session stay as they are. Works from any directory.
-exec "$(dirname "$0")/browserd" restart "$@"

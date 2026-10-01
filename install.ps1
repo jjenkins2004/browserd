@@ -13,8 +13,8 @@
 #     $env:BROWSERD_ARCHIVE   a .zip of browserd to install instead of downloading one, as git archive makes
 #     $env:BROWSERD_NO_PATH   set to leave the user's PATH alone
 #
-# To uninstall: browserd stop, then remove %LOCALAPPDATA%\Programs\browserd and its bin folder from the user's PATH,
-# and %LOCALAPPDATA%\browserd for its records too.
+# To uninstall: browserd uninstall. It keeps the records in %LOCALAPPDATA%\browserd; delete that folder too to remove
+# them.
 
 & {
     $ErrorActionPreference = 'Stop'

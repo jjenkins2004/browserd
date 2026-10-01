@@ -31,7 +31,7 @@ Then, from any terminal, and once to register it with Claude Code at user scope,
 
 Running an installer again updates browserd, and a server that was running is restarted on the new version
 with every Chrome and session kept; after `brew upgrade browserd`, run `browserd restart`. Each installer's
-header lists its settings (a version to pin, where it goes) and how to uninstall it.
+header lists its settings (a version to pin, where it goes); `browserd uninstall` removes what it installed.
 
 ## Use
 
@@ -39,8 +39,10 @@ header lists its settings (a version to pin, where it goes) and how to uninstall
                       browserd page, http://127.0.0.1:9231/, makes profiles and shows their sessions and tabs
     browserd stop     stops the server, which quits every profile's Chrome with it and closes every session
     browserd restart  restarts the server alone: every Chrome keeps running and every session stays open
-    browserd status   whether the server is running, and where its records are
+    browserd status   whether the server is running, on which ports, and where its records are
     browserd version  which browserd this is, and where it is installed
+    browserd uninstall  stops the server and removes browserd, its command and its Claude Code registration,
+                      after asking; the records and every profile's Chrome folder, logins and all, stay
 
 Its records (server.pid, server.log, start.lock, state.db with the profiles, sessions and tabs, devtools-*.log,
 and calls/) go in `~/Library/Application Support/browserd` on a Mac and `%LOCALAPPDATA%\browserd` on Windows,
@@ -49,14 +51,13 @@ whichever version runs; `BROWSERD_HOME` names another folder.
 ## From a clone
 
 A git checkout runs as it is, and keeps its records in `.run/` beside the code: `npm ci` once, then
-`./browserd start` (or `./start`, `./stop` and `./restart`), or on Windows `browserd start` from its folder
-(browserd.cmd, from cmd or PowerShell); `./start` and the others also run in Git Bash. A release is cut with
+`./browserd start`, or on Windows `browserd start` from its folder (browserd.cmd, from cmd or PowerShell);
+`./browserd` also runs in Git Bash. `browserd uninstall` refuses a checkout. A release is cut with
 `scripts/release 0.2.0`, which tags it, pushes it, and points the Homebrew formula at it.
 
 ## Layout
 
-    browserd, browserd.cmd  the command: browser/service.py's start, stop, restart, status and version; start, stop
-                            and restart are the first three
+    browserd, browserd.cmd  the command: browser/service.py's start, stop, restart, status, version and uninstall
     browser/                the server: tabs, the queue, and its own README; browser/system/ is what differs by OS
     package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
     VERSION                 the version on main, which install.sh and install.ps1 install as its tag, v<VERSION>

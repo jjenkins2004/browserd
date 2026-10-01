@@ -1,6 +1,6 @@
-"""browserd start, stop and restart (../start, ../stop and ../restart in a checkout): run the browser MCP server in the
-background; stop it and every profile's Chrome with it; or restart the server alone. browserd status and version say
-whether it runs, and which browserd this is."""
+"""browserd start, stop and restart: run the browser MCP server in the background; stop it and every profile's Chrome
+with it; or restart the server alone. browserd status and version say whether it runs, and which browserd this is;
+browserd uninstall stops it and removes an installed browserd, with installs."""
 
 import json
 import os
@@ -10,7 +10,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import cdp, paths, server, system
+from . import cdp, installs, page, paths, server, system
 
 START_WAIT = 40.0
 STOP_WAIT = 25.0
@@ -61,8 +61,8 @@ def _log_since(offset):
 
 
 def _locked(run):
-    """Run run holding .run/start.lock: two ../start runs at once would otherwise both find nothing up and both start a
-    server, and a ../start during a ../restart would find the old one answering as it stops."""
+    """Run run holding start.lock: two browserd starts at once would otherwise both find nothing up and both start a
+    server, and a start during a restart would find the old one answering as it stops."""
     os.makedirs(server.RUN, exist_ok=True)
     with open(LOCK_FILE, "a+") as lock:
         system.lock(lock)
@@ -74,10 +74,16 @@ def start():
     return _locked(_start)
 
 
+def _running(said, pid):
+    """What start and status say of a server that answers: the ports it serves on, its pid, and its records folder."""
+    return "%s on port %d: %s\nthe page on port %d: %s\npid %s, records in %s" % (
+        said, server.PORT, server.URL, page.PORT, server.PAGE_URL, pid or "unknown", server.RUN)
+
+
 def _start():
     name = answering()
     if name == server.NAME:
-        return "already running: %s" % server.URL
+        return _running("already running", _pid())
     if name is not None:
         raise SystemExit("port %d answers as %r, not the browser MCP server; quit that program first" % (server.PORT, name))
     offset = os.path.getsize(server.LOG_FILE) if os.path.exists(server.LOG_FILE) else 0
@@ -93,10 +99,9 @@ def _start():
         if child.poll() is not None:
             raise SystemExit("the browser MCP server stopped while starting:\n%s" % _log_since(offset))
         if answering() == server.NAME:
-            return "running: %s, and the page at %s (pid %d, log %s)" % (server.URL, server.PAGE_URL, _pid() or child.pid,
-                                                                         server.LOG_FILE)
+            return _running("running", _pid() or child.pid)
         time.sleep(0.3)
-    # Asked to stop as ../stop asks, so any Chrome it started is quit; one not yet listening is ended outright.
+    # Asked to stop as browserd stop asks, so any Chrome it started is quit; one not yet listening is ended outright.
     try:
         system.request_stop(child.pid, server.RUN, restart=False)
     except system.Unanswered:
@@ -143,15 +148,36 @@ def restart():
 
 
 def status():
-    """A line saying whether the server runs, and where it keeps its records."""
+    """What browserd status says: whether the server runs, on which ports, and where it keeps its records."""
     if answering() != server.NAME:
-        return "not running (records in %s)" % server.RUN
-    return "running: %s, and the page at %s (pid %s, records in %s)" % (server.URL, server.PAGE_URL, _pid() or "unknown",
-                                                                         server.RUN)
+        return "not running; start serves on port %d, and the page on port %d (records in %s)" % (
+            server.PORT, page.PORT, server.RUN)
+    return _running("running", _pid())
 
 
 def version():
     return "browserd %s (%s)" % (paths.version(), paths.ROOT)
+
+
+def uninstall():
+    """Once the user says yes, stop the server and remove this installed browserd, and return what was done; the
+    records folder and every profile's Chrome folder stay."""
+    install = installs.find(paths.ROOT)
+    print("browserd uninstall stops browserd, which quits every profile's Chrome and closes every session, and removes:")
+    for line in install.removes():
+        print("  " + line)
+    print("It keeps your records, %s, and each profile's Chrome-<name> folder in %s, logins and all."
+          % (server.RUN, system.CHROME_DATA))
+    try:
+        answer = input("Uninstall? [y/N] ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in ("y", "yes"):
+        return "nothing removed"
+    said = stop()
+    if said != "not running":
+        print(said)
+    return "\n".join(installs.remove(install))
 
 
 USAGE = """usage: browserd <command>
@@ -159,8 +185,9 @@ USAGE = """usage: browserd <command>
   start     start the server in the background; each profile's Chrome starts on its first use
   stop      stop the server, which quits every profile's Chrome with it and closes every session
   restart   restart the server alone: every Chrome keeps running and every session stays open
-  status    say whether the server is running, and where its records are
+  status    say whether the server is running, on which ports, and where its records are
   version   say which browserd this is, and where it is installed
+  uninstall stop the server and remove browserd, keeping its records and every profile's Chrome folder
 
 Agents connect at %s; register it once with
   claude mcp add -s user --transport http browserd %s""" % (server.URL, server.URL)
@@ -170,7 +197,8 @@ def main():
     problem = system.python_problem()
     if problem:
         raise SystemExit(problem)
-    commands = {"start": start, "stop": stop, "restart": restart, "status": status, "version": version}
+    commands = {"start": start, "stop": stop, "restart": restart, "status": status, "version": version,
+                "uninstall": uninstall}
     if len(sys.argv) == 2 and sys.argv[1] in ("help", "-h", "--help"):
         print(USAGE)
         return

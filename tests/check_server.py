@@ -2031,7 +2031,7 @@ def service_offline():
 
         ours = serving([], server.NAME)
         aim(ours.server_address[1])
-        # A process the OS shows running -m browser.server, listening for ../stop and ../restart as the server does
+        # A process the OS shows running -m browser.server, listening for browserd stop and restart as the server does
         # (signals on macOS, named events on Windows), which exits 1 when asked to restart and 2 when asked to stop.
         script = ("import os, sys, time\n"
                   "from browser import system\n"
@@ -2059,7 +2059,8 @@ def service_offline():
             check("%s asks the server to %s and waits for it to exit" % (name, name),
                   ready.strip() == "set" and exited == code_wanted, "%r, exit %r, %r" % (ready, exited, said[name]))
         check("restart then starts the server again, which here answers already",
-              said["restart"] == "restarted, every Chrome and session kept; already running: %s" % server.URL, said["restart"])
+              said["restart"].startswith("restarted, every Chrome and session kept; already running on port %d: %s\n"
+                                         % (server.PORT, server.URL)), said["restart"])
         ours.shutdown()
         ours.server_close()
     finally:
@@ -2101,8 +2102,9 @@ def paths_offline():
         server.URL = "http://127.0.0.1:%d%s" % (server.PORT, mcp.PATH)
         free.server_close()
         server.RUN = workdir
-        check("browserd status says not running, and where the records are",
-              service.status() == "not running (records in %s)" % workdir, service.status())
+        check("browserd status says not running, the ports start serves on, and where the records are",
+              service.status() == "not running; start serves on port %d, and the page on port %d (records in %s)"
+              % (server.PORT, page.PORT, workdir), service.status())
     finally:
         paths.ROOT, home, server.PORT, server.URL, server.RUN = saved
         if home is None:

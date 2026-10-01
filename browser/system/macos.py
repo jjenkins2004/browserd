@@ -4,6 +4,7 @@ __init__.py lists what each name is."""
 import fcntl
 import os
 import re
+import shutil
 import signal
 import subprocess
 
@@ -11,7 +12,7 @@ from . import Unanswered
 
 __all__ = ["NAME", "CHROME", "CHROME_FLAGS", "APP", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
-           "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "listen_for_stop", "request_stop",
+           "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "remove_own_folder", "drop_from_user_path", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
 
 NAME = "macOS"
@@ -121,8 +122,17 @@ def hidden():
     return {}
 
 
+def remove_own_folder(folder):
+    shutil.rmtree(folder)  # macOS lets a running program's own folder go
+    return True
+
+
+def drop_from_user_path(folder):
+    return False  # a Mac's PATH is the shell's, set in its startup files; no installer puts a folder of its own there
+
+
 def listen_for_stop(run, on_request):
-    # Only SIGHUP, from ../restart, keeps every Chrome and session.
+    # Only SIGHUP, from browserd restart, keeps every Chrome and session.
     signal.signal(signal.SIGTERM, lambda number, frame: on_request("stop"))
     signal.signal(signal.SIGINT, lambda number, frame: on_request("stop"))
     signal.signal(signal.SIGHUP, lambda number, frame: on_request("restart"))

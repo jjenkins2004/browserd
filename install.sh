@@ -15,8 +15,8 @@
 #     BROWSERD_ARCHIVE   a .tar.gz of browserd to install instead of downloading one, as git archive makes
 #     BROWSERD_NO_PATH   set to leave the shell's PATH alone
 #
-# To uninstall: browserd stop; rm -rf ~/.local/share/browserd ~/.local/bin/browserd, and
-# ~/Library/Application Support/browserd for its records too.
+# To uninstall: browserd uninstall. It keeps the records in ~/Library/Application Support/browserd; delete that folder
+# too to remove them.
 set -eu
 
 REPO=jjenkins2004/browserd

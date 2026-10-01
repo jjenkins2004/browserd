@@ -1,7 +1,7 @@
 """The browser MCP server: serves the tools and the browserd page; each profile's Chrome starts on its first use
 and quits when the server stops.
 
-Run in the background by service.py (../start). README.md covers the lifecycle and the tools.
+Run in the background by service.py (browserd start). README.md covers the lifecycle and the tools.
 """
 
 import os
@@ -516,7 +516,7 @@ def serve():
 
     def on_request(kind):
         requests.add(kind)
-        # Only a restart, from ../restart, keeps every Chrome and session; a stop at any point quits them.
+        # Only a restart, from browserd restart, keeps every Chrome and session; a stop at any point quits them.
         mcp.log("%s, as asked to %s" % ("restarting" if requests == {"restart"} else "stopping", kind))
         # shutdown waits for serve_forever to return, which may run on the thread that asked, so it needs another.
         threading.Thread(target=server.shutdown, daemon=True).start()
@@ -532,7 +532,7 @@ def serve():
                     if stopped:
                         mcp.log("session %s is paused, so %d chrome-devtools-mcp process(es) stopped" % (session.id, stopped))
 
-    # Listened for before serving, so a ./stop at any point from here still stops the server and every Chrome, a start
+    # Listened for before serving, so a browserd stop at any point from here still stops the server and every Chrome, a start
     # under way included: signals on macOS, named events on Windows, which has no SIGHUP and no SIGTERM a process hears.
     system.listen_for_stop(RUN, on_request)
     _write_pid()

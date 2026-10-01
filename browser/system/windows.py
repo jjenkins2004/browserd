@@ -14,6 +14,7 @@ import struct
 import subprocess
 import sys
 import sysconfig
+import tempfile
 import threading
 import time
 import winreg
@@ -23,7 +24,7 @@ from . import Unanswered
 
 __all__ = ["NAME", "CHROME", "CHROME_FLAGS", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
-           "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "listen_for_stop", "request_stop",
+           "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "remove_own_folder", "drop_from_user_path", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
 
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -69,6 +70,9 @@ _GetWindowTextLengthW = _declare(_user32.GetWindowTextLengthW, ctypes.c_int, win
 _AttachThreadInput = _declare(_user32.AttachThreadInput, wintypes.BOOL, wintypes.DWORD, wintypes.DWORD, wintypes.BOOL)
 _GetCurrentThreadId = _declare(_kernel32.GetCurrentThreadId, wintypes.DWORD)
 _SwitchToThisWindow = _declare(_user32.SwitchToThisWindow, None, wintypes.HWND, wintypes.BOOL)
+_SendMessageTimeoutW = _declare(_user32.SendMessageTimeoutW, ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
+                                wintypes.WPARAM, wintypes.LPCWSTR, wintypes.UINT, wintypes.UINT,
+                                ctypes.POINTER(ctypes.c_size_t))
 _WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 _EnumWindows = _declare(_user32.EnumWindows, wintypes.BOOL, _WNDENUMPROC, wintypes.LPARAM)
 _GetClipboardSequenceNumber = _declare(_user32.GetClipboardSequenceNumber, wintypes.DWORD)
@@ -90,6 +94,8 @@ _INVALID_PARAMETER = 87  # OpenProcess on a pid no process has
 _COMMAND_LINE = 60  # ProcessCommandLineInformation, Windows 8.1 and later
 _INFO_LENGTH_MISMATCH = 0xC0000004
 _HWND_MESSAGE = wintypes.HWND(-3)
+_HWND_BROADCAST = wintypes.HWND(0xFFFF)
+_WM_SETTINGCHANGE, _SMTO_ABORTIFHUNG = 0x001A, 0x0002
 _TCP_LISTENERS = 3  # TCP_TABLE_OWNER_PID_LISTENER
 _EVENT_MODIFY_STATE = 0x0002
 _DETACHED_PROCESS, _NEW_GROUP, _NO_WINDOW, _BREAKAWAY = 0x00000008, 0x00000200, 0x08000000, 0x01000000
@@ -380,7 +386,7 @@ def bring(pid):
 
 
 def lock(handle):
-    # msvcrt's own blocking lock gives up after 10s; ../start holds this one longer, so it is asked for until it is had.
+    # msvcrt's own blocking lock gives up after 10s; browserd start holds this one longer, so it is asked for until it is had.
     handle.seek(0)
     while True:
         try:
@@ -392,12 +398,61 @@ def lock(handle):
 
 def spawn_detached(argv, **popen):
     # A console of its own, never shown, so no window pops up for it or its children; a group of its own, so a Ctrl+C
-    # where ../start ran does not reach it.
+    # where browserd start ran does not reach it.
     return _spawn(argv, _NO_WINDOW | _NEW_GROUP, **popen)
 
 
 def hidden():
     return {"creationflags": _NO_WINDOW}
+
+
+# Run by a process of its own: rd through \\?\ reaches node_modules' paths past 260 characters, as install.ps1's
+# Remove-Tree does, and is asked again until the folder is gone, since it is held until browserd has exited.
+_REMOVE_LATER = r"""
+import os, subprocess, sys, time
+folder = sys.argv[1]
+time.sleep(1)
+for attempt in range(60):
+    subprocess.run(["cmd.exe", "/d", "/c", "rd", "/s", "/q", "\\\\?\\" + folder], stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
+    if not os.path.exists(folder):
+        break
+    time.sleep(0.5)
+"""
+
+
+def remove_own_folder(folder):
+    # This process works in the folder, and cmd is still reading browserd.cmd and the bin shim there, so a process of
+    # its own, working elsewhere, removes it once they have let it go.
+    try:
+        spawn_detached([sys.executable, "-c", _REMOVE_LATER, folder], cwd=tempfile.gettempdir(),
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+    except OSError as exc:
+        raise Unanswered("could not start removing %s (%s)" % (folder, exc))
+    return False
+
+
+def drop_from_user_path(folder):
+    # Read and written unexpanded, so the PATH's %VARIABLES% stay as they are, as install.ps1 does.
+    wanted = os.path.normcase(os.path.normpath(folder))
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0,
+                            winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE) as key:
+            try:
+                value, kind = winreg.QueryValueEx(key, "Path")
+            except FileNotFoundError:
+                return False
+            entries = value.split(";")
+            kept = [entry for entry in entries if not entry or os.path.normcase(os.path.normpath(entry)) != wanted]
+            if len(kept) == len(entries):
+                return False
+            winreg.SetValueEx(key, "Path", 0, kind, ";".join(kept))
+    except OSError as exc:
+        raise Unanswered("could not change the user's PATH (%s)" % exc)
+    # Explorer, and each terminal opened from it after, reads the PATH again once told the environment changed.
+    _SendMessageTimeoutW(_HWND_BROADCAST, _WM_SETTINGCHANGE, 0, "Environment", _SMTO_ABORTIFHUNG, 5000,
+                         ctypes.byref(ctypes.c_size_t()))
+    return True
 
 
 def _events(run):
@@ -440,7 +495,7 @@ def request_stop(pid, run, restart):
     name = _events(run)["restart" if restart else "stop"]
     handle = _OpenEventW(_EVENT_MODIFY_STATE, False, name)
     if not handle:
-        raise Unanswered("the browser MCP server (pid %d) is not listening for ../stop and ../restart: %s"
+        raise Unanswered("the browser MCP server (pid %d) is not listening for browserd stop and restart: %s"
                          % (pid, ctypes.WinError(ctypes.get_last_error()).strerror))
     try:
         _SetEvent(handle)

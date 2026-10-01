@@ -1,3 +1,0 @@
-#!/bin/sh
-# Stop the browser MCP server, which quits every profile's Chrome with it. Works from any directory.
-exec "$(dirname "$0")/browserd" stop "$@"
