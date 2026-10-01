@@ -43,6 +43,7 @@ from browser.chrome.profiles import Profile
 from browser.records.state import Session, State, Tab
 from browser.tabs.tabs import LETTERS, PLACEHOLDER, Tabs
 from browser.tabs.worker import Worker, Workers, returned
+from browser.tools import profile_tools, queue_steps, queue_tool, tab_tools
 from browser.protocol.ws import WebSocketError
 
 passed, failed, skipped = [], [], []
@@ -467,7 +468,7 @@ def session_tools_offline():
     state = stand_in_state(workdir)
     state.add_profile(Profile("Jobs", "/nowhere/Chrome-Jobs", 9224))
     chrome = FakeChrome()
-    httpd = serving(server.tab_tools(state, Tabs(state, chrome.connect), Workers(workdir)))
+    httpd = serving(tab_tools(state, Tabs(state, chrome.connect), Workers(workdir)))
     saved_bring, focus.bring = focus.bring, lambda pid: True
     try:
         text, is_error = call(httpd, "session_start", profile="school", label="  Apply to Acme  ")
@@ -2060,7 +2061,7 @@ def recording_offline():
     state.add_tab(Tab("zzzz", "School", "T404", session.id, time.time(), None))  # its page is gone from Chrome
     state.add_tab(Tab("yyyy", "School", "T405", other.id, time.time(), None))
     tabs, workers = Tabs(state, FakeChrome().connect), Workers(root)
-    tools = [server.queue_tool(state, tabs, workers, {"take_snapshot": {}, "take_screenshot": {}}, root)]
+    tools = [queue_tool(state, tabs, workers, {"take_snapshot": {}, "take_screenshot": {}}, root)]
     httpd = serving(tools)
     try:
         described = tools[0]["inputSchema"]["properties"]["steps"]["description"]
@@ -2393,7 +2394,7 @@ def profile_tools_offline():
             self.quits.append(profile.name)
 
     chromes = Quitting()
-    httpd = serving(server.profile_tools(state, chromes, Tabs(state, FakeChrome().connect), Workers(workdir), ()))
+    httpd = serving(profile_tools(state, chromes, Tabs(state, FakeChrome().connect), Workers(workdir), ()))
     try:
         google = profiles.GOOGLE = os.path.join(workdir, "Google")
         os.makedirs(google)
@@ -2647,7 +2648,7 @@ def live(profile, state):
         browser.call("Target.disposeBrowserContext", browserContextId=context)
         browser.close()
 
-    httpd = serving(server.tab_tools(state, Tabs(state, cdp.Browser), Workers(tempfile.gettempdir())), server.NAME)
+    httpd = serving(tab_tools(state, Tabs(state, cdp.Browser), Workers(tempfile.gettempdir())), server.NAME)
     try:
         text, _ = call(httpd, "session_start", profile=profile.name, label="over http")
         over = text.split()[1].rstrip(",")
@@ -3043,7 +3044,7 @@ def queue_live(profile, state):
     folder = live_folder(profile, os.path.join(workdir, "downloads"))
     tabs, workers = Tabs(state, cdp.Browser), Workers(workdir, downloads_of=lambda profile: folder)
     root = os.path.join(workdir, "calls")
-    httpd = serving(server.tab_tools(state, tabs, workers) + [server.queue_tool(state, tabs, workers, allowed, root)],
+    httpd = serving(tab_tools(state, tabs, workers) + [queue_tool(state, tabs, workers, allowed, root)],
                     server.NAME)
     session = call(httpd, "session_start", profile=profile.name, label="queue live")[0].split()[1].rstrip(",")
     mine = state.session(session)
@@ -3117,7 +3118,7 @@ def queue_live(profile, state):
             check("a click on a disabled button fails after chrome-devtools-mcp's 5s, not Puppeteer's 30s",
                   is_error and took < 15 and "did not become interactive" in text, "%.1fs: %s" % (took, text[:120]))
 
-        opener = serving(server.tab_tools(state, tabs, workers, server.queue_steps(state, tabs, workers, allowed, root)),
+        opener = serving(tab_tools(state, tabs, workers, queue_steps(state, tabs, workers, allowed, root)),
                          server.NAME)
         try:
             text, is_error = call(opener, "tab_open", session=session, url="data:text/html," + urllib.parse.quote(same),

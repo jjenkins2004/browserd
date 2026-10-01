@@ -23,12 +23,15 @@ run `npm ci`).
 
 ## Directory Layout
 
-A folder per domain. A package imports only those above it in this list, server.py all of them, and cli/ server.py
-too, which it starts and stops; each folder's `__init__.py` is empty. A bare "README.md" in a module's docstring
-means the nearest one up the tree: this one, or dashboard/ui/'s for the page's parts.
+A folder per domain. A package imports only those above it in this list; tools.py and server.py import any of them,
+server.py tools.py, and cli/ server.py too, which it starts and stops. Each folder's `__init__.py` is empty. A bare
+"README.md" in a module's docstring means the nearest one up the tree: this one, or dashboard/ui/'s for the page's
+parts.
 
     browser/
-      server.py      the server process (`python -m browser.server`, how browserd finds it running): tools, page, pid file
+      server.py      the server process (`python -m browser.server`, how browserd finds it running): serves the tools
+                     and the page, keeps the pid file
+      tools.py       the tools agents call: session_start, the tab tools, the queue, profile_new and profile_delete
       system/        what differs by OS, behind one set of names: macos.py, windows.py
       config/
         paths.py     ROOT, this project's folder; RUN, the records folder; the version, from ../VERSION
@@ -189,10 +192,10 @@ tab whose page is gone, and gives each new page but the placeholder (below) a ta
 as is. Raising `mcp.ToolError` sends the agent a readable error result; any other exception becomes
 an error result naming it, with the traceback in the log; a client dropping its connection is one
 log line. Every tool call is one log line; one a tool refuses (`ToolError`), one naming no such tool, and
-one whose params or arguments are not an object also name what they were given. `server.tab_tools(state, tabs,
-workers, queue)` builds `session_start` and the five tab tools, `server.queue_tool` the queue, `server.profile_tools` `profile_new`
+one whose params or arguments are not an object also name what they were given. `tools.tab_tools(state, tabs,
+workers, queue)` builds `session_start` and the five tab tools, `tools.queue_tool` the queue, `tools.profile_tools` `profile_new`
 and `profile_delete`;
-`server.queue_steps` makes the queue's body, which the queue and `tab_open` share: `tab_open`, given `steps`, runs
+`tools.queue_steps` makes the queue's body, which the queue and `tab_open` share: `tab_open`, given `steps`, runs
 them on the new tab through it (recorded as that tab's queue call), `steps.QUEUE_MOST` counted from the start of
 `tab_open`, and answers with its tab id, title and URL, then the report, or those and why its steps did not run. Agents
 read a new tab right after opening it (measured in benchmarks: most with a lone `take_snapshot` queue, and 8 of 11
@@ -202,7 +205,7 @@ it can in one call, naming any it could not, and why, in an error result: agents
 as they finish, and one call per tab was 21 to 27% of their calls in two benchmark runs. All turn `cdp.CdpError`
 into `ToolError`, and all but `session_start`, `profile_new` and `profile_delete` run through `_in_session`, which refuses a missing, malformed,
 unknown or closed session and moves its last call to now as the call starts and as it ends. The queue records
-into `server.CALLS/<profile>/<session>-<label>/<tab>/`, so it refuses a tab argument not shaped like a tab id
+into `tools.CALLS/<profile>/<session>-<label>/<tab>/`, so it refuses a tab argument not shaped like a tab id
 (`tabs.is_id`) before that reaches a path, and a tab not the session's before anything is written. It then
 makes a `record.Call` and writes what was asked as sent, so a queue refused for its other arguments or its
 steps is recorded too, with a `file`'s steps added once read; once they pass, what was asked is rewritten as
@@ -375,8 +378,8 @@ same tabs under the same ids. A crash leaves the same.
   `uid=5_1..25`, as a view line shows it, is taken as `1_13`, or the run's first uid, `5_1`. The
   queue stops at the first failed step; the report names the steps not run and ends with a view of
   the page now. A relative `file` is read from the tab's record folder.
-- **Claude Code cuts a tool's description at about 2,000 characters.** `server.QUEUE_HELP` stays
-  under it; `server.STEPS_HELP` and the step catalog, `steps.describe`, make up the `steps` argument's
+- **Claude Code cuts a tool's description at about 2,000 characters.** `tools.QUEUE_HELP` stays
+  under it; `tools.STEPS_HELP` and the step catalog, `steps.describe`, make up the `steps` argument's
   description, which Claude Code passes whole. `QUEUE_HELP` must still say that the catalog's tools run only as
   steps: without its "Never pass pageId", "every tool a step may name" and "never tools to call by themselves"
   lines, agents call a queue step's name, like `navigate_page`, as a top-level tool (measured in
@@ -553,7 +556,7 @@ same tabs under the same ids. A crash leaves the same.
   quote followed by one of the attribute names a snapshot line can carry (`steps.ATTRIBUTES`), and a
   native select's value, its last attribute, runs to the line's end, so quotes inside either are kept.
 - **A chrome-devtools-mcp tool reports success once it has acted, not once the page took it,** so
-  `checked.py` adds checked steps that read the page back (all but a `paste` without a uid); `server.STEPS_HELP` tells agents
+  `checked.py` adds checked steps that read the page back (all but a `paste` without a uid); `tools.STEPS_HELP` tells agents
   when to use each.
   - **`pick`** only clicks an option that typing listed, not one already on the page (a
     `<select multiple>` with the same words). It passes once the field holds `text`; a text box

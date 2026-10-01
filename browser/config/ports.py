@@ -8,6 +8,7 @@ import os
 
 from . import paths
 
+HOST = "127.0.0.1"  # both servers listen on this machine alone
 MCP_DEFAULT, PAGE_DEFAULT = 9230, 9231
 LEAST, MOST = 1024, 65535  # below 1024 a port needs administrator rights on a Mac
 FILE = os.path.join(paths.RUN, "ports.json")

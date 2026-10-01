@@ -2,7 +2,7 @@
 (all but a paste without a uid); and fill_refused, which judges each element by a read of it before a fill, and
 read_fills, which reads a run of fills' elements in one call.
 
-server.STEPS_HELP says when to use which.
+tools.STEPS_HELP says when to use which.
 """
 
 import json

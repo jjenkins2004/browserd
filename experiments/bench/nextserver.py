@@ -35,7 +35,7 @@ except ImportError:  # a tree from before browser/'s modules moved into a folder
 
 server.PORT, page.PORT = args.port, args.port + 1
 server.URL = "http://%s:%d/mcp" % (server.HOST, server.PORT)
-server.PAGE_URL = "http://%s:%d/" % (server.HOST, page.PORT)
+server.PAGE_URL = "http://%s:%d/" % (server.HOST, page.PORT)  # a tree from before tools.py, which reads page.PORT
 
 if args.profile:
     os.makedirs(server.RUN, exist_ok=True)
