@@ -72,7 +72,8 @@ A git checkout runs as it is, and keeps its records in `.run/` beside the code: 
     install.sh, install.ps1 the macOS and Windows installers, run from GitHub; Formula/browserd.rb is Homebrew's
     scripts/release         cuts a release: VERSION, the tag, and the formula's archive and sha256
     .run/                   gitignored, a checkout's records: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs, needs_input), ports.json, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
-    tests/                  check_browser.py, check_server.py; throwaway.py, the live checks' own Chrome
+    tests/                  check_browser.py, check_server.py, which runs checks/, one module per browser/ folder, with
+                            harness.py's shared stand-ins; throwaway.py, the live checks' own Chrome
     preview/                every state of the page's parts from made-up data: `python3 preview/preview.py`, then http://127.0.0.1:9320/
     experiments/            what measures browserd: bench/, the benchmarks against other browser MCP servers; long-tasks/, the demo tasks; findings/, what each found
     .claude/skills/         benchmark: a rerun's steps, for an agent

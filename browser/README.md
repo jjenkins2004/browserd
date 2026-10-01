@@ -71,7 +71,9 @@ parts.
     ../browserd, ../browserd.cmd  the command, on macOS and Windows
     ../.run/                    gitignored, a checkout's records folder: server.pid, server.log, start.lock, state.db, ports.json, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
-    ../tests/check_server.py    protocol, tab ids, sessions, focus, queue, recording, profiles, page, service; live tabs, queue
+    ../tests/check_server.py    runs checks/'s groups in order: protocol, tab ids, sessions, focus, queue, recording, profiles, page, service; live tabs, queue
+    ../tests/checks/            a module per folder here (protocol, tabs, chrome, steps, records, tools, dashboard, cli), and live.py, every live group
+    ../tests/harness.py         check and its tallies, the stand-in profile and state, a served MCP to call, the shared stand-ins
     ../tests/check_browser.py   framing, a profile's Chrome proof, launch; live proof, tab load
     ../tests/throwaway.py       the live checks' own Chrome, on a new folder and a free port
 
