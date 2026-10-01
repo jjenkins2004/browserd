@@ -129,10 +129,10 @@ if (shelves.length) {
   showShelf();
   window.addEventListener("hashchange", showShelf);
 } else {
-  document.getElementById("shelf").append(el("p", "", "No stories found in browser/ui/."));
+  document.getElementById("shelf").append(el("p", "", "No stories found in browser/dashboard/ui/."));
 }
 
-// Reloads when a file under browser/ui/ or preview/ changes.
+// Reloads when a file under browser/dashboard/ui/ or preview/ changes.
 let seen = null;
 async function watch() {
   try {

@@ -6,8 +6,8 @@ README.md, "Agent Gotchas & Invariants", says when steps.run does this and why.
 import json
 import threading
 
-from . import cdp
-from .ws import WebSocketError
+from ..chrome import cdp
+from ..protocol.ws import WebSocketError
 
 LATE = 5.0  # seconds a dialog may open after the step before its handle_dialog, like an alert a script delays
 READY_WAIT = 10.0

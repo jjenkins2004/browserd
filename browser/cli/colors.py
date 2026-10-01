@@ -5,7 +5,7 @@ Windows only once system.ansi has turned them on in the console. Piped output st
 import os
 import sys
 
-from . import system
+from .. import system
 
 _CODES = {"bold": "1", "dim": "2", "red": "31", "green": "32", "yellow": "33", "cyan": "36"}
 

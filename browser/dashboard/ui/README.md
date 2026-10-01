@@ -1,4 +1,4 @@
-# browser/ui
+# browser/dashboard/ui
 
 ## Module TL;DR
 
@@ -6,7 +6,7 @@ The browserd page, one file per part, and each part's states. `../page.py` serve
 the scripts of `page.PARTS` put in, as one inline script, read again on every load, so an edit shows on reload
 with no restart. A part is plain JavaScript functions that build its elements and change them in place; `page.js`
 joins the parts into the page and polls `GET /state` every 2s. Each `<part>.stories.js` lists that part's states,
-drawn from `samples.js` by the preview (`../../preview/`); the server never sends either.
+drawn from `samples.js` by the preview (`../../../preview/`); the server never sends either.
 
 ## Directory Layout
 

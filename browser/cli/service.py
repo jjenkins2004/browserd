@@ -10,8 +10,13 @@ import time
 import urllib.error
 import urllib.request
 
-from . import cdp, colors, installs, mcp, page, paths, ports, server, system
-from .state import State
+from .. import server, system
+from ..chrome import cdp
+from ..config import paths, ports
+from ..dashboard import page
+from ..protocol import mcp
+from . import colors, installs
+from ..records.state import State
 
 START_WAIT = 40.0
 STOP_WAIT = 25.0
@@ -220,7 +225,7 @@ def setup():
         ports.save(mcp_port, page_port)
         if running:
             # A process of its own reads the new ports as it starts; this one has the old ones.
-            if subprocess.run([sys.executable, "-m", "browser.service", "restart"], cwd=paths.ROOT).returncode:
+            if subprocess.run([sys.executable, "-m", "browser.cli.service", "restart"], cwd=paths.ROOT).returncode:
                 raise SystemExit("saved the ports, but browserd restart did not finish; run it yourself")
             if mcp_port != mcp_now:
                 print(colors.paint("The MCP port changed: agents connected already need the line below, then to "

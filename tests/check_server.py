@@ -28,15 +28,22 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import (cdp, checked, chromes, devtools, dialogs, downloads, focus, launch, mcp, page, paths, pointer,
-                     profiles, record, screenshot, server, service, sessions, steps, system)
-from browser import devtools as devtools_module  # queue_live names its own chrome-devtools-mcp devtools
-from browser.devtools import PACKAGE, Devtools
-from browser.profiles import Profile
-from browser.state import Session, State, Tab
-from browser.tabs import LETTERS, PLACEHOLDER, Tabs
-from browser.worker import Worker, Workers, returned
-from browser.ws import WebSocketError
+from browser import server, system
+from browser.chrome import cdp, chromes, downloads, focus, launch, profiles
+from browser.cli import service
+from browser.config import paths
+from browser.dashboard import page
+from browser.protocol import mcp
+from browser.records import record
+from browser.steps import checked, dialogs, pointer, screenshot, steps
+from browser.tabs import devtools, sessions
+from browser.tabs import devtools as devtools_module  # queue_live names its own chrome-devtools-mcp devtools
+from browser.tabs.devtools import Devtools, PACKAGE
+from browser.chrome.profiles import Profile
+from browser.records.state import Session, State, Tab
+from browser.tabs.tabs import LETTERS, PLACEHOLDER, Tabs
+from browser.tabs.worker import Worker, Workers, returned
+from browser.protocol.ws import WebSocketError
 
 passed, failed, skipped = [], [], []
 # Seconds more a live step may take on Windows, where Chrome draws a background tab about once a second, and a
@@ -2141,7 +2148,7 @@ def quitting():
 def service_offline():
     saved = (server.URL, server.PORT, server.ROOT, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE,
              subprocess.Popen)
-    code = os.path.dirname(os.path.dirname(os.path.abspath(service.__file__)))  # the browser package's folder
+    code = paths.ROOT  # the folder holding the browser package
     workdir = tempfile.mkdtemp(prefix="browser-service-")
     stand_ins = []
 
@@ -2253,6 +2260,9 @@ def paths_offline():
     and browserd status and version."""
     saved = (paths.ROOT, os.environ.get("BROWSERD_HOME"), server.PORT, server.URL, server.RUN)
     workdir = tempfile.mkdtemp(prefix="browser-paths-")
+    check("ROOT is the folder holding VERSION and the browser package, however deep paths.py sits",
+          all(os.path.isfile(os.path.join(paths.ROOT, *name)) for name in (["VERSION"], ["browser", "server.py"])),
+          paths.ROOT)
     try:
         os.environ.pop("BROWSERD_HOME", None)
         paths.ROOT = workdir

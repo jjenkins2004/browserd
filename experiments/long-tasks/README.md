@@ -51,7 +51,7 @@ in, so a longer run means the harness struggled, not that the model chose to dig
 - `--safe-mode` would hide the user's setup too, but it also drops `--mcp-config`'s servers: a run would have no
   browserd. A fresh `CLAUDE_CONFIG_DIR` works but needs its own login.
 - A run's folder is never reused: a second run needs a new name, so no recording is overwritten.
-- `record.py` and `grade.py` import browserd from this checkout and read the records `browser/paths.py` names: run
+- `record.py` and `grade.py` import browserd from this checkout and read the records `browser/config/paths.py` names: run
   them from the checkout the server on 9230 runs from, or set `BROWSERD_HOME` to that server's records.
 - The grader's tab is opened over DevTools, not through browserd, so it is in no session, and its fetch must wait for
   docs.google.com's own page: the tab's first context, about:blank's, goes when the page loads.

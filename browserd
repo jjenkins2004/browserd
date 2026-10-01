@@ -10,7 +10,7 @@ while [ -L "$self" ]; do
 done
 cd "$(dirname "$self")" || exit 1
 if [ -z "${BROWSERD_PYTHON:-}" ] && [ -f .python ]; then
-  exec "$(cat .python)" -m browser.service "$@"
+  exec "$(cat .python)" -m browser.cli.service "$@"
 fi
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) PY=${BROWSERD_PYTHON:-py -3} ;; *) PY=${BROWSERD_PYTHON:-python3} ;; esac
-exec $PY -m browser.service "$@"
+exec $PY -m browser.cli.service "$@"

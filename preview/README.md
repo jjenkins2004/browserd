@@ -2,10 +2,10 @@
 
 ## Module TL;DR
 
-A gallery of every state of the browserd page's parts, drawn by the page's own code (`../browser/ui/`) from
+A gallery of every state of the browserd page's parts, drawn by the page's own code (`../browser/dashboard/ui/`) from
 made-up data: `python3 preview/preview.py`, then http://127.0.0.1:9320/. It never reaches the browserd server
 or a Chrome. The sidebar lists each part with its number of stories; a part's stories show as frames, each under
-its name and `about`. The gallery reloads when a file under `../browser/ui/` or here changes. Design variants in
+its name and `about`. The gallery reloads when a file under `../browser/dashboard/ui/` or here changes. Design variants in
 `variants/` show as extra columns beside the current design, across every story.
 
 ## Directory Layout
@@ -27,15 +27,15 @@ every POST `{}` after 300ms and `refresh` doing nothing; a `state` story gets `a
 
 **`/data.js`** is the gallery's list: `VARIANTS`, `samples.js`, and every stories file wrapped in a function of its
 own, the page first, then `page.PARTS`' order. The gallery's own `stories()` keeps each story's name and `about`.
-**`/version`** is the newest file or folder time under `../browser/ui/` and here; the gallery reloads when it
+**`/version`** is the newest file or folder time under `../browser/dashboard/ui/` and here; the gallery reloads when it
 changes.
 
 ## Agent Gotchas & Invariants (⚠️)
 
 - **A variant is temporary.** To offer design choices, add `variants/<name>.css` (rules after `page.css`) and/or
   `variants/<name>.js` (functions that redefine a part's, run after the parts). Once one is picked, put it into
-  `../browser/ui/` and delete every variant.
+  `../browser/dashboard/ui/` and delete every variant.
 - **A story shows its state at rest**, with no click: a message a button would leave is put in with `tell()`.
 - **The port is 9320**, outside 9223-9299, where `profiles.make` gives profiles' Chromes their ports;
   `preview.py <port>` takes another.
-- **Stories files are named `<part>.stories.js`**; the gallery lists every one it finds in `../browser/ui/`.
+- **Stories files are named `<part>.stories.js`**; the gallery lists every one it finds in `../browser/dashboard/ui/`.

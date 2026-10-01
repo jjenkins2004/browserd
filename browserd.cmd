@@ -8,7 +8,7 @@ if not defined PY (
   where py >nul 2>nul && (set "PY=py -3") || (set "PY=python")
 )
 pushd "%~dp0"
-%PY% -m browser.service %*
+%PY% -m browser.cli.service %*
 set "CODE=%ERRORLEVEL%"
 popd
 exit /b %CODE%

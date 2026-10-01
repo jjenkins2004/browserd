@@ -13,7 +13,7 @@ import os
 import shutil
 import subprocess
 
-from . import system
+from .. import system
 
 class Install:
     """One installer's browserd: the folder its code is in, removed whole, and what else that installer put here."""

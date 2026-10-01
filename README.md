@@ -64,8 +64,9 @@ A git checkout runs as it is, and keeps its records in `.run/` beside the code: 
 
 ## Layout
 
-    browserd, browserd.cmd  the command: browser/service.py's start, stop, restart, status, version and uninstall
-    browser/                the server: tabs, the queue, and its own README; browser/system/ is what differs by OS
+    browserd, browserd.cmd  the command: browser/cli/service.py's start, stop, restart, status, version and uninstall
+    browser/                the server, a folder per domain (chrome/, tabs/, steps/, dashboard/, cli/, ...), and its own
+                            README, whose Directory Layout maps them; browser/system/ is what differs by OS
     package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
     VERSION                 the version on main, which install.sh and install.ps1 install as its tag, v<VERSION>
     install.sh, install.ps1 the macOS and Windows installers, run from GitHub; Formula/browserd.rb is Homebrew's

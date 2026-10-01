@@ -8,8 +8,11 @@ import os
 import threading
 import time
 
-from . import cdp, downloads, focus, launch, mcp, paths, system
-from .ws import WebSocketError
+from .. import system
+from ..config import paths
+from ..protocol import mcp
+from . import cdp, downloads, focus, launch
+from ..protocol.ws import WebSocketError
 
 QUIT_WAIT = 15.0  # seconds quit_chrome waits for a Chrome to exit after Browser.close
 LOOK_AGAIN = 5.0  # seconds before downloads asks again whether a Chrome with no Folder runs

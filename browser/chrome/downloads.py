@@ -8,8 +8,9 @@ import os
 import threading
 import time
 
-from . import cdp, mcp
-from .ws import WebSocketError
+from ..protocol import mcp
+from . import cdp
+from ..protocol.ws import WebSocketError
 
 POLL = 0.5
 READY_WAIT = 2.0  # seconds a start waits for its connection; a slower one still starts, missing only what began meanwhile

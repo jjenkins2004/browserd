@@ -13,8 +13,11 @@ import time
 from http.server import BaseHTTPRequestHandler
 from typing import cast
 
-from . import cdp, mcp, ports, profiles, sessions
-from .ws import WebSocketError
+from ..chrome import cdp, profiles
+from ..config import ports
+from ..protocol import mcp
+from ..tabs import sessions
+from ..protocol.ws import WebSocketError
 
 PORT = ports.PAGE
 UI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")

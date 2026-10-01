@@ -19,9 +19,11 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import throwaway
-from browser import cdp, launch, mcp, system
-from browser.profiles import Profile
-from browser.ws import TEXT, WebSocket, WebSocketError
+from browser import system
+from browser.chrome import cdp, launch
+from browser.protocol import mcp
+from browser.chrome.profiles import Profile
+from browser.protocol.ws import TEXT, WebSocket, WebSocketError
 
 passed, failed, skipped = [], [], []
 

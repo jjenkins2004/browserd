@@ -11,7 +11,9 @@ import subprocess
 import tempfile
 import threading
 
-from . import cdp, paths, system
+from .. import system
+from ..chrome import cdp
+from ..config import paths
 
 ROOT = paths.ROOT
 DESKTOP = system.DESKTOP

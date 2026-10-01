@@ -4,8 +4,8 @@ connection, at a viewport screenshot's CSS pixels, as a hand moves, presses and 
 README.md, "Agent Gotchas & Invariants", says why they are three steps and how a dialog one opens is reported.
 """
 
-from . import cdp
-from .ws import WebSocketError
+from ..chrome import cdp
+from ..protocol.ws import WebSocketError
 
 BUTTONS = {"left": 1, "right": 2, "middle": 4}  # CDP's buttons bit for each
 MOST_COUNT = 3  # a triple click selects a paragraph; no page counts further

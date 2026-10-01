@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 
-from browser.state import State  # noqa: E402
+from browser.records.state import State  # noqa: E402
 
 
 def bench_profile():

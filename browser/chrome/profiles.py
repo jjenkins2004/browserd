@@ -12,7 +12,9 @@ import threading
 import time
 from typing import NamedTuple
 
-from . import cdp, mcp, system
+from .. import system
+from ..protocol import mcp
+from . import cdp
 
 GOOGLE = system.CHROME_DATA  # the folder of Chrome's own folder: README.md says where that is on each OS
 PREFIX = "Chrome-"  # every profile's folder is GOOGLE/Chrome-*, beside Chrome's own GOOGLE/Chrome; a new one is Chrome-<profile name>

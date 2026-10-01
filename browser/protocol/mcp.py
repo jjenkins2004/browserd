@@ -15,7 +15,7 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import cast
 
-from . import system
+from .. import system
 
 PATH = "/mcp"
 SESSION = "Mcp-Session-Id"

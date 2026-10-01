@@ -2,8 +2,8 @@
 dump what a fresh chrome-devtools-mcp and Chrome itself list."""
 import json, random, re, sys, time, urllib.request
 import served
-from browser import cdp
-from browser.devtools import Devtools
+from browser.chrome import cdp
+from browser.tabs.devtools import Devtools
 
 MCP, PAGE = "http://127.0.0.1:9250/mcp", "http://127.0.0.1:9251"
 BENCH = served.bench_profile()

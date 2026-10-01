@@ -8,7 +8,7 @@ import sqlite3
 import threading
 from typing import NamedTuple
 
-from .profiles import Profile
+from ..chrome.profiles import Profile
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS profiles (

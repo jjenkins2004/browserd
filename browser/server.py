@@ -10,13 +10,20 @@ import sys
 import threading
 import time
 
-from . import cdp, devtools, guard, mcp, page, paths, ports, profiles, record, sessions, steps, system
-from .chromes import Chromes
-from .devtools import Devtools
-from .state import Session, State
-from .tabs import NOT_AN_ID, NOT_YOURS, Tabs, is_id
-from .worker import Workers
-from .ws import WebSocketError
+from . import system
+from .chrome import cdp, profiles
+from .config import paths, ports
+from .dashboard import page
+from .protocol import mcp
+from .records import record
+from .steps import guard, steps
+from .tabs import devtools, sessions
+from .chrome.chromes import Chromes
+from .tabs.devtools import Devtools
+from .records.state import Session, State
+from .tabs.tabs import NOT_AN_ID, NOT_YOURS, Tabs, is_id
+from .tabs.worker import Workers
+from .protocol.ws import WebSocketError
 
 HOST = "127.0.0.1"
 PORT = ports.MCP

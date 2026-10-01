@@ -9,8 +9,9 @@ import shutil
 import socket
 import tempfile
 
-from browser import cdp, chromes, launch, system
-from browser.profiles import Profile
+from browser import system
+from browser.chrome import cdp, chromes, launch
+from browser.chrome.profiles import Profile
 
 
 @contextlib.contextmanager

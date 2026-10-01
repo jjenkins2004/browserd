@@ -10,8 +10,10 @@ import re
 import time
 import urllib.parse
 
-from . import cdp, checked, dialogs, pointer, screenshot, system
-from .devtools import ROOTS_SPELLED, may_touch
+from .. import system
+from ..chrome import cdp
+from . import checked, dialogs, pointer, screenshot
+from ..tabs.devtools import ROOTS_SPELLED, may_touch
 
 # Tab tools own opening, closing and choosing tabs, and the rest profile a page, which a queue only reads and drives.
 PAGE_TOOLS = {"new_page", "close_page", "select_page", "list_pages"}

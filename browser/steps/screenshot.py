@@ -6,8 +6,8 @@ README.md, "Agent Gotchas & Invariants", says why chrome-devtools-mcp's own take
 
 import base64
 
-from . import cdp
-from .ws import WebSocketError
+from ..chrome import cdp
+from ..protocol.ws import WebSocketError
 
 FORMAT, QUALITY = "jpeg", 80  # a quarter of a PNG's bytes, which every later request of a conversation carries again
 ANSWER_WAIT = 5.0  # seconds the page has to answer before a screenshot fails, as it never does while a dialog is open

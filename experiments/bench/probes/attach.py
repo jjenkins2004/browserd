@@ -1,7 +1,7 @@
 """Do what Puppeteer's TargetManager does at connect, by hand, and print every attach it gets."""
 import json, sys, time
 import served
-from browser import cdp
+from browser.chrome import cdp
 BENCH = served.bench_profile()
 b = cdp.Browser(BENCH)
 print("all targets incl tabs:")

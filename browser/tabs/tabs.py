@@ -9,9 +9,10 @@ import threading
 import time
 import urllib.parse
 
-from . import cdp, focus, system
-from .state import Tab
-from .ws import WebSocketError
+from .. import system
+from ..chrome import cdp, focus
+from ..records.state import Tab
+from ..protocol.ws import WebSocketError
 
 LETTERS = "abcdefghjkmnpqrstuvwxyz23456789"
 LOAD_WAIT = 10.0

@@ -25,8 +25,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))
-from browser import cdp, paths, sessions  # noqa: E402
-from browser.state import State  # noqa: E402
+from browser.chrome import cdp  # noqa: E402
+from browser.config import paths  # noqa: E402
+from browser.tabs import sessions  # noqa: E402
+from browser.records.state import State  # noqa: E402
 
 P = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"

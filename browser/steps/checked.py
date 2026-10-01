@@ -9,9 +9,10 @@ import json
 import re
 import time
 
-from . import cdp, system
-from .worker import returned
-from .ws import WebSocketError
+from .. import system
+from ..chrome import cdp
+from ..tabs.worker import returned
+from ..protocol.ws import WebSocketError
 
 PICK_WAIT = 8.0
 POLL = 0.4

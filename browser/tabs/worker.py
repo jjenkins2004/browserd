@@ -7,7 +7,7 @@ import secrets
 import threading
 import time
 
-from . import cdp, downloads
+from ..chrome import cdp, downloads
 from .devtools import Devtools
 
 PROBE_WAIT = 15.0

@@ -18,8 +18,10 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from browser import cdp, paths, sessions  # noqa: E402
-from browser.state import State  # noqa: E402
+from browser.chrome import cdp  # noqa: E402
+from browser.config import paths  # noqa: E402
+from browser.tabs import sessions  # noqa: E402
+from browser.records.state import State  # noqa: E402
 
 WIDTH = 1920  # the video's width; a frame of another shape than the first is fitted inside and padded
 stopping = False

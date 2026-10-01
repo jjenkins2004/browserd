@@ -12,8 +12,8 @@ import time
 import urllib.error
 import urllib.request
 
-from . import system
-from .ws import Timeout, WebSocket
+from .. import system
+from ..protocol.ws import Timeout, WebSocket
 
 CHROME = system.CHROME
 PROFILE = "Default"  # the one Chrome profile in every profile's folder

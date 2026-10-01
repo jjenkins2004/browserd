@@ -6,7 +6,7 @@ gives it back.
 
 import time
 
-from . import system
+from .. import system
 
 TAKE_WAIT = 0.5  # seconds keep waits, once it hears of a tab a page opened, for the Chrome to take the focus
 POLL = 0.02

@@ -7,9 +7,9 @@ Homebrew's is not the user's to write in. BROWSERD_HOME, when set, names the fol
 
 import os
 
-from . import system
+from .. import system
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # browser/config/paths.py
 
 
 def _run():

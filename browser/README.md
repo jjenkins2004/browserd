@@ -23,36 +23,48 @@ run `npm ci`).
 
 ## Directory Layout
 
+A folder per domain. A package imports only those above it in this list, server.py all of them, and cli/ server.py
+too, which it starts and stops; each folder's `__init__.py` is empty. A bare "README.md" in a module's docstring
+means the nearest one up the tree: this one, or dashboard/ui/'s for the page's parts.
+
     browser/
-      ws.py        RFC 6455 cut down to one local, trusted, text-only connection
-      cdp.py       which Chrome, port proof, one websocket to it
-      launch.py    starts a profile's Chrome, or adopts one already up
-      chromes.py   each profile's Chrome: started on first use, focus kept, quit from the page or at stop
-      tabs.py      tab ids in state.db; open, list, show, close, hand over
-      focus.py     the user's focus: which app has it; gives it back from tabs pages open
-      system/      what differs by OS, behind one set of names: macos.py, windows.py
-      mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch
-      server.py    the server process: tools, page, pid file
-      service.py   browserd start, stop, restart: background start, locked; stop and restart by pid; status, version, setup, uninstall
-      ports.py     the MCP port and the page's: 9230 and 9231, or ports.json's
-      colors.py    the command's colors, for a terminal only
-      installs.py  what each installer put where, for browserd uninstall
-      paths.py     ROOT, this project's folder; RUN, the records folder; the version, from ../VERSION
-      devtools.py  MCP client for one chrome-devtools-mcp process over stdio
-      worker.py    one tab's process, paired with its page; Workers registry
-      steps.py     the queue: load, check, run, report; snapshot views
-      checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused, read_fills
-      dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
-      downloads.py each profile's downloads folder (Folder), and a tab's downloads and where each went (Watcher)
-      screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
-      pointer.py   the queue's pointer steps: move_at, click_down, click_up
-      guard.py     the click guard: a press or keys stopped when the page changed since the agent's screenshot
-      record.py    one queue call's numbered files in a folder
-      profiles.py  Profile (name, folder, port); what a new profile is given; deleting one
-      state.py     .run/state.db: the profiles, sessions, tabs and their `needs_input` marks
-      sessions.py  session ids, labels, record folder names, when a session is paused
-      page.py      the browserd page on ports.PAGE: GET /state, and a POST per button
-      ui/          the page itself: one file per part, and each part's states; its own README
+      server.py      the server process (`python -m browser.server`, how browserd finds it running): tools, page, pid file
+      system/        what differs by OS, behind one set of names: macos.py, windows.py
+      config/
+        paths.py     ROOT, this project's folder; RUN, the records folder; the version, from ../VERSION
+        ports.py     the MCP port and the page's: 9230 and 9231, or ports.json's
+      protocol/      wire protocols, knowing nothing of browserd
+        ws.py        RFC 6455 cut down to one local, trusted, text-only connection
+        mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch; mcp.log, the server's log
+      chrome/        each profile's Chrome
+        cdp.py       which Chrome, port proof, one websocket to it
+        launch.py    starts a profile's Chrome, or adopts one already up
+        chromes.py   each profile's Chrome: started on first use, focus kept, quit from the page or at stop
+        focus.py     the user's focus: which app has it; gives it back from tabs pages open
+        profiles.py  Profile (name, folder, port); what a new profile is given; deleting one
+        downloads.py each profile's downloads folder (Folder), and a tab's downloads and where each went (Watcher)
+      records/       what browserd keeps in the records folder
+        state.py     .run/state.db: the profiles, sessions, tabs and their `needs_input` marks
+        record.py    one queue call's numbered files in a folder
+      tabs/          a session's tabs, and the process that drives each
+        sessions.py  session ids, labels, record folder names, when a session is paused
+        tabs.py      tab ids in state.db; open, list, show, close, hand over
+        worker.py    one tab's process, paired with its page; Workers registry
+        devtools.py  MCP client for one chrome-devtools-mcp process over stdio
+      steps/         the queue tool's steps
+        steps.py     the queue: load, check, run, report; snapshot views
+        checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused, read_fills
+        pointer.py   the queue's pointer steps: move_at, click_down, click_up
+        guard.py     the click guard: a press or keys stopped when the page changed since the agent's screenshot
+        screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
+        dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
+      dashboard/     the browserd page
+        page.py      the browserd page on ports.PAGE: GET /state, and a POST per button
+        ui/          the page itself: one file per part, and each part's states; its own README
+      cli/           the browserd command (`python -m browser.cli.service`)
+        service.py   browserd start, stop, restart: background start, locked; stop and restart by pid; status, version, setup, uninstall
+        colors.py    the command's colors, for a terminal only
+        installs.py  what each installer put where, for browserd uninstall
     ../browserd, ../browserd.cmd  the command, on macOS and Windows
     ../.run/                    gitignored, a checkout's records folder: server.pid, server.log, start.lock, state.db, ports.json, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored

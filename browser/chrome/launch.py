@@ -4,7 +4,8 @@ Open Chrome."""
 import os
 import time
 
-from . import cdp, system
+from .. import system
+from . import cdp
 
 IN_USE = 21  # chrome.exe's exit code when another Chrome holds the folder under another spelling of it
 

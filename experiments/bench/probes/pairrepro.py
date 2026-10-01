@@ -2,14 +2,14 @@
 import sys, tempfile, time
 import served
 import throwaway
-from browser import cdp
-from browser.worker import Worker
+from browser.chrome import cdp
+from browser.tabs.worker import Worker
 
 DELAYS = [float(d) for d in sys.argv[1].split(",")] if len(sys.argv) > 1 else [0, 0.1, 0.3, 0.6, 1, 2]
 ROUNDS = int(sys.argv[2]) if len(sys.argv) > 2 else 3
 logs = tempfile.mkdtemp()
 import os, contextlib
-from browser import launch, chromes
+from browser.chrome import chromes, launch
 BENCH = os.environ.get("BENCH")
 URL = "http://127.0.0.1:4396/?seed=%d&needle=row&sections=40" if BENCH else "data:text/html,<title>t%d</title>hi"
 

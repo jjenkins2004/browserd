@@ -24,8 +24,14 @@ if os.path.isdir(os.path.join(args.tree, ".git")):  # a worktree has a .git file
                      "worktree add)" % args.tree)
 sys.path.insert(0, args.tree)
 os.chdir(args.tree)
-from browser import page, profiles, server  # noqa: E402
-from browser.state import State  # noqa: E402
+from browser import server  # noqa: E402
+try:
+    from browser.chrome import profiles
+    from browser.dashboard import page
+    from browser.records.state import State
+except ImportError:  # a tree from before browser/'s modules moved into a folder per domain
+    from browser import page, profiles
+    from browser.state import State
 
 server.PORT, page.PORT = args.port, args.port + 1
 server.URL = "http://%s:%d/mcp" % (server.HOST, server.PORT)
