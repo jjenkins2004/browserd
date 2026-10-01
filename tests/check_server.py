@@ -2009,14 +2009,18 @@ def service_offline():
         class Dies:
             pid = 99999
 
-            def __init__(self, *args, **kwargs):
-                kwargs["stdout"].write("the School Chrome: port 9223 is held by pid 1\n")
-                kwargs["stdout"].flush()
-
             def poll(self):
                 return 1
 
-        subprocess.Popen = Dies
+        def spawn(argv, **kwargs):
+            """The server's spawn writes why it stopped and exits; anything else, such as the lsof start asks first, runs."""
+            if "browser.server" not in argv:
+                return saved[-1](argv, **kwargs)
+            kwargs["stdout"].write("the School Chrome: port 9223 is held by pid 1\n")
+            kwargs["stdout"].flush()
+            return Dies()
+
+        subprocess.Popen = spawn
         said = refusal(service.start, SystemExit)
         check("a server that dies while starting says why, from its log", "held by pid 1" in said, said)
         subprocess.Popen = saved[-1]
