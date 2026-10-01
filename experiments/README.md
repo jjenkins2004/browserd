@@ -11,6 +11,7 @@ its runs make (transcripts, scores, recordings) lives outside the repo, since it
     experiments/
       bench/      the benchmarks against other browser MCP servers: suites, arms, runner, scoring
       findings/   what each experiment found, one write-up per experiment; benchmark.md is bench/'s
+      long-tasks/ long, bounded tasks on real sites in the user's own Chrome, for a demo video, with answer keys
 
 ## Core Abstractions & Shared Pieces
 

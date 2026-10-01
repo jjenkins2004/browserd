@@ -1,0 +1,112 @@
+{
+  "companies": [
+    {
+      "ticker": "MSFT",
+      "filing": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm",
+      "revenue": [
+        281724,
+        331839
+      ],
+      "fy": [
+        2025,
+        2026
+      ],
+      "net_income": [
+        101832,
+        133749
+      ],
+      "capex": [
+        64551,
+        115948
+      ],
+      "growth": 0.796223,
+      "title": "MSFT — FY2026",
+      "lines": [
+        "Revenue: $331.8B (prior $281.7B)",
+        "Net income: $133.7B (prior $101.8B)",
+        "Capex: $115.9B (prior $64.6B)"
+      ]
+    },
+    {
+      "ticker": "GOOGL",
+      "filing": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
+      "revenue": [
+        350018,
+        402836
+      ],
+      "fy": [
+        2024,
+        2025
+      ],
+      "net_income": [
+        100118,
+        132170
+      ],
+      "capex": [
+        52535,
+        91447
+      ],
+      "growth": 0.740687,
+      "title": "GOOGL — FY2025",
+      "lines": [
+        "Revenue: $402.8B (prior $350.0B)",
+        "Net income: $132.2B (prior $100.1B)",
+        "Capex: $91.4B (prior $52.5B)"
+      ]
+    },
+    {
+      "ticker": "AMZN",
+      "filing": "https://www.sec.gov/Archives/edgar/data/1018724/000101872426000004/amzn-20251231.htm",
+      "revenue": [
+        637959,
+        716924
+      ],
+      "fy": [
+        2024,
+        2025
+      ],
+      "net_income": [
+        59248,
+        77670
+      ],
+      "capex": [
+        82999,
+        131819
+      ],
+      "growth": 0.5882,
+      "title": "AMZN — FY2025",
+      "lines": [
+        "Revenue: $716.9B (prior $638.0B)",
+        "Net income: $77.7B (prior $59.2B)",
+        "Capex: $131.8B (prior $83.0B)"
+      ]
+    },
+    {
+      "ticker": "META",
+      "filing": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
+      "revenue": [
+        164501,
+        200966
+      ],
+      "fy": [
+        2024,
+        2025
+      ],
+      "net_income": [
+        62360,
+        60458
+      ],
+      "capex": [
+        37256,
+        69691
+      ],
+      "growth": 0.870598,
+      "title": "META — FY2025",
+      "lines": [
+        "Revenue: $201.0B (prior $164.5B)",
+        "Net income: $60.5B (prior $62.4B)",
+        "Capex: $69.7B (prior $37.3B)"
+      ]
+    }
+  ]
+}
