@@ -1,4 +1,5 @@
-"""Each profile's Chrome: started on its first use, kept off the user's focus, and quit when the server stops.
+"""Each profile's Chrome: started on its first use, kept off the user's focus, and quit from the page or when the
+server stops.
 
 README.md, "Core Abstractions & Shared Pieces", has the contract.
 """
@@ -6,7 +7,7 @@ README.md, "Core Abstractions & Shared Pieces", has the contract.
 import threading
 import time
 
-from . import cdp, focus, launch, mcp, system
+from . import cdp, focus, launch, mcp, paths, system
 from .ws import WebSocketError
 
 QUIT_WAIT = 15.0  # seconds quit_chrome waits for a Chrome to exit after Browser.close
@@ -87,20 +88,27 @@ class Chromes:
             except cdp.CdpError as exc:
                 mcp.log("could not check whether the %s Chrome is running: %s" % (profile.name, exc))
 
-    def window(self, profile, url):
-        """Start a profile's Chrome if it is down, and open a window in front at url.
+    def window(self, profile):
+        """Bring a profile's Chrome to the front, starting it if it is down and opening a blank window when it
+        has no page open.
 
         Args:
             profile (Profile): whose Chrome.
-            url (str): where the window opens; empty for a blank one.
         """
         self.ensure(profile)
         browser = cdp.Browser(profile)
         try:
-            browser.call("Target.createTarget", url=url or "about:blank", newWindow=True)
+            targets = browser.call("Target.getTargets")["targetInfos"]
+            page = next((target for target in targets if target.get("type") == "page"), None)
+            if page is None:
+                browser.call("Target.createTarget", url="about:blank", newWindow=True)
+            else:
+                # Bringing Chrome to the front leaves a minimized window minimized.
+                window = browser.call("Browser.getWindowForTarget", targetId=page["targetId"])
+                if window["bounds"].get("windowState") == "minimized":
+                    browser.call("Browser.setWindowBounds", windowId=window["windowId"], bounds={"windowState": "normal"})
             if not focus.bring(browser.pid):
-                raise cdp.CdpError("the %s Chrome opened a window, but %s did not bring it to the front"
-                                   % (profile.name, system.NAME))
+                raise cdp.CdpError("%s did not bring the %s Chrome to the front" % (system.NAME, profile.name))
         finally:
             browser.close()
 
@@ -112,12 +120,23 @@ class Chromes:
         """
         self._stopping = True
         for profile in profiles:
-            with self._start_lock(profile.folder):
-                try:
-                    if cdp.owner(profile.folder) is not None:
-                        quit_chrome(profile)
-                except cdp.CdpError as exc:
-                    mcp.log("could not quit the %s Chrome: %s" % (profile.name, exc))
+            try:
+                self.quit(profile)
+            except cdp.CdpError as exc:
+                mcp.log("could not quit the %s Chrome: %s" % (profile.name, exc))
+
+    def quit(self, profile):
+        """Quit a profile's Chrome if it is running, once any start of it under way has finished; raise CdpError when it
+        is still running after.
+
+        Args:
+            profile (Profile): whose Chrome.
+        """
+        with self._start_lock(profile.folder):
+            if cdp.owner(profile.folder) is not None:
+                quit_chrome(profile)
+                if cdp.owner(profile.folder) is not None:
+                    raise cdp.CdpError("the %s Chrome is still running; see server.log in %s" % (profile.name, paths.RUN))
 
     def _keep_focus(self, profile):
         with self._lock:

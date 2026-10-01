@@ -1,4 +1,5 @@
-"""browserd's own records, in one SQLite file, .run/state.db: the profiles, the sessions and their tabs.
+"""browserd's own records, in one SQLite file, .run/state.db: the profiles, the sessions, their tabs and which tabs
+need the user's input.
 
 README.md, "Core Abstractions & Shared Pieces", has the contract.
 """
@@ -30,6 +31,11 @@ CREATE TABLE IF NOT EXISTS tabs (
     session TEXT,
     made REAL NOT NULL,
     closed REAL
+);
+CREATE TABLE IF NOT EXISTS needs_input (
+    tab TEXT PRIMARY KEY,
+    note TEXT NOT NULL,
+    since REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tabs_by_target ON tabs (profile, target);
 CREATE INDEX IF NOT EXISTS tabs_by_session ON tabs (session);
@@ -88,6 +94,10 @@ class State:
         """Add a profile, or raise sqlite3.IntegrityError when its name, folder or port is taken."""
         self._run("INSERT INTO profiles (name, folder, port) VALUES (?, ?, ?)", *profile)
 
+    def remove_profile(self, name):
+        """Remove the profile of that name, whatever its case; its sessions and tabs are kept."""
+        self._run("DELETE FROM profiles WHERE name = ?", name)
+
     def add_session(self, session):
         """Add a session, or raise sqlite3.IntegrityError when its id is taken."""
         self._run("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)", *session)
@@ -137,13 +147,29 @@ class State:
         self._run("UPDATE tabs SET session = ? WHERE id = ?", session_id, tab_id)
 
     def close_tab(self, tab_id, when):
-        self._run("UPDATE tabs SET closed = ? WHERE id = ? AND closed IS NULL", when, tab_id)
+        with self._lock:
+            self._db.execute("UPDATE tabs SET closed = ? WHERE id = ? AND closed IS NULL", (when, tab_id))
+            self._db.execute("DELETE FROM needs_input WHERE tab = ?", (tab_id,))
 
     def close_all(self, when):
         """Close every open session and tab, as when every Chrome quits with the server."""
         with self._lock:
             self._db.execute("UPDATE sessions SET closed = ? WHERE closed IS NULL", (when,))
             self._db.execute("UPDATE tabs SET closed = ? WHERE closed IS NULL", (when,))
+            self._db.execute("DELETE FROM needs_input")
+
+    def mark_needs_input(self, tab_id, note, when):
+        """Mark an open tab as needing the user's input; marked already, it takes the new note and keeps its since. A
+        tab closed meanwhile gets no mark."""
+        self._run("INSERT INTO needs_input SELECT ?, ?, ? FROM tabs WHERE id = ? AND closed IS NULL "
+                  "ON CONFLICT (tab) DO UPDATE SET note = excluded.note", tab_id, note, when, tab_id)
+
+    def clear_needs_input(self, tab_id):
+        self._run("DELETE FROM needs_input WHERE tab = ?", tab_id)
+
+    def needs_input(self):
+        """Every tab marked as needing the user's input, as tab id -> (note, since)."""
+        return {tab: (note, since) for tab, note, since in self._all("SELECT tab, note, since FROM needs_input")}
 
     def close(self):
         with self._lock:

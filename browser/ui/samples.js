@@ -14,7 +14,7 @@ const TABS = {
 
 // A tab its agent marked as needing you, seconds ago, with a note saying what for.
 function needing(tab, note, seconds) {
-  return {...tab, needs_action: {note, since: before(seconds)}};
+  return {...tab, needs_input: {note, since: before(seconds)}};
 }
 
 function sampleSession(fields) {

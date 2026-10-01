@@ -490,10 +490,33 @@ def session_tools_offline():
         check("another session's list does not show it", not is_error and opened not in text and "no open tabs" in text, text)
         text, is_error = call(httpd, "tab_close", session=other, tabs=[opened])
         check("another session cannot close it", is_error and "no tab of this session" in text, text)
+        text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, note="  sign in to Workday  ")
+        marked = state.needs_input().get(opened)
+        check("tab_needs_input marks a tab of the session with its note, trimmed, and says how to clear it",
+              not is_error and marked is not None and marked[0] == "sign in to Workday" and "resolved: true" in text, text)
+        call(httpd, "tab_needs_input", session=session, tab=opened, note="solve the captcha")
+        check("marking it again takes the new note and keeps since when",
+              state.needs_input().get(opened) == ("solve the captcha", marked[1] if marked else None), repr(state.needs_input()))
+        text, is_error = call(httpd, "tab_needs_input", session=other, tab=opened, note="mine now")
+        check("another session cannot mark it", is_error and "no tab of this session" in text, text)
+        text, is_error = call(httpd, "tab_needs_input", session=other, tab=opened, resolved=True)
+        check("nor clear its mark", is_error and "no tab of this session" in text and opened in state.needs_input(), text)
+        text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, note="check the form",
+                              resolved=False)
+        check("a note with resolved: false marks it", not is_error and state.needs_input()[opened][0] == "check the form", text)
+        for given in ({}, {"note": "  "}, {"note": "x", "resolved": True}, {"resolved": False}):
+            text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, **given)
+            check("tab_needs_input given %r is refused, saying what it takes" % given, is_error and "resolved: true" in text, text)
+        text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, note="x" * 201)
+        check("a note over 200 characters is refused", is_error and "at most 200" in text, text)
+        text, is_error = call(httpd, "tab_needs_input", session=session, tab=opened, resolved=True)
+        check("resolved: true clears the mark", not is_error and opened not in state.needs_input(), text)
+        call(httpd, "tab_needs_input", session=session, tab=opened, note="check the form")
         text, is_error = call(httpd, "tab_show", session=session, tab=opened)
         check("tab_show answers with the tab's id and URL", not is_error and text.split()[0] == opened, text)
         state.touch(session, 0)
         check("tab_close closes by id", call(httpd, "tab_close", session=session, tabs=[opened]) == ("closed %s" % opened, False))
+        check("and closing a tab clears its mark", opened not in state.needs_input(), repr(state.needs_input()))
         first, second = (call(httpd, "tab_open", session=session, url="https://example.com/%s" % n)[0].split()[0] for n in "de")
         text, is_error = call(httpd, "tab_close", session=session, tabs=[first, second, first])
         check("tab_close closes several tabs in one call, a tab named twice once",
@@ -2151,6 +2174,16 @@ def profiles_offline():
         again = State(path)
         check("profiles outlive the server", [p.name for p in again.profiles()] == ["Clash", "Held", "Jobs", "Research"],
               repr(again.profiles()))
+
+        class Quitting:
+            def quit(self, profile):
+                pass
+
+        profiles.delete(again, Quitting(), None, None, "research", close_sessions=True)
+        check("deleting a profile whose Chrome never ran removes its empty folder, so the name can be made again",
+              not os.path.exists(research.folder) and profiles.make(again, "Research").folder == research.folder)
+        profiles.delete(again, Quitting(), None, None, "Jobs", close_sessions=True)
+        check("but a folder its Chrome used is kept", again.profile("Jobs") is None and os.path.isdir(jobs.folder))
         again.close()
     finally:
         profiles.GOOGLE, profiles.FIRST_PORT, profiles.LAST_PORT, cdp.owner, cdp.port_of = saved
@@ -2158,20 +2191,79 @@ def profiles_offline():
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def profile_tools_offline():
+    """profile_new and profile_delete over HTTP, with a stand-in Google folder and Chrome."""
+    saved = (profiles.GOOGLE, profiles.FIRST_PORT)
+    workdir = tempfile.mkdtemp(prefix="browser-profile-tools-")
+    state = State(os.path.join(workdir, "state.db"))
+
+    class Quitting:
+        quits = []
+
+        def quit(self, profile):
+            self.quits.append(profile.name)
+
+    chromes = Quitting()
+    httpd = serving(server.profile_tools(state, chromes, Tabs(state, FakeChrome().connect), Workers(workdir), ()))
+    try:
+        google = profiles.GOOGLE = os.path.join(workdir, "Google")
+        os.makedirs(google)
+        profiles.FIRST_PORT = profiles.LAST_PORT - 40
+        text, is_error = call(httpd, "profile_new", name="Jobs")
+        made = state.profile("Jobs")
+        check("profile_new makes a profile in a new folder, Chrome-<name>, and points at session_start",
+              not is_error and made is not None and made.folder == os.path.join(google, "Chrome-Jobs")
+              and os.path.isdir(made.folder) and "session_start" in text, text)
+        text, is_error = call(httpd, "profile_new", name="jobs")
+        check("a name taken, whatever its case, is refused", is_error and "already" in text, text)
+        text, is_error = call(httpd, "profile_new", name="no good")
+        check("a name against the rule is refused, giving the rule", is_error and profiles.NAME_RULE in text, text)
+        assert made is not None
+        session = open_session(state, "apply acme", made)
+        text, is_error = call(httpd, "profile_delete", name="Jobs")
+        check("profile_delete refuses while the profile has an open session, naming it, and changes nothing",
+              is_error and session.id in text and state.profile("Jobs") == made
+              and state.session(session.id).closed is None and chromes.quits == [], text)
+        state.close_session(session.id, time.time())
+        with open(os.path.join(made.folder, "Local State"), "w") as handle:  # as its Chrome, once run, leaves it
+            json.dump({"profile": {"info_cache": {"Default": {"name": "Default"}}}}, handle)
+        text, is_error = call(httpd, "profile_delete", name="jobs")
+        check("with none open, it quits the profile's Chrome and removes the profile, keeping its folder",
+              not is_error and state.profile("Jobs") is None and chromes.quits == ["Jobs"] and os.path.isdir(made.folder)
+              and "kept" in text, text)
+        text, is_error = call(httpd, "profile_new", name="Jobs")
+        again = state.profile("Jobs")
+        check("profile_new with the same name takes that folder back over",
+              not is_error and again is not None and again.folder == made.folder and "taking over" in text, text)
+        text, is_error = call(httpd, "profile_delete", name="Nobody")
+        check("profile_delete refuses a profile there is not", is_error and "no profile named 'Nobody'" in text, text)
+    finally:
+        profiles.GOOGLE, profiles.FIRST_PORT = saved
+        httpd.shutdown()
+        httpd.server_close()
+        state.close()
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 def page_offline():
     """The page's requests: what each must carry, the profile its button makes, and its tabs shown, closed and handed
-    over, and its sessions closed, in a stand-in Chrome."""
+    over, its sessions closed, its Chrome quit, and the profile deleted, in a stand-in Chrome."""
     saved = (profiles.GOOGLE, profiles.FIRST_PORT)
     workdir = tempfile.mkdtemp(prefix="browser-page-")
     state = State(os.path.join(workdir, "state.db"))
 
     class Windows:
-        opened = []
+        opened, quits, refuse, stuck = [], [], False, False
 
-        def window(self, profile, url):
-            if url == "chrome://refused":
+        def window(self, profile):
+            if self.refuse:
                 raise cdp.CdpError("Target.createTarget: refused")
-            self.opened.append((profile.name, url))
+            self.opened.append(profile.name)
+
+        def quit(self, profile):
+            if self.stuck:
+                raise cdp.CdpError("ps could not run")
+            self.quits.append(profile.name)
 
     class Dropped:
         tabs = []
@@ -2227,12 +2319,13 @@ def page_offline():
         check("an unknown action is refused", ask("POST", "/nothing", {}, **own)[0] == 404)
         status, raw, _ = ask("GET", "/state", **{page.TOKEN: board.token})
         check("state says a profile's Chrome is not running", json.loads(raw)["profiles"][0]["pid"] is None, raw.decode())
-        status, raw, _ = ask("POST", "/open", {"profile": "jobs", "url": "https://example.com/"}, **own)
-        check("Open Chrome opens a window of the named profile's Chrome, whatever the name's case, at the URL",
-              status == 200 and windows.opened == [("Jobs", "https://example.com/")], raw.decode())
+        status, raw, _ = ask("POST", "/open", {"profile": "jobs"}, **own)
+        check("Open Chrome brings the named profile's Chrome to the front, whatever the name's case",
+              status == 200 and windows.opened == ["Jobs"], raw.decode())
         status, raw, _ = ask("POST", "/open", {"profile": "Nobody"}, **own)
         check("Open Chrome refuses a profile there is not", status == 400 and "no profile named 'Nobody'" in raw.decode(), raw.decode())
-        status, raw, _ = ask("POST", "/open", {"profile": "Jobs", "url": "chrome://refused"}, **own)
+        windows.refuse = True
+        status, raw, _ = ask("POST", "/open", {"profile": "Jobs"}, **own)
         check("and passes on why Chrome refused", status == 400 and "refused" in json.loads(raw)["error"], raw.decode())
 
         jobs = state.profile("Jobs")
@@ -2241,7 +2334,11 @@ def page_offline():
         mine, _ = tabs.open(working, "https://example.com/a")
         stale, _ = tabs.open(idle, "https://example.com/b")
         chrome.add("https://example.com/hand", title="By hand")
+        state.mark_needs_input(mine, "sign in", 1000.0)
         shown = json.loads(ask("GET", "/state", **{page.TOKEN: board.token})[1])["profiles"][0]
+        check("state gives a tab marked as needing input its note and since when, and no other tab a mark",
+              [t.get("needs_input") for s in shown["sessions"] for t in s["tabs"]]
+              == [{"note": "sign in", "since": 1000.0}, None], repr(shown))
         check("state lists each open session with its state and tabs, and the tabs no session owns",
               [(s["label"], s["state"], [t["id"] for t in s["tabs"]]) for s in shown["sessions"]]
               == [("apply acme", "active", [mine]), ("old run", "paused", [stale])]
@@ -2277,6 +2374,34 @@ def page_offline():
         shown = json.loads(ask("GET", "/state", **{page.TOKEN: board.token})[1])["profiles"][0]
         check("and state lists both sessions as closed, the last closed first",
               shown["sessions"] == [] and [s["id"] for s in shown["closed"]] == [working.id, idle.id], repr(shown))
+
+        last = open_session(state, "last run", jobs)
+        kept, _ = tabs.open(last, "https://example.com/c")
+        status, raw, _ = ask("POST", "/quit-chrome", {"profile": "jobs"}, **own)
+        check("Quit Chrome quits the named profile's Chrome and drops the Worker of each of its tabs, leaving its sessions open",
+              status == 200 and windows.quits == ["Jobs"] and kept in dropped.tabs and state.session(last.id).closed is None,
+              raw.decode())
+        later, _ = tabs.open(last, "https://example.com/d")
+        chrome.add("https://example.com/hand-again", title="By hand again")
+        tabs.listing(jobs)
+        hand = [row.id for row in state.open_tabs("Jobs") if row.session is None]
+        status, raw, _ = ask("POST", "/delete-profile", {"profile": "Nobody"}, **own)
+        check("Delete profile refuses a profile there is not", status == 400 and "no profile named 'Nobody'" in raw.decode(),
+              raw.decode())
+        windows.stuck = True
+        status, raw, _ = ask("POST", "/delete-profile", {"profile": "jobs"}, **own)
+        windows.stuck = False
+        check("a Chrome that could not be quit puts the profile back, and leaves its sessions and tabs open",
+              status == 400 and "ps could not run" in raw.decode() and state.profile("Jobs") == jobs
+              and state.session(last.id).closed is None and state.tab(later).closed is None, raw.decode())
+        status, raw, _ = ask("POST", "/delete-profile", {"profile": "jobs"}, **own)
+        check("Delete profile removes it, whatever the name's case, quits its Chrome, and closes its sessions and every tab of it",
+              status == 200 and state.profile("Jobs") is None and state.session(last.id).closed is not None
+              and state.open_tabs("Jobs") == [] and len(hand) == 1 and {later, *hand} <= set(dropped.tabs)
+              and windows.quits == ["Jobs", "Jobs"], raw.decode())
+        shown = json.loads(ask("GET", "/state", **{page.TOKEN: board.token})[1])
+        check("and keeps its folder, for a new profile to take over",
+              os.path.isdir(made["folder"]) and shown == {"profiles": [], "folders": ["Chrome-School"]}, repr(shown))
     finally:
         profiles.GOOGLE, profiles.FIRST_PORT = saved
         board.shutdown()
@@ -3083,6 +3208,8 @@ if __name__ == "__main__":
     recording_offline()
     print()
     profiles_offline()
+    print()
+    profile_tools_offline()
     print()
     page_offline()
     print()

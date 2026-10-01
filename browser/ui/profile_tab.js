@@ -13,7 +13,7 @@ function profileTab(name, pick) {
 }
 
 function showProfileTab(tab, profile) {
-  const needs = profile.sessions.flatMap((s) => s.tabs).filter((t) => t.needs_action).length;
+  const needs = profile.sessions.flatMap((s) => s.tabs).filter((t) => t.needs_input).length;
   const active = profile.sessions.filter((s) => s.state === "active").length;
   tab.node.classList.toggle("off", !profile.pid);
   tab.node.title = profile.error ? "its tabs could not be listed" : profile.pid ? "" : "Chrome not running";

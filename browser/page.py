@@ -1,5 +1,5 @@
 """The browserd page, http://127.0.0.1:9231/: every profile, its Chrome, its sessions and their tabs, and the buttons
-that make a profile, open its Chrome, show, close or hand over a tab, and close sessions.
+that make or delete a profile, open or quit its Chrome, show or close a tab, and close sessions.
 
 One page, ui/page.html with ui/'s parts put in, that polls GET /state and POSTs its buttons. README.md, "Agent Gotchas & Invariants",
 says what each request must carry and why the page has a port of its own.
@@ -19,10 +19,10 @@ from .ws import WebSocketError
 PORT = 9231
 UI = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 # The page's parts, each ui/<part>.js, put into ui/page.html's one script in this order.
-PARTS = ("base", "header", "profile_tab", "profile", "session", "tab", "by_hand", "closed", "new_profile", "page")
+PARTS = ("base", "header", "needs", "profile_tab", "profile", "session", "tab", "by_hand", "new_profile", "page")
 TOKEN = "X-Browserd-Token"
 MAX_BODY = 64 << 10
-CLOSED_SHOWN = 10  # closed sessions the page lists per profile, newest first
+CLOSED_SHOWN = 10  # closed sessions /state sends per profile, newest first
 # The page runs only its own inline script and talks only to itself, and no other page may frame it and steer a click.
 POLICY = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; "
           "frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
@@ -42,7 +42,7 @@ class Page(mcp.Exclusive):
             port (int): port to bind; 0 picks a free one.
             state (State): the profiles, sessions and tabs shown and changed.
             reserved (tuple[int, ...]): ports the server holds, which no profile's Chrome may take.
-            chromes (Chromes): starts a profile's Chrome for Open Chrome.
+            chromes (Chromes): starts a profile's Chrome for Open Chrome, and quits it for Quit Chrome and Delete profile.
             tabs (Tabs): lists each profile's tabs, and shows, closes and hands them over.
             workers (Workers): each tab's Worker, dropped when the page closes its tab.
         """
@@ -62,10 +62,11 @@ class Page(mcp.Exclusive):
 
     def snapshot(self):
         """What GET /state answers; README.md, "Core Abstractions & Shared Pieces"."""
-        known, now = self.state.profiles(), time.time()
-        return {"profiles": [self._shown(profile, now) for profile in known], "folders": profiles.free_folders(known)}
+        known, now, needs = self.state.profiles(), time.time(), self.state.needs_input()
+        return {"profiles": [self._shown(profile, now, needs) for profile in known],
+                "folders": profiles.free_folders(known)}
 
-    def _shown(self, profile, now):
+    def _shown(self, profile, now, needs):
         """One profile of GET /state's answer; README.md, "Core Abstractions & Shared Pieces"."""
         shown = {"name": profile.name, "folder": profile.folder, "port": profile.port, "pid": _running(profile),
                  "error": None, "sessions": [], "by_hand": []}
@@ -77,8 +78,11 @@ class Page(mcp.Exclusive):
         by_session = {session.id: [] for session in here}
         for row, info in listed:
             tab = {"id": row.id, "title": info.get("title") or "", "url": info.get("url", "")}
+            if row.id in needs:
+                note, since = needs[row.id]
+                tab["needs_input"] = {"note": note, "since": since}
             # A tab of a session closed as it opened (a tab_open or popup under way) is shown with those by hand, so
-            # it can still be closed or handed over.
+            # it can still be closed.
             by_session.get(row.session, shown["by_hand"]).append(tab)
         for session in here:
             shown["sessions"].append({"id": session.id, "label": session.label, "last_call": session.last_call,
@@ -101,6 +105,14 @@ class Page(mcp.Exclusive):
             self.workers.drop(tab)
         mcp.log("the page closed session %s (%s)" % (session.id, session.label))
 
+    def _profile(self, body):
+        """The profile a request names, whatever its case."""
+        name = body.get("profile")
+        profile = self.state.profile(name) if isinstance(name, str) else None
+        if profile is None:
+            raise Refused("there is no profile named %r" % name)
+        return profile
+
     def act(self, path, body):
         """Do what a POST asks, and return its answer, or None for a path no button posts to."""
         if path == "/profiles":
@@ -109,15 +121,24 @@ class Page(mcp.Exclusive):
             mcp.log("the page made the profile %s, %s on port %d" % (made.name, made.folder, made.port))
             return {"name": made.name, "folder": made.folder, "port": made.port}
         if path == "/open":
-            name, url = body.get("profile"), body.get("url", "")
-            profile = self.state.profile(name) if isinstance(name, str) else None
-            if profile is None:
-                raise Refused("there is no profile named %r" % name)
-            if not isinstance(url, str):
-                raise Refused("a URL is text")
-            self.chromes.window(profile, url)
-            mcp.log("the page opened a window of the %s Chrome at %s" % (profile.name, url or "about:blank"))
+            profile = self._profile(body)
+            self.chromes.window(profile)
+            mcp.log("the page brought the %s Chrome to the front" % profile.name)
             return {"opened": profile.name}
+        if path == "/quit-chrome":
+            profile = self._profile(body)
+            tabs = [row.id for row in self.state.open_tabs(profile.name)]
+            self.chromes.quit(profile)
+            for tab in tabs:
+                self.workers.drop(tab)  # its chrome-devtools-mcp was pointed at the Chrome that quit
+            mcp.log("the page quit the %s Chrome" % profile.name)
+            return {"quit": profile.name}
+        if path == "/delete-profile":
+            profile = profiles.delete(self.state, self.chromes, self.tabs, self.workers, body.get("profile"),
+                                      close_sessions=True)
+            mcp.log("the page deleted the profile %s, %s its folder %s" % (
+                profile.name, "keeping" if os.path.isdir(profile.folder) else "removing", profile.folder))
+            return {"deleted": profile.name}
         tab = body.get("tab")
         if not isinstance(tab, str):
             tab = ""  # refused below as no tab id at all

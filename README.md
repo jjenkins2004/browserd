@@ -3,7 +3,8 @@
 The browser MCP server and everything it needs: it owns one Chrome per profile and serves the tools a
 Claude Code agent reads and drives pages with. Nothing here knows what a job is; it is handed a tab, and
 records each `queue` call in that tab's record folder, `calls/<profile>/<session>-<label>/<tab>/` in its records
-folder. An agent starts with `session_start {profile, label}`, and sees only its session's tabs.
+folder. An agent starts with `session_start {profile, label}`, and sees only its session's tabs; asked to, it makes or
+deletes a profile with `profile_new` or `profile_delete`.
 
 ## Install
 
@@ -61,7 +62,7 @@ A git checkout runs as it is, and keeps its records in `.run/` beside the code: 
     VERSION                 the version on main, which install.sh and install.ps1 install as its tag, v<VERSION>
     install.sh, install.ps1 the macOS and Windows installers, run from GitHub; Formula/browserd.rb is Homebrew's
     scripts/release         cuts a release: VERSION, the tag, and the formula's archive and sha256
-    .run/                   gitignored, a checkout's records: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs), devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
+    .run/                   gitignored, a checkout's records: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs, needs_input), devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     tests/                  check_browser.py, check_server.py; throwaway.py, the live checks' own Chrome
     preview/                every state of the page's parts from made-up data: `python3 preview/preview.py`, then http://127.0.0.1:9320/
     bench/                  the benchmarks against other browser MCP servers, their scripts, and how to rerun them

@@ -5,7 +5,7 @@ function row(tab) {
   return onPanel(list, said);
 }
 
-stories("Tab", "One Chrome tab: its four-character id, title and URL. Show brings it to the front of its Chrome; " +
+stories("Tab", "One Chrome tab: its title and URL. Show brings it to the front of its Chrome; " +
   "Close closes it.", {
   "A tab": {
     about: "The usual row.",

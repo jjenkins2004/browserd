@@ -1,15 +1,15 @@
-// One Chrome tab's row: its id, title and URL, with Show and Close; extra holds more controls, like a hand-over. A
-// tab with needs_action (not sent by the server yet; README.md) says what it needs you for, and since when.
-function tabItem(tab, said, extra) {
+// One Chrome tab's row: its title and URL, with Show and Close. A tab with needs_input says what it needs you for,
+// and since when.
+function tabItem(tab, said) {
   const item = el("li", "tab");
-  item.append(el("span", "tid", tab.id), el("span", "title", tab.title || "(untitled)"), el("span", "url", tab.url),
+  item.append(el("span", "title", tab.title || "(untitled)"), el("span", "url", tab.url),
     button("Show", "", said, () => ({path: "/show", send: {tab: tab.id}})),
-    button("Close", "danger", said, () => ({path: "/close-tab", send: {tab: tab.id}})), ...(extra || []));
-  if (tab.needs_action) {
+    button("Close", "danger", said, () => ({path: "/close-tab", send: {tab: tab.id}})));
+  if (tab.needs_input) {
     item.classList.add("needs");
     const ask = el("div", "ask");
-    ask.append(el("span", "", "Needs you" + (tab.needs_action.note ? ": " + tab.needs_action.note : "")),
-      aged("age", " · ", tab.needs_action.since));
+    ask.append(el("span", "", "Needs you" + (tab.needs_input.note ? ": " + tab.needs_input.note : "")),
+      aged("age", " · ", tab.needs_input.since));
     item.append(ask);
   }
   return item;
