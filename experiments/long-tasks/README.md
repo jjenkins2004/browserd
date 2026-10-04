@@ -22,10 +22,11 @@ answer key and graded in code; trip is written as a person would ask it, and an 
         key.py      builds key.json: each city's November high from a pinned Wikipedia revision
         key.json    the 3 November highs, which rubric.md states (±3°F passes); fares and hotels are live
       run.sh        one run: a clean Claude Code on claude-sonnet-5-5 with the task's prompt, record.py beside it
-      record.py     the timelapse: the session's working tab, captured over DevTools, into frames/ and video.mp4
+      record.py     the timelapse of the tab an agent works in, captured over DevTools, into frames/ and video.mp4
       grade.py      capex's checks against its key; `flights`, Google Flights' nonstops now, for trip's judge
       judge.py      grades a trip deck: claude-opus-5-5 on browserd with rubric.md and the run's evidence
-      compare.py    trip on each arm (browserd, playwright, devtools, agentbrowser) k times, judged; gallery
+      compare.py    trip on each arm (browserd, playwright, devtools, agentbrowser) k times, 2 at once, each
+                    recorded and judged; gallery
 
 ## Core Abstractions & Shared Pieces
 
@@ -42,8 +43,11 @@ answer key and graded in code; trip is written as a person would ask it, and an 
   first. The session label `record.py` waits for is read from the prompt's "with the label" line; with none (trip), it
   follows the profile's first session started after it.
 - **The working tab** is the one whose record folder (`.run/calls/<profile>/<session>-<label>/<tab>/`) changed last:
-  each queue writes there. `record.py` finds the session by its label in `state.db`, maps the tab to its DevTools target
-  (`tabs.target`) and captures it on a connection of its own, so browserd never knows and the tab need not be in front.
+  each queue writes there. `record.py` finds the session by its label in `state.db` (or, with `--transcript`, by the id
+  session_start returned in a stream-json transcript), maps the tab to its DevTools target (`tabs.target`) and captures
+  it on a connection of its own, so browserd never knows and the tab need not be in front. For a Chrome browserd does
+  not drive, `--cdp <port> --folder <dir>` captures its visible tab instead (of several windows', the one whose URL
+  changed last).
 - **capex's grade** is `grade.py capex <deck URL> <sheet URL>`: the deck's `.pptx` export and the Sheet's `.xlsx`,
   fetched with the profile's cookies from a background tab of its own on docs.google.com (closed after), read with
   `zipfile` and ElementTree, then one ok/BAD line per check and a score. Text is compared through `norm`.
@@ -54,14 +58,16 @@ answer key and graded in code; trip is written as a person would ask it, and an 
   `seen.txt`, every tool result of the run. Its last
   message is a JSON verdict, saved as `verdict.json`; `score` counts the items each group passed, a missing item
   failing.
-- **A comparison** is `compare.py run <exp>`: per run, `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p` with
-  run.sh's flags, the arm's server alone, `TIMEOUT` (1 hour); then the deck's PDF and one PNG per slide (`pdftoppm`),
+- **A comparison** is `compare.py run <exp> [--jobs 2]`: per run, `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p`
+  with run.sh's flags, the arm's server alone, `TIMEOUT` (1 hour), and `record.py` beside it (browserd's by
+  `--transcript`, the others' by `--cdp`), stopped before the run's Chrome; then the deck's PDF and one PNG per slide (`pdftoppm`),
   then the judge, in `<data>/<exp>/judging/<random id>/`, so neither its folder nor its request names the arm;
   `result.json` has the run's numbers and scores. `compare.py report <exp>` sums them and writes `gallery.html` (each
   run's slides in a row) and `gallery-blind.html` (rows shuffled and lettered, the key in `gallery-key.json`). browserd
-  runs on the main server's `personal` profile; every other arm attaches over DevTools (`PORT`, 9290) to a Chrome
-  started with browserd's flags on an APFS clone of a copy of that profile's folder, made once per experiment, so all
-  arms start signed in to the same account.
+  runs on the main server's `personal` profile; every other arm attaches over DevTools (a port of its own from `PORTS`,
+  9290 up) to a Chrome started with browserd's flags on an APFS clone of a copy of that profile's folder, made once per
+  experiment, so all arms start signed in to the same account. `--jobs` runs go at once, threads over the run list in
+  order (each rep's arms reversed from the last's); a run starts only with `FREE_LEAST` (25%) of memory free.
 
 ## Agent Gotchas & Invariants (⚠️)
 
