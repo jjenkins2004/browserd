@@ -29,8 +29,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import grade  # noqa: E402
 import judge  # noqa: E402
-from browser import cdp  # noqa: E402
-from browser.state import State  # noqa: E402
+from browser.chrome import cdp  # noqa: E402
+from browser.records.state import State  # noqa: E402
 
 ROOT = HERE.parents[1]
 DATA = Path(os.environ.get("BROWSERD_LONG_TASKS_DATA", ROOT.parent / "browserd-long-tasks"))
