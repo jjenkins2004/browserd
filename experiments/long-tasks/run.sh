@@ -7,7 +7,9 @@
 #     experiments/long-tasks/run.sh capex|trip <name>
 #
 # The run's folder, <data>/<name>/, is where Claude Code runs, and holds the recording (frames/, frames.tsv, video.mp4)
-# and record.log. <data> is ../browserd-long-tasks beside the repo, or $BROWSERD_LONG_TASKS_DATA.
+# and record.log, and for trip flights-before.json, Google Flights as the run starts, for grade.py's --before. <data> is
+# ../browserd-long-tasks beside the repo, or $BROWSERD_LONG_TASKS_DATA. The last line names the session's transcript,
+# which grade.py trip reads.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 task=$1
@@ -24,6 +26,10 @@ if [ -e "$run" ]; then
 fi
 mkdir -p "$run"
 label=$(sed -n 's/.*with the label "\([^"]*\)".*/\1/p' "$HERE/$task/prompt.md")
+if [ "$task" = trip ]; then
+    python3 "$HERE/grade.py" flights "$run/flights-before.json"
+fi
+id=$(uuidgen | tr '[:upper:]' '[:lower:]')
 
 # Started in the background of a script, the recorder ignores Ctrl-C, which stays Claude Code's; SIGTERM stops it.
 python3 "$HERE/record.py" "$label" "$run" > "$run/record.log" 2>&1 &
@@ -33,7 +39,8 @@ cd "$run"
 claude "$(cat "$HERE/$task/prompt.md")" --model claude-sonnet-5-5 --setting-sources "" --tools "" \
     --allowedTools mcp__browserd --disallowedTools mcp__browserd__profile_new mcp__browserd__profile_delete \
     --strict-mcp-config --mcp-config '{"mcpServers": {"browserd": {"type": "http", "url": "http://127.0.0.1:9230/mcp"}}}' \
-    || true
+    --session-id "$id" || true
 kill -TERM "$recorder"
 wait "$recorder" || true
 tail -1 "$run/record.log"
+echo "transcript: $(find "$HOME/.claude/projects" -name "$id.jsonl" | head -1)"
