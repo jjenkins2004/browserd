@@ -48,6 +48,8 @@ FETCH = """(async () => {
 FLIGHTS_SEARCH = ("CBwQAhogEgoyMDI2LTExLTEzKABqBwgBEgNMQVhyBwgBEgNTRUEaIBIKMjAyNi0xMS0xNSgAagcIARIDU0VBcgcIARIDTEFYQAFIA"
                   "XABggELCP___________wGYAQE")
 FLIGHT_LABELS = "[...document.querySelectorAll('[aria-label^=\"From \"]')].map(e => e.getAttribute('aria-label'))"
+CHEAPEST_TAB = ("(() => { const tab = [...document.querySelectorAll('[role=tab]')]"
+                ".find(e => e.textContent.trim().startsWith('Cheapest')); if (tab) tab.click(); return !!tab; })()")
 # A result's aria-label, through norm: "From 118 US dollars round trip total. Nonstop flight with Frontier. Leaves Los
 # Angeles International Airport at 3:24 PM on Friday, ... arrives at ... at 6:33 PM on Friday, ...".
 FLIGHT = re.compile(r"from ([\d,]+) us dollars round trip total\. nonstop flight with (.+?)\. .*?leaves los angeles "
@@ -121,21 +123,33 @@ def flights_url(airport):
             % base64.urlsafe_b64encode(search).decode().rstrip("="))
 
 
-def nonstops(profile, airport):
-    """Google Flights' nonstops from LAX to airport for trip's dates, on its default tab, cheapest first (in its own
-    order within a price): [price, airline, departure, arrival], the text through norm. The results are read once
-    they have held still for a second."""
+def settled_labels(browser, session, unlike=None):
+    """The results' labels once they have held still for a second (and, given unlike, differ from it)."""
     labels = []
-    with background_tab(profile, flights_url(airport), "www.google.com") as (browser, session):
-        for _ in range(30):
-            time.sleep(1)
-            labels, last = evaluate(browser, session, FLIGHT_LABELS) or [], labels
-            if labels and labels == last:
-                break
+    for _ in range(30):
+        time.sleep(1)
+        labels, last = evaluate(browser, session, FLIGHT_LABELS) or [], labels
+        if labels and labels == last and labels != unlike:
+            break
+    return labels
+
+
+def flights_of(labels):
+    """[price, airline, departure, arrival] for each label, the text through norm, cheapest first (in the page's own
+    order within a price)."""
     # Each flight has two elements with its label: dict.fromkeys keeps one of each, in page order.
     found = dict.fromkeys(m.groups() for m in map(FLIGHT.search, map(norm, labels)) if m)
     return sorted([[int(price.replace(",", "")), airline, departs, arrives] for price, airline, departs, arrives in found],
                   key=lambda flight: flight[0])
+
+
+def nonstops(profile, airport):
+    """Google Flights' nonstops from LAX to airport for trip's dates: {"best": the default results, "cheapest": the
+    Cheapest tab's, which adds third-party fares}, each as flights_of gives them."""
+    with background_tab(profile, flights_url(airport), "www.google.com") as (browser, session):
+        best = settled_labels(browser, session)
+        cheapest = settled_labels(browser, session, best) if evaluate(browser, session, CHEAPEST_TAB) else []
+    return {"best": flights_of(best), "cheapest": flights_of(cheapest)}
 
 
 def trip_key():

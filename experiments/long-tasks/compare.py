@@ -49,17 +49,17 @@ ARMS = {  # arm: its MCP server, by the name its tools take
     # Its MCP server takes no flags for the browser: its config file's "cdp" gives the port.
     "agentbrowser": {"agent-browser": {"command": "agent-browser", "args": ["mcp"]}},
 }
-# The other arms' line for prompt.md's browserd line: the same request, minus the server's name and profile.
-OTHER_BROWSER = "Use the browser. It's already signed in to my Google account."
+# The other arms' sentence for prompt.md's browserd one: the same request, minus the server's name and profile.
+OTHER_BROWSER = "Use the browser, where I'm signed in to Google."
 
 
 def prompt(arm):
     text = (HERE / "trip" / "prompt.md").read_text()
     if arm == "browserd":
         return text
-    text, swapped = re.subn(r"^Use browserd .*$", OTHER_BROWSER, text, flags=re.M)
+    text, swapped = re.subn(r"Use browserd[^.]*\.", OTHER_BROWSER, text)
     if swapped != 1:
-        raise SystemExit("trip/prompt.md has no browserd line to swap")
+        raise SystemExit("trip/prompt.md has no browserd sentence to swap")
     return text
 
 

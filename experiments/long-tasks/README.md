@@ -17,10 +17,10 @@ answer key and graded in code; trip is written as a person would ask it, and an 
         key.py      builds key.json from EDGAR's XBRL facts, each checked against the filing's text
         key.json    the 24 values in $ millions, each company's growth, slide title and lines
       trip/
-        prompt.md   a team offsite, asked as a person would: flights, a hotel, weather, a polished 6-slide deck
-        rubric.md   the judge's prompt: how to read the deck, the evidence files, 13 correct and 6 polish items
-        key.py      builds key.json: each city's November high from the pinned Wikipedia revision
-        key.json    the 3 November highs (rubric.md states them); fares and hotels are live, so it has none
+        prompt.md   a team offsite in 3 short paragraphs, as a person would ask: who and why, what to find, the deck
+        rubric.md   the judge's prompt: how to read the deck, the evidence files, 13 correct and 5 polish items
+        key.py      builds key.json: each city's November high from a pinned Wikipedia revision
+        key.json    the 3 November highs, which rubric.md states (±3°F passes); fares and hotels are live
       run.sh        one run: a clean Claude Code on claude-sonnet-5-5 with the task's prompt, record.py beside it
       record.py     the timelapse: the session's working tab, captured over DevTools, into frames/ and video.mp4
       grade.py      capex's checks against its key; `flights`, Google Flights' nonstops now, for trip's judge
@@ -31,9 +31,9 @@ answer key and graded in code; trip is written as a person would ask it, and an 
 
 - **A task** is a folder with `prompt.md`, which holds everything the agent is told. capex's holds rules (browserd's
   profile and the session label, only the named sources, "n/a" over another source, exactly the slides listed,
-  `tab_needs_input` on a login or captcha, nothing submitted or sent, stop at the end state), then the spec. trip's is
-  one request in plain words; its one browserd line ("Use browserd with my ...") is what `compare.py` swaps for the
-  other arms' and `judge.py` leaves out.
+  `tab_needs_input` on a login or captcha, nothing submitted or sent, stop at the end state), then the spec. trip's says
+  the outcome, not the steps or the links; its one browserd sentence ("Use browserd with my ...") is what `compare.py`
+  swaps for the other arms' and `judge.py` leaves out.
 - **A key** is `key.json`, written by the task's `key.py`, never by hand: the values a correct run ends with.
 - **A run** is `run.sh <task> <name>`: Claude Code, interactive so its turns can be filmed, started in the run's own
   folder, `<data>/<name>/` (`../browserd-long-tasks` beside the repo, or `$BROWSERD_LONG_TASKS_DATA`), with
@@ -50,7 +50,8 @@ answer key and graded in code; trip is written as a person would ask it, and an 
 - **trip's judge** is `judge.py <deck URL> <transcript> <folder> [--before F]`: a clean `claude -p` on claude-opus-5-5
   with browserd (profile personal), Read and Grep, given `rubric.md` with the request and the deck's URL. Its folder
   holds the evidence: `flights-before.json` (`grade.py flights` as the run began) and `flights-after.json` (now), from
-  `nonstops`, which reads each Google Flights result's aria-label; `seen.txt`, every tool result of the run. Its last
+  `nonstops`, which reads each Google Flights result's aria-label on the default results and on the Cheapest tab;
+  `seen.txt`, every tool result of the run. Its last
   message is a JSON verdict, saved as `verdict.json`; `score` counts the items each group passed, a missing item
   failing.
 - **A comparison** is `compare.py run <exp>`: per run, `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p` with
@@ -64,8 +65,8 @@ answer key and graded in code; trip is written as a person would ask it, and an 
 
 ## Agent Gotchas & Invariants (⚠️)
 
-- The sources are pinned so a key stays right: capex names each 10-K by its accession, trip each Wikipedia page by
-  its revision (`oldid`). Fares move by the minute, so no key can hold them. A new filing is a new task
+- The sources are pinned so a key stays right: capex names each 10-K by its accession, and trip's key.py reads each
+  Wikipedia page at a revision (`oldid`). Fares move by the minute, so no key can hold them. A new filing is a new task
   version: change `FILINGS` in `key.py` and the URLs in `prompt.md` together, then run `key.py` again.
 - `--safe-mode` would hide the user's setup too, but it also drops `--mcp-config`'s servers: a run would have no
   browserd. A fresh `CLAUDE_CONFIG_DIR` works but needs its own login.
@@ -82,10 +83,11 @@ answer key and graded in code; trip is written as a person would ask it, and an 
 - `grade.FLIGHTS_SEARCH` is Google Flights' own encoding of trip's search, copied from its address bar (dates, LAX, SEA,
   nonstop); another city swaps in for SEA. New dates in `prompt.md` need a new copy. Judge a run at once: fares move
   within minutes, and the before/after pair covers only a move during the run.
-- Trip asks for the normal results, not Google Flights' "Cheapest" tab, which lists the same flights lower through
-  third parties; `nonstops` reads the default tab.
+- Google Flights' "Cheapest" tab lists the same flights lower, through third parties; the prompt allows either, so
+  `nonstops` reads both, clicking the tab (`CHEAPEST_TAB`) in its background tab.
 - `rubric.md`'s item names are `judge.ITEMS`: change both together. The judge's request comes from `prompt.md`, so the
-  two stay in step; the Nov highs in `rubric.md` come from `key.json`.
+  two stay in step; the Nov highs in `rubric.md` come from `key.json`. The prompt names no weather source, so the
+  rubric takes any value within 3°F.
 - `seen.txt` is the run's tool results as they came, so a harness's own wording in them (Playwright's code lines,
   browserd's step reports) can tell the judge which arm it grades; only its folder and request are blind.
 - `compare.py` takes the deck's PDF before the judge opens it: the gallery shows the deck as the run left it.

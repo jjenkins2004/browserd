@@ -1,6 +1,7 @@
-"""Build key.json, the trip task's answer key: each city's November "Mean daily maximum °F" from the Wikipedia revision
-prompt.md pins, which rubric.md states for the judge. Fares and hotels are live, so the key has none: judge.py checks
-them against Google Flights as grade.py reads it and against the run's transcript.
+"""Build key.json, the trip task's answer key: each city's November "Mean daily maximum °F" from a pinned Wikipedia
+revision, which rubric.md states for the judge (the prompt names no source, so the judge allows 3°F). Fares and hotels
+are live, so the key has none: judge.py checks them against Google Flights as grade.py reads it and against the run's
+transcript.
 
     python3 experiments/long-tasks/trip/key.py
 """
@@ -11,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-CITIES = [  # city, airport, Wikipedia revision id, the one prompt.md links
+CITIES = [  # city, airport, Wikipedia revision id
     ("Seattle", "SEA", 1377723485),
     ("Denver", "DEN", 1377063237),
     ("Chicago", "ORD", 1377352940),

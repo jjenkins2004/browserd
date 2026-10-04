@@ -26,7 +26,7 @@ ITEMS = {  # trip/rubric.md's items, by group
     "correct": ["slides", "seattle_flights", "denver_flights", "chicago_flights", "seattle_hotel", "denver_hotel",
                 "chicago_hotel", "seattle_weather", "denver_weather", "chicago_weather", "comparison", "pick",
                 "recommendation"],
-    "polish": ["theme", "photos", "headers", "highlight", "layout", "consistent"],
+    "polish": ["photos", "headers", "highlight", "layout", "consistent"],
 }
 
 
@@ -61,8 +61,8 @@ def tool_results(transcript):
 
 
 def request():
-    """trip/prompt.md without its browserd line, which would say what made the deck."""
-    return re.sub(r"\nUse browserd[^\n]*\n", "", (HERE / "trip" / "prompt.md").read_text())
+    """trip/prompt.md without its browserd sentence, which would say what made the deck."""
+    return re.sub(r" ?Use browserd[^.]*\.", "", (HERE / "trip" / "prompt.md").read_text())
 
 
 def verdict_of(text):
