@@ -1,13 +1,14 @@
 """The trip task on each browser MCP server in turn, k times, each run a clean headless Claude Code on claude-sonnet-5-5,
 judged as it ends; or a summary and slide gallery of an experiment's runs.
 
-    python3 experiments/long-tasks/compare.py run <exp> [--arms browserd,playwright,devtools,agentbrowser] [--k 2] [--jobs 2]
+    python3 experiments/long-tasks/compare.py run <exp> [--arms browserd,playwright,devtools,agentbrowser] [--k 2] [--jobs 1]
     python3 experiments/long-tasks/compare.py report <exp>
 
 Each run is <data>/<exp>/<arm>-r<n>/: prompt.md, transcript.jsonl (stream-json), stderr.txt, flights-before.json, the
 recording (frames/, frames.tsv, video.mp4, record.log), deck.pdf, slides/ and result.json; its judge works in
-<data>/<exp>/judging/<random id>/. --jobs runs go at once. A run with a result.json is done, so running an experiment
-again runs only what is missing. report writes gallery.html and gallery-blind.html.
+<data>/<exp>/judging/<random id>/. Every arm drives the personal profile's Chrome, browserd's, so runs go one at a time
+unless --jobs says otherwise. A run with a result.json is done, so running an experiment again runs only what is
+missing. report writes gallery.html and gallery-blind.html.
 """
 import argparse
 import concurrent.futures
@@ -17,19 +18,18 @@ import os
 import random
 import re
 import secrets
-import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
-import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import grade  # noqa: E402
 import judge  # noqa: E402
+from browser import cdp  # noqa: E402
 from browser.state import State  # noqa: E402
 
 ROOT = HERE.parents[1]
@@ -37,15 +37,7 @@ DATA = Path(os.environ.get("BROWSERD_LONG_TASKS_DATA", ROOT.parent / "browserd-l
 MODEL = "claude-sonnet-5-5"
 PROFILE = "personal"
 TIMEOUT = 3600  # seconds a run may take before it is stopped
-CHROME = "/Applications/Google Chrome.app"
-# The other arms' Chromes take ports from here, one per run at once: clear of browserd's profile ports (9223 up) and
-# the bench's (9240 up).
-PORTS = range(9290, 9300)
 FREE_LEAST = 25  # percent of the Mac's memory that must be free before a run starts
-# Left out of the profile's copy: caches Chrome rebuilds, and the locks of the Chrome running on the original.
-SKIP = ["Singleton*", "Cache", "Code Cache", "GPUCache", "CacheStorage", "GraphiteDawnCache", "GPUPersistentCache",
-        "optimization_guide_model_store", "OnDeviceHeadSuggestModel", "component_crx_cache", "extensions_crx_cache",
-        "WasmTtsEngine"]
 ARMS = ["browserd", "playwright", "devtools", "agentbrowser"]
 # The other arms' sentence for prompt.md's browserd one: the same request, minus the server's name and profile.
 OTHER_BROWSER = "Use the browser, where I'm signed in to Google."
@@ -62,7 +54,7 @@ def prompt(arm):
 
 
 def servers(arm, run, port, session):
-    """The arm's MCP server, by the name its tools take; the others reach their own Chrome on port."""
+    """The arm's MCP server, by the name its tools take; the others reach the personal profile's Chrome on port."""
     if arm == "browserd":
         return {"browserd": {"type": "http", "url": "http://127.0.0.1:9230/mcp"}}
     cdp = "http://127.0.0.1:%d" % port
@@ -78,48 +70,6 @@ def servers(arm, run, port, session):
                               "env": {"AGENT_BROWSER_CONFIG": str(run / "agent-browser.json"), "AGENT_BROWSER_SESSION": session}}}
 
 
-def snapshot(out):
-    """The personal profile's Chrome folder, copied once per experiment, so every run of the other arms starts from the
-    same logins; it holds the account's cookies, so it is removed when the experiment ends."""
-    copy = out / "profile"
-    if not copy.exists():
-        folder = State(grade.STATE_FILE).profile(PROFILE).folder
-        subprocess.run(["rsync", "-a", *("--exclude=" + skip for skip in SKIP), folder + "/", str(copy) + "/"],
-                       check=True)
-    return copy
-
-
-def answering(port):
-    try:
-        urllib.request.urlopen("http://127.0.0.1:%d/json/version" % port, timeout=2).read()
-        return True
-    except OSError:
-        return False
-
-
-ports_taken = set()
-ports_lock = threading.Lock()
-
-
-def take_port():
-    with ports_lock:
-        port = next(port for port in PORTS if port not in ports_taken and not answering(port))
-        ports_taken.add(port)
-        return port
-
-
-def start_chrome(folder, port):
-    """Chrome on a clone of the profile copy, with browserd's own flags, off the user's focus (open -g)."""
-    subprocess.run(["/usr/bin/open", "-gna", CHROME, "--args", "--remote-debugging-port=%d" % port,
-                    "--user-data-dir=%s" % folder, "--profile-directory=Default", "--no-first-run",
-                    "--no-default-browser-check", "--allow-pre-commit-input", "about:blank"], check=True)
-    for _ in range(60):
-        if answering(port):
-            return
-        time.sleep(0.5)
-    raise SystemExit("the Chrome on %s did not answer on port %d" % (folder, port))
-
-
 def free_memory():
     """The percent of the Mac's memory free, as memory_pressure says."""
     said = subprocess.run(["memory_pressure"], capture_output=True, text=True).stdout
@@ -127,10 +77,11 @@ def free_memory():
     return int(found.group(1)) if found else 100
 
 
-def start_recorder(arm, run, port, chrome):
-    """record.py on the run: browserd's on the session its transcript opens, the others' on their Chrome's visible tab."""
+def start_recorder(arm, run, profile):
+    """record.py on the run: browserd's on the session its transcript opens, the others' on the Chrome's visible tab,
+    which after clean_start can only be the run's own."""
     follow = (["--transcript", str(run / "transcript.jsonl")] if arm == "browserd" else
-              ["--cdp", str(port), "--folder", str(chrome)])
+              ["--cdp", str(profile.port), "--folder", profile.folder])
     return subprocess.Popen([sys.executable, str(HERE / "record.py"), str(run), *follow],
                             stdout=(run / "record.log").open("w"), stderr=subprocess.STDOUT)
 
@@ -144,14 +95,31 @@ def stop_recorder(recorder):
         recorder.kill()
 
 
-def stop_chrome(folder):
-    pattern = "--user-data-dir=%s" % folder
-    for sig in ("-TERM", "-KILL"):
-        subprocess.run(["pkill", sig, "-f", "--", pattern])
-        for _ in range(20):
-            if subprocess.run(["pgrep", "-f", "--", pattern], capture_output=True).returncode != 0:
-                return
-            time.sleep(0.5)
+def page_targets(browser):
+    return {info["targetId"] for info in browser.call("Target.getTargets")["targetInfos"] if info["type"] == "page"}
+
+
+def others_tabs(state):
+    """The DevTools targets of tabs an open browserd session owns: someone else's work, which a run never closes."""
+    return {tab.target for tab in state.open_tabs(PROFILE) if tab.session and not state.session(tab.session).closed}
+
+
+def clear_tabs(state, browser, keep=()):
+    """Close every tab of the Chrome but keep's and those an open browserd session owns."""
+    for target in page_targets(browser) - others_tabs(state) - set(keep):
+        browser.call("Target.closeTarget", targetId=target)
+
+
+def clean_start(state, browser):
+    """Leave the Chrome holding one fresh tab, in a window of its own, so every run starts the same: the other servers
+    see every tab and start on one, so nothing a run could find is left from before. While an open browserd session
+    owns a tab, someone else is at work, and the run waits. Returns the fresh tab's target."""
+    while page_targets(browser) & others_tabs(state):
+        print("waiting: an open browserd session has a tab in the %s Chrome" % PROFILE, flush=True)
+        time.sleep(60)
+    fresh = browser.call("Target.createTarget", url="about:blank", newWindow=True)["targetId"]
+    clear_tabs(state, browser, keep=[fresh])
+    return fresh
 
 
 def stop_group(pgid):
@@ -223,30 +191,28 @@ def run_one(out, arm, rep, stopped):
     (run / "prompt.md").write_text(prompt(arm))
     before = grade.reference(PROFILE)
     (run / "flights-before.json").write_text(json.dumps(before) + "\n")
-    chrome, session, port = run / "chrome", "%s-%s-r%d" % (out.name, arm, rep), None
-    if arm != "browserd":
-        port = take_port()
-        subprocess.run(["cp", "-Rc", str(snapshot(out)), str(chrome)], check=True)  # an APFS clone: instant, no space
-        start_chrome(chrome, port)
-    print("%s r%d: started%s" % (arm, rep, " on port %d" % port if port else ""), flush=True)
-    recorder = start_recorder(arm, run, port, chrome)
+    state = State(grade.STATE_FILE)
+    profile, session = state.profile(PROFILE), "%s-%s-r%d" % (out.name, arm, rep)
+    browser = cdp.Browser(profile)
+    clean_start(state, browser)
+    print("%s r%d: started" % (arm, rep), flush=True)
+    recorder = start_recorder(arm, run, profile)
     started = time.time()
     try:
-        timed_out = claude(arm, run, servers(arm, run, port, session))
+        timed_out = claude(arm, run, servers(arm, run, profile.port, session))
     finally:
-        stop_recorder(recorder)  # before its Chrome goes
-        if arm == "agentbrowser":
+        stop_recorder(recorder)
+        if arm == "agentbrowser":  # it ends its daemon's hold on the Chrome, never the Chrome itself
             try:
                 subprocess.run(["agent-browser", "close"], capture_output=True, timeout=60,
                                env=dict(os.environ, AGENT_BROWSER_CONFIG=str(run / "agent-browser.json"),
                                         AGENT_BROWSER_SESSION=session))
             except subprocess.TimeoutExpired:
                 pass
-        if arm != "browserd":
-            stop_chrome(chrome)
-            shutil.rmtree(chrome, ignore_errors=True)  # it holds the account's cookies
-            with ports_lock:
-                ports_taken.discard(port)
+        if arm == "browserd":
+            judge.close_sessions(run / "transcript.jsonl")
+        clear_tabs(state, browser)  # what the run opened: nothing it leaves reaches the next run
+        browser.close()
     wall = round(time.time() - started)
     measured = measure(run)
     if not measured["tool_calls"]:
@@ -352,19 +318,15 @@ if __name__ == "__main__":
     parser.add_argument("exp")
     parser.add_argument("--arms", default=",".join(ARMS))
     parser.add_argument("--k", type=int, default=2)
-    parser.add_argument("--jobs", type=int, default=2, help="runs at once")
+    parser.add_argument("--jobs", type=int, default=1, help="runs at once; they share one Chrome, so 1 unless sure")
     args = parser.parse_args()
     out = DATA / args.exp
     if args.action == "run":
         arms = args.arms.split(",")
-        if set(arms) - {"browserd"}:
-            snapshot(out)  # once, before runs share it
         # Each rep runs the arms in the other order, so none always runs first or last.
         runs = [(arm, rep) for rep in range(1, args.k + 1) for arm in (arms if rep % 2 else arms[::-1])]
         stopped = threading.Event()
         with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
             for done in [pool.submit(run_one, out, arm, rep, stopped) for arm, rep in runs]:
                 done.result()
-        if not stopped.is_set():
-            shutil.rmtree(out / "profile", ignore_errors=True)
     report(out)

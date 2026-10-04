@@ -2,12 +2,13 @@
 
     python3 experiments/long-tasks/record.py "<session label, or "">" <out folder> [--profile personal] [--fps 1] [--speed 30]
     python3 experiments/long-tasks/record.py <out folder> --transcript <stream-json> [--profile personal] ...
-    python3 experiments/long-tasks/record.py <out folder> --cdp <port> --folder <user-data-dir> ...
+    python3 experiments/long-tasks/record.py <out folder> --cdp <port> --folder <user-data-dir> [--ignore <ids>] ...
     python3 experiments/long-tasks/record.py --encode <out folder> [--fps 1] [--speed 30]
 
 The first two follow a browserd session: the first one of that label (of any, given "") started after the recorder, or
 the one the transcript's session_start opened; each 1/fps seconds it captures the session's tab whose record folder
-changed last. --cdp follows any Chrome, browserd's or not: it captures its visible tab. Either way the capture goes
+changed last. --cdp follows any Chrome, browserd's or not: it captures its visible tab, leaving out the tabs --ignore
+names (the DevTools target ids of tabs open before the run). Either way the capture goes
 through the Chrome's DevTools port, whether the tab is in front or not, into <out>/frames/ with a line in
 <out>/frames.tsv (frame, Unix time, tab). SIGTERM or Ctrl-C stops it and writes <out>/video.mp4, playing at
 fps * speed frames a second; --encode writes it again from the frames, at a new speed.
@@ -79,17 +80,18 @@ class SessionTab:
 
 
 class VisibleTab:
-    """The Chrome's visible page, as (DevTools target, its URL); of several (one per window), the one whose URL changed
-    last."""
+    """The Chrome's visible page, as (DevTools target, its URL), of those not in ignore; of several (one per window),
+    the one whose URL changed last."""
 
-    def __init__(self):
+    def __init__(self, ignore=()):
+        self.ignore = set(ignore)
         self.urls, self.changed = {}, {}  # target: its URL, and when that last changed
 
     def __call__(self, browser, attached):
         visible = []
         for info in browser.call("Target.getTargets")["targetInfos"]:
             target = info["targetId"]
-            if info["type"] != "page" or info["url"].startswith(("chrome:", "devtools:")):
+            if info["type"] != "page" or info["url"].startswith(("chrome:", "devtools:")) or target in self.ignore:
                 continue
             if self.urls.get(target) != info["url"]:
                 self.urls[target], self.changed[target] = info["url"], time.time()
@@ -150,7 +152,7 @@ def follow(args, out):
                 time.sleep(1)
         if browser:
             print("recording the visible tab of the Chrome on port %d" % args.cdp, flush=True)
-            record(out, args.fps, browser, VisibleTab())
+            record(out, args.fps, browser, VisibleTab(filter(None, (args.ignore or "").split(","))))
         return
     state_file = os.path.join(paths.RUN, "state.db")
     if not os.path.exists(state_file):
@@ -193,6 +195,7 @@ if __name__ == "__main__":
     parser.add_argument("--transcript", help="follow the browserd session this stream-json transcript starts")
     parser.add_argument("--cdp", type=int, help="follow the visible tab of the Chrome on this DevTools port")
     parser.add_argument("--folder", help="with --cdp: that Chrome's --user-data-dir")
+    parser.add_argument("--ignore", help="with --cdp: comma-separated DevTools target ids of tabs never to capture")
     parser.add_argument("--fps", type=float, default=1.0, help="frames captured a second")
     parser.add_argument("--speed", type=float, default=30.0, help="how many times faster than life the video plays")
     parser.add_argument("--encode", action="store_true", help="only write the video again from the frames")

@@ -12,6 +12,8 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -22,6 +24,8 @@ MODEL = "claude-opus-5-5"
 PROFILE = "personal"
 TIMEOUT = 1800  # seconds the judge may take
 BROWSERD = {"browserd": {"type": "http", "url": "http://127.0.0.1:9230/mcp"}}
+PAGE = "http://127.0.0.1:9231"  # browserd's page, whose Close session close_sessions uses
+SESSION_STARTED = re.compile(r"session (\w{6}), on the ")  # session_start's reply
 ITEMS = {  # trip/rubric.md's items, by group
     "correct": ["slides", "seattle_flights", "denver_flights", "chicago_flights", "seattle_hotel", "denver_hotel",
                 "chicago_hotel", "seattle_weather", "denver_weather", "chicago_weather", "comparison", "pick",
@@ -58,6 +62,23 @@ def tool_results(transcript):
                                                                 if isinstance(part, dict)]
                 texts.append("\n".join(parts))
     return texts
+
+
+def close_sessions(transcript):
+    """Close each browserd session the transcript started, as the browserd page's Close session does, and only those:
+    other sessions are the user's."""
+    started = sorted(set(SESSION_STARTED.findall(Path(transcript).read_text(errors="replace"))))
+    if not started:
+        return
+    token = re.search(r'const TOKEN = "([^"]+)"', urllib.request.urlopen(PAGE + "/", timeout=10).read().decode()).group(1)
+    for session in started:
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                PAGE + "/close-session", data=json.dumps({"session": session}).encode(), method="POST",
+                headers={"Content-Type": "application/json", "Origin": PAGE, "X-Browserd-Token": token}), timeout=60).read()
+        except urllib.error.HTTPError as exc:
+            if "no open session" not in exc.read().decode(errors="replace"):
+                raise
 
 
 def request():
@@ -99,6 +120,7 @@ def judge(deck, transcript, folder, before):
                            timeout=TIMEOUT)
         except subprocess.TimeoutExpired:
             pass
+    close_sessions(folder / "judge.jsonl")
     result = next((e for e in events(folder / "judge.jsonl") if e.get("type") == "result"), {})
     verdict = verdict_of(result.get("result"))
     (folder / "verdict.json").write_text(json.dumps(verdict, indent=1) + "\n")
