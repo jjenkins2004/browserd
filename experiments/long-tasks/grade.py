@@ -1,15 +1,13 @@
-"""Grade a long task's run from the Google files it made, fetched through the profile's own logged-in Chrome.
+"""Grade capex from the Google files it made, and read Google Flights for trip, through the profile's own logged-in
+Chrome.
 
     python3 experiments/long-tasks/grade.py capex <deck URL> <sheet URL>
-    python3 experiments/long-tasks/grade.py trip <deck URL> <transcript> [--before <flights.json>]
     python3 experiments/long-tasks/grade.py flights <flights.json>
 
-Prints one line per check, "ok" or "BAD" with what was expected and found, then the score; exits 1 unless every check
-passed. The deck comes as its .pptx export and the Sheet as its .xlsx, each fetched from a background tab of its own on
-docs.google.com. Trip's fares have no key: the grader reads Google Flights itself, now and (from `flights`, saved before
-the run) then, and a city's 3 flights must be the 3 cheapest nonstops of one of the two. Its hotels must appear in the
-run's transcript (claude -p's stream-json, or a session's .jsonl) as Google Hotels listed them. What no export shows (a
-linked chart, the percent format) is left to the eye.
+capex prints one line per check, "ok" or "BAD" with what was expected and found, then the score, and exits 1 unless
+every check passed; the deck comes as its .pptx export and the Sheet as its .xlsx, each fetched from a background tab
+of its own on docs.google.com. What no export shows (a linked chart, the percent format) is left to the eye. flights
+saves Google Flights' nonstops for each trip city now, for judge.py, which grades trip.
 """
 import argparse
 import base64
@@ -54,9 +52,6 @@ FLIGHT_LABELS = "[...document.querySelectorAll('[aria-label^=\"From \"]')].map(e
 # Angeles International Airport at 3:24 PM on Friday, ... arrives at ... at 6:33 PM on Friday, ...".
 FLIGHT = re.compile(r"from ([\d,]+) us dollars round trip total\. nonstop flight with (.+?)\. .*?leaves los angeles "
                     r"international airport at (\d{1,2}:\d\d ?[ap]m) on .+? arrives at .+? at (\d{1,2}:\d\d ?[ap]m) on")
-FLIGHT_HEADER = ["airline", "departs", "arrives", "round trip"]
-GLANCE_HEADER = ["city", "cheapest fare", "hotel, 2 nights", "per person", "nov high"]
-TEAM = 6  # trip/prompt.md's team size
 
 
 class Report:
@@ -277,154 +272,6 @@ def grade_capex(report, profile, deck_url, sheet_url):
         report.check("slide 6 holds the chart", slides[5]["pictures"] >= 1, "a chart", "nothing")
 
 
-def tool_results(transcript):
-    """The text of each tool result in a Claude Code transcript (claude -p's stream-json, or a session's .jsonl),
-    through norm."""
-    texts = []
-    for line in Path(transcript).read_text(errors="replace").splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        content = (event.get("message") or {}).get("content") if event.get("type") == "user" else None
-        for item in content if isinstance(content, list) else []:
-            if isinstance(item, dict) and item.get("type") == "tool_result":
-                parts = item.get("content")
-                parts = [parts] if isinstance(parts, str) else [part.get("text", "") for part in parts or []
-                                                                if isinstance(part, dict)]
-                texts.append(norm(" ".join(parts)))
-    return texts
-
-
-def hotel_listed(results, name, nightly):
-    """Whether a tool result shows the hotel as Google Hotels lists one under trip's filters: its name, then within its
-    entry the nightly price, a guest rating of 4.0 or more, and "4-star"."""
-    price = re.compile(r"\$%s(?![\d,])" % re.escape("{:,}".format(nightly)))
-    for text in results:
-        for found in re.finditer(re.escape(norm(name)), text):
-            entry = text[found.end():found.end() + 200]
-            rating = re.search(r"(\d\.\d) out of 5", entry)
-            if price.search(entry) and rating and float(rating.group(1)) >= 4.0 and "4-star" in entry:
-                return True
-    return False
-
-
-def money(text):
-    """A "$1,234" cell's dollars, or None."""
-    found = re.fullmatch(r"\$([\d,]+)", norm(text))
-    return int(found.group(1).replace(",", "")) if found else None
-
-
-def dollars(value):
-    return "$" + "{:,}".format(value)
-
-
-def spaceless(text):
-    return re.sub(r"\s", "", text)
-
-
-def table(slide, rows, columns):
-    """The slide's first table's cells through norm, if it is rows by columns, else None."""
-    cells = [list(map(norm, row)) for row in (slide["tables"] or [[]])[0]]
-    return cells if len(cells) == rows and all(len(row) == columns for row in cells) else None
-
-
-def grade_city(report, n, slide, city, references, results):
-    """Check a city's slide (4 to 6), and return what it gives, {fare, airline, departs, hotel, nightly, high}, or None
-    when it holds too little to go on. references are Google Flights before and after the run."""
-    name = "%s (%s)" % (city["city"], city["airport"])
-    report.check("slide %d title" % n, norm(slide["title"]) == norm(name), name, slide["title"])
-    rows = table(slide, 4, 4)
-    if not report.check("slide %d holds a 4 by 4 table" % n, rows, "4 rows of 4", slide["tables"]):
-        return None
-    report.check("slide %d table header" % n, rows[0] == FLIGHT_HEADER, FLIGHT_HEADER, rows[0])
-    flights = [(airline, departs, arrives, money(price)) for airline, departs, arrives, price in rows[1:]]
-    prices = [flight[3] for flight in flights]
-    report.check("slide %d prices are whole dollars, cheapest first" % n, None not in prices and prices == sorted(prices),
-                 "rising $ prices", [row[3] for row in rows[1:]])
-
-    def listed(flight, nonstops):
-        airline, departs, arrives, price = flight
-        return any(price == p and airline and (airline in a or a in airline) and spaceless(departs) == spaceless(d) and
-                   spaceless(arrives) == spaceless(r) for p, a, d, r in nonstops)
-    on_page = [found for found in references if found and all(listed(f, found.get(city["airport"], [])) for f in flights)]
-    report.check("slide %d flights are nonstops Google Flights lists at those prices" % n, on_page,
-                 "each row on Google Flights before or after the run", flights)
-    cheapest = [[flight[0] for flight in found.get(city["airport"], [])[:3]] for found in references if found]
-    report.check("slide %d flights are the 3 cheapest" % n, None not in prices and sorted(prices) in cheapest, cheapest,
-                 prices)
-
-    lines = list(map(norm, slide["lines"])) + ["", ""]
-    hotel = re.fullmatch(r"hotel: (.+), \$([\d,]+) ?/ ?night", lines[0])
-    high = re.fullmatch(r"nov avg high ([\d.]+) ?°f", lines[1])
-    if not report.check("slide %d has its 2 lines" % n, hotel and high,
-                        "Hotel: <hotel>, $<nightly price>/night; Nov avg high <n>°F", slide["lines"]):
-        return None
-    nightly = int(hotel.group(2).replace(",", ""))
-    report.check("slide %d hotel is one Google Hotels listed at that price, 4-star, rated 4.0+" % n,
-                 hotel_listed(results, hotel.group(1), nightly), "in the run's tool results", (hotel.group(1), nightly))
-    report.check("slide %d Nov high" % n, high.group(1) == city["nov_high_f"], city["nov_high_f"], high.group(1))
-    if None in prices:
-        return None
-    return {"fare": prices[0], "airline": flights[0][0], "departs": flights[0][1], "hotel": hotel.group(1),
-            "nightly": nightly, "high": high.group(1)}
-
-
-def per_person(city):
-    return city["fare"] + 2 * city["nightly"]
-
-
-def grade_glance(report, slide, key, found):
-    """Check slide 3's table against the city slides' values."""
-    report.check("slide 3 title", norm(slide["title"]) == "options at a glance", "Options at a glance", slide["title"])
-    rows = table(slide, 4, 5)
-    if not report.check("slide 3 holds a 4 by 5 table", rows, "4 rows of 5", slide["tables"]):
-        return
-    report.check("slide 3 table header", rows[0] == GLANCE_HEADER, GLANCE_HEADER, rows[0])
-    for row, city in zip(rows[1:], key):
-        values = found.get(city["city"])
-        expected = values and [norm(city["city"]), dollars(values["fare"]), dollars(2 * values["nightly"]),
-                               dollars(per_person(values)), values["high"] + "°f"]
-        report.check("slide 3 row for %s matches its slide" % city["city"],
-                     expected and list(map(spaceless, row)) == list(map(spaceless, expected)), expected, row)
-
-
-def grade_pick(report, slide, found):
-    """Check slide 2 against the city slides' values: the lowest Per person, a tie to the higher Nov high."""
-    pick = min(found, key=lambda city: (per_person(found[city]), -float(found[city]["high"])))
-    values = found[pick]
-    title = "Recommendation: " + pick
-    report.check("slide 2 title", norm(slide["title"]) == norm(title), title, slide["title"])
-    expected = ["%s per person, %s for the team" % (dollars(per_person(values)), dollars(TEAM * per_person(values))),
-                "fly %s at %s, stay at %s" % (values["airline"], values["departs"], values["hotel"]),
-                "nov avg high %s°f" % values["high"]]
-    lines = list(map(norm, slide["lines"])) + [""] * 3
-    for n, line in enumerate(expected):
-        report.check("slide 2 line %d" % (n + 1), spaceless(lines[n]) == spaceless(line), line, lines[n])
-
-
-def grade_trip(report, profile, deck_url, transcript, before):
-    key = trip_key()
-    after = reference(profile)
-    print("Google Flights now: %s" % {airport: [f[0] for f in found[:3]] for airport, found in after.items()})
-    results = tool_results(transcript)
-    themes, slides = read_deck(fetch(profile, "https://docs.google.com/presentation/d/%s/export/pptx"
-                                     % file_id(deck_url, "presentation")))
-    check_slide_count(report, slides, 6)
-    check_opening(report, themes, slides, "Team offsite — Nov 13–15, 2026",
-                  "Seattle, Denver or Chicago, for 6 people from LAX")
-    found = {}  # city: what its slide gives
-    for n, city in enumerate(key, 4):
-        if len(slides) >= n:
-            values = grade_city(report, n, slides[n - 1], city, [before, after], results)
-            if values:
-                found[city["city"]] = values
-    if len(slides) >= 3:
-        grade_glance(report, slides[2], key, found)
-    if len(slides) >= 2 and len(found) == len(key):
-        grade_pick(report, slides[1], found)
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile", default="personal")
@@ -432,11 +279,7 @@ if __name__ == "__main__":
     capex = tasks.add_parser("capex")
     capex.add_argument("deck")
     capex.add_argument("sheet")
-    trip = tasks.add_parser("trip")
-    trip.add_argument("deck")
-    trip.add_argument("transcript")
-    trip.add_argument("--before", help="Google Flights before the run, as `flights` saved it")
-    flights = tasks.add_parser("flights", help="save Google Flights now, for a trip run's --before")
+    flights = tasks.add_parser("flights", help="save Google Flights' nonstops for each trip city now, for judge.py")
     flights.add_argument("out")
     args = parser.parse_args()
     if not os.path.exists(STATE_FILE):
@@ -445,10 +288,6 @@ if __name__ == "__main__":
         Path(args.out).write_text(json.dumps(reference(args.profile)) + "\n")
         sys.exit(0)
     report = Report()
-    if args.task == "capex":
-        grade_capex(report, args.profile, args.deck, args.sheet)
-    else:
-        grade_trip(report, args.profile, args.deck, args.transcript,
-                   json.loads(Path(args.before).read_text()) if args.before else {})
-    print("%s: %d of %d checks passed" % (args.task, report.passed, report.total))
+    grade_capex(report, args.profile, args.deck, args.sheet)
+    print("capex: %d of %d checks passed" % (report.passed, report.total))
     sys.exit(0 if report.passed == report.total else 1)

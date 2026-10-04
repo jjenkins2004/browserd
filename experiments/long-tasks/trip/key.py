@@ -1,6 +1,6 @@
 """Build key.json, the trip task's answer key: each city's November "Mean daily maximum °F" from the Wikipedia revision
-prompt.md pins. Fares and hotels are live, so the key has none; grade.py checks fares against Google Flights itself and
-hotels against the run's transcript.
+prompt.md pins, which rubric.md states for the judge. Fares and hotels are live, so the key has none: judge.py checks
+them against Google Flights as grade.py reads it and against the run's transcript.
 
     python3 experiments/long-tasks/trip/key.py
 """

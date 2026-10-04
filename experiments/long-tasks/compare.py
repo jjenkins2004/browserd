@@ -1,18 +1,20 @@
 """The trip task on each browser MCP server in turn, k times, each run a clean headless Claude Code on claude-sonnet-5-5,
-graded as it ends; or a summary of an experiment's runs.
+judged as it ends; or a summary and slide gallery of an experiment's runs.
 
     python3 experiments/long-tasks/compare.py run <exp> [--arms browserd,playwright,devtools,agentbrowser] [--k 2]
     python3 experiments/long-tasks/compare.py report <exp>
 
 Each run is <data>/<exp>/<arm>-r<n>/: prompt.md, transcript.jsonl (stream-json), stderr.txt, flights-before.json,
-grade.txt and result.json. A run with a result.json is done, so running an experiment again runs only what is missing.
+deck.pdf, slides/ and result.json; its judge works in <data>/<exp>/judging/<random id>/. A run with a result.json is
+done, so running an experiment again runs only what is missing. report writes gallery.html and gallery-blind.html.
 """
 import argparse
-import contextlib
-import io
+import html
 import json
 import os
+import random
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -24,13 +26,14 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import grade  # noqa: E402
+import judge  # noqa: E402
 from browser.state import State  # noqa: E402
 
 ROOT = HERE.parents[1]
 DATA = Path(os.environ.get("BROWSERD_LONG_TASKS_DATA", ROOT.parent / "browserd-long-tasks"))
 MODEL = "claude-sonnet-5-5"
 PROFILE = "personal"
-TIMEOUT = 3600  # seconds a run may take before it is stopped, ungraded
+TIMEOUT = 3600  # seconds a run may take before it is stopped
 CHROME = "/Applications/Google Chrome.app"
 PORT = 9290  # the other arms' Chrome: clear of browserd's profile ports (9223 up) and the bench's (9240 up)
 CDP = "http://127.0.0.1:%d" % PORT
@@ -46,19 +49,17 @@ ARMS = {  # arm: its MCP server, by the name its tools take
     # Its MCP server takes no flags for the browser: its config file's "cdp" gives the port.
     "agentbrowser": {"agent-browser": {"command": "agent-browser", "args": ["mcp"]}},
 }
-# The other arms' Browser paragraph, for browserd's in prompt.md: what each needs to be told, and no more.
-OTHER_BROWSER = ("Browser: use the browser tools you have. The browser is already signed in to Google. If a page asks "
-                 "for a login, a captcha, 2FA or a payment, stop and say so. When you are done, close the tabs you "
-                 "opened, except the deck's.")
+# The other arms' line for prompt.md's browserd line: the same request, minus the server's name and profile.
+OTHER_BROWSER = "Use the browser. It's already signed in to my Google account."
 
 
 def prompt(arm):
     text = (HERE / "trip" / "prompt.md").read_text()
     if arm == "browserd":
         return text
-    text, swapped = re.subn(r"^Browser: .*?(?=\n\n)", OTHER_BROWSER, text, flags=re.S | re.M)
+    text, swapped = re.subn(r"^Use browserd .*$", OTHER_BROWSER, text, flags=re.M)
     if swapped != 1:
-        raise SystemExit("trip/prompt.md has no Browser paragraph to swap")
+        raise SystemExit("trip/prompt.md has no browserd line to swap")
     return text
 
 
@@ -115,14 +116,6 @@ def stop_group(pgid):
         time.sleep(3)
 
 
-def env():
-    # The parent Claude Code's own variables would tie each run to it; a run that does not wait for its MCP server
-    # (npx takes seconds) begins with no browser tools.
-    clean = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "MCP_CONNECTION"))}
-    clean["MCP_CONNECTION_NONBLOCKING"] = "false"
-    return clean
-
-
 def claude(arm, run, servers):
     """One headless Claude Code, as run.sh's interactive one: no user settings, the arm's server its only tools. Returns
     whether it timed out."""
@@ -133,8 +126,8 @@ def claude(arm, run, servers):
     if arm == "browserd":
         cmd += ["--disallowedTools", "mcp__browserd__profile_new", "mcp__browserd__profile_delete"]
     with (run / "transcript.jsonl").open("w") as stdout, (run / "stderr.txt").open("w") as stderr:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=run, env=env(), text=True,
-                                start_new_session=True)
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=run, env=judge.env(),
+                                text=True, start_new_session=True)
         try:
             proc.communicate((run / "prompt.md").read_text(), timeout=TIMEOUT)
             return False
@@ -145,19 +138,11 @@ def claude(arm, run, servers):
             proc.wait()
 
 
-def events(run):
-    for line in (run / "transcript.jsonl").read_text(errors="replace").splitlines():
-        try:
-            yield json.loads(line)
-        except ValueError:
-            continue
-
-
 def measure(run):
     """What the transcript says of the run: its result event's numbers, its tool calls and failed tool calls."""
     calls = errors = 0
     result = {}
-    for event in events(run):
+    for event in judge.events(run / "transcript.jsonl"):
         content = (event.get("message") or {}).get("content")
         for item in content if isinstance(content, list) else []:
             if isinstance(item, dict):
@@ -172,23 +157,12 @@ def measure(run):
             "final": result.get("result") or ""}
 
 
-def score(run, out, deck):
-    """Grade the run's deck into grade.txt: (checks passed, checks), or a note why it could not be."""
-    if not deck:
-        return None, "no deck URL in the final message"
-    used = [json.loads(path.read_text()).get("deck") for path in out.glob("*/result.json")]
-    if grade.file_id(deck, "presentation") in [grade.file_id(url, "presentation") for url in used if url]:
-        return None, "an earlier run's deck"
-    report, printed = grade.Report(), io.StringIO()
-    before = json.loads((run / "flights-before.json").read_text())
-    try:
-        with contextlib.redirect_stdout(printed):
-            grade.grade_trip(report, PROFILE, deck, run / "transcript.jsonl", before)
-    except (Exception, SystemExit) as exc:  # a deck that cannot be fetched or read
-        printed.write("grading stopped: %s\n" % exc)
-    printed.write("trip: %d of %d checks passed\n" % (report.passed, report.total))
-    (run / "grade.txt").write_text(printed.getvalue())
-    return (report.passed, report.total), None
+def pictures(run, deck):
+    """The deck as it ended, deck.pdf and slides/slide-<n>.png, for the gallery; taken before the judge opens it."""
+    pdf = grade.fetch(PROFILE, "https://docs.google.com/presentation/d/%s/export/pdf" % grade.file_id(deck, "presentation"))
+    (run / "deck.pdf").write_bytes(pdf)
+    (run / "slides").mkdir(exist_ok=True)
+    subprocess.run(["pdftoppm", "-png", "-r", "60", str(run / "deck.pdf"), str(run / "slides" / "slide")], check=True)
 
 
 def run_one(out, arm, rep):
@@ -197,28 +171,31 @@ def run_one(out, arm, rep):
         return
     run.mkdir(parents=True, exist_ok=True)
     (run / "prompt.md").write_text(prompt(arm))
-    (run / "flights-before.json").write_text(json.dumps(grade.reference(PROFILE)) + "\n")
+    before = grade.reference(PROFILE)
+    (run / "flights-before.json").write_text(json.dumps(before) + "\n")
     servers, chrome, session = ARMS[arm], run / "chrome", "%s-%s-r%d" % (out.name, arm, rep)
     if arm != "browserd":
         subprocess.run(["cp", "-Rc", str(snapshot(out)), str(chrome)], check=True)  # an APFS clone: instant, no space
         start_chrome(chrome)
     if arm == "agentbrowser":
-        config = run / "agent-browser.json"
-        config.write_text(json.dumps({"cdp": str(PORT)}))
-        servers = {name: dict(server, env={"AGENT_BROWSER_CONFIG": str(config), "AGENT_BROWSER_SESSION": session})
-                   for name, server in servers.items()}
+        (run / "agent-browser.json").write_text(json.dumps({"cdp": str(PORT)}))
+        servers = {name: dict(server, env={"AGENT_BROWSER_CONFIG": str(run / "agent-browser.json"),
+                                           "AGENT_BROWSER_SESSION": session}) for name, server in servers.items()}
     started = time.time()
     try:
         timed_out = claude(arm, run, servers)
     finally:
         if arm == "agentbrowser":
-            with contextlib.suppress(subprocess.TimeoutExpired):
+            try:
                 subprocess.run(["agent-browser", "close"], capture_output=True, timeout=60,
                                env=dict(os.environ, AGENT_BROWSER_CONFIG=str(run / "agent-browser.json"),
                                         AGENT_BROWSER_SESSION=session))
+            except subprocess.TimeoutExpired:
+                pass
         if arm != "browserd":
             stop_chrome(chrome)
             shutil.rmtree(chrome, ignore_errors=True)  # it holds the account's cookies
+    wall = round(time.time() - started)
     measured = measure(run)
     if not measured["tool_calls"]:
         # Kept aside, never overwritten: the run again, on resuming, gets a fresh folder.
@@ -227,32 +204,91 @@ def run_one(out, arm, rep):
         raise SystemExit("%s r%d made no tool call (logged out? a server down?): see %s; the batch stops" % (arm, rep, aside))
     found = re.search(r"https://docs\.google\.com/presentation/d/[\w-]+", measured.pop("final"))
     deck = found.group(0) if found else None
-    checks, note = score(run, out, deck)
-    result = dict(arm=arm, rep=rep, wall=round(time.time() - started), timed_out=timed_out, deck=deck, note=note,
-                  passed=bool(checks and checks[0] == checks[1]), checks=checks, **measured)
+    earlier = [json.loads(path.read_text()).get("deck") for path in out.glob("*/result.json")]
+    note, scores, verdict, judged, judge_cost = None, None, None, None, None
+    if not deck:
+        note = "no deck URL in the final message"
+    elif grade.file_id(deck, "presentation") in [grade.file_id(url, "presentation") for url in earlier if url]:
+        note = "an earlier run's deck"
+    else:
+        try:
+            pictures(run, deck)
+        except (Exception, SystemExit) as exc:  # a deck that cannot be exported still gets judged
+            note = "no pictures: %s" % exc
+        judged = out / "judging" / secrets.token_hex(4)  # a name that says nothing of the arm
+        verdict, judge_cost = judge.judge(deck, run / "transcript.jsonl", judged, before)
+        if verdict is None:
+            note = "the judge gave no verdict"
+        else:
+            scores = judge.score(verdict)
+    result = dict(arm=arm, rep=rep, wall=wall, timed_out=timed_out, deck=deck, note=note, judged=judged and judged.name,
+                  correct=scores and scores["correct"], polish=scores and scores["polish"], looks=scores and scores["looks"],
+                  passed=bool(scores and scores["correct"][0] == scores["correct"][1]), judge_cost=judge_cost,
+                  summary=verdict and verdict.get("summary"), **measured)
     (run / "result.json").write_text(json.dumps(result, indent=1) + "\n")
-    print("%s r%d: %s in %ds, $%s, %s" % (arm, rep, "%d/%d checks" % checks if checks else note, result["wall"],
-                                          result["cost"], "TIMED OUT" if timed_out else "done"), flush=True)
+    print("%s r%d: %s in %ds, $%s%s" % (arm, rep, "correct %d/%d, polish %d/%d, looks %s" % (
+        *scores["correct"], *scores["polish"], scores["looks"]) if scores else note, wall, result["cost"],
+        ", TIMED OUT" if timed_out else ""), flush=True)
+
+
+def fraction(pair):
+    return "%d/%d" % tuple(pair) if pair else "-"
+
+
+def gallery(out, results, blind):
+    """gallery.html (or gallery-blind.html: rows shuffled and lettered, the key in gallery-key.json): each run's slides
+    side by side, with its judged scores."""
+    rows = list(results)
+    labels = ["%s r%d" % (r["arm"], r["rep"]) for r in rows]
+    if blind:
+        random.shuffle(rows)
+        labels = ["Deck %s" % chr(65 + n) for n in range(len(rows))]
+        (out / "gallery-key.json").write_text(json.dumps({label: "%s r%d" % (r["arm"], r["rep"])
+                                                          for label, r in zip(labels, rows)}, indent=1) + "\n")
+    body = []
+    for label, r in zip(labels, rows):
+        slides = sorted((out / ("%s-r%d" % (r["arm"], r["rep"])) / "slides").glob("*.png"))
+        images = "".join('<a href="%s"><img src="%s" alt="slide %d"></a>' % (
+            html.escape(str(s.relative_to(out))), html.escape(str(s.relative_to(out))), n)
+            for n, s in enumerate(slides, 1)) or "<p>no slides</p>"
+        body.append('<section><h2>%s</h2><p>correct %s · polish %s · looks %s%s</p><div class="slides">%s</div></section>'
+                    % (html.escape(label), fraction(r["correct"]), fraction(r["polish"]), r["looks"] or "-",
+                       "" if blind else " · " + html.escape(r["note"] or r["summary"] or ""), images))
+    page = """<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>%s</title>
+<style>body{font:14px system-ui,sans-serif;margin:16px;background:#fff;color:#222}section{margin:0 0 28px}
+h2{font-size:16px;margin:0 0 4px}p{margin:0 0 8px;color:#555}.slides{display:flex;gap:8px;overflow-x:auto}
+img{height:150px;border:1px solid #ccc}</style>
+<h1>%s</h1>%s""" % (html.escape(out.name), html.escape(out.name + (" (blind)" if blind else "")), "\n".join(body))
+    (out / ("gallery-blind.html" if blind else "gallery.html")).write_text(page)
 
 
 def report(out):
-    results = [json.loads(path.read_text()) for path in sorted(out.glob("*/result.json"))]
-    print("%-14s %-4s %-8s %-7s %-6s %-6s %-6s %-6s %s" % ("arm", "rep", "checks", "passed", "min", "cost", "turns",
-                                                          "calls", "errors"))
+    results = [json.loads(path.read_text()) for path in sorted(out.glob("*-r*/result.json"))]
+    print("%-14s %-4s %-8s %-7s %-6s %-7s %-6s %-6s %-6s %-6s %s" % (
+        "arm", "rep", "correct", "polish", "looks", "passed", "min", "cost", "turns", "calls", "errors"))
     for r in results:
-        checks = "%d/%d" % tuple(r["checks"]) if r["checks"] else "-"
-        print("%-14s %-4d %-8s %-7s %-6.1f %-6.2f %-6s %-6d %d%s" % (
-            r["arm"], r["rep"], checks, r["passed"], r["wall"] / 60, r["cost"] or 0, r["turns"], r["tool_calls"],
-            r["tool_errors"], "  " + r["note"] if r["note"] else ""))
+        print("%-14s %-4d %-8s %-7s %-6s %-7s %-6.1f %-6.2f %-6s %-6d %d%s" % (
+            r["arm"], r["rep"], fraction(r["correct"]), fraction(r["polish"]), r["looks"] or "-", r["passed"],
+            r["wall"] / 60, r["cost"] or 0, r["turns"], r["tool_calls"], r["tool_errors"],
+            "  " + r["note"] if r["note"] else ""))
     print()
     for arm in dict.fromkeys(r["arm"] for r in results):
         mine = [r for r in results if r["arm"] == arm]
-        share = [r["checks"][0] / r["checks"][1] for r in mine if r["checks"]]
-        print("%-14s passed %d of %d, checks %3.0f%%, %.1f min, $%.2f, %.0f turns, %.0f calls, %d errors a run" % (
-            arm, sum(r["passed"] for r in mine), len(mine), 100 * sum(share) / len(mine),
-            sum(r["wall"] for r in mine) / 60 / len(mine), sum(r["cost"] or 0 for r in mine) / len(mine),
-            sum(r["turns"] or 0 for r in mine) / len(mine), sum(r["tool_calls"] for r in mine) / len(mine),
-            sum(r["tool_errors"] for r in mine) / len(mine)))
+
+        def mean(values):
+            return sum(values) / len(mine)  # a run with no score counts as 0
+        print("%-14s passed %d of %d, correct %3.0f%%, polish %3.0f%%, looks %.1f, %.1f min, $%.2f, %.0f calls, "
+              "%.1f errors a run" % (
+                  arm, sum(r["passed"] for r in mine), len(mine),
+                  100 * mean([r["correct"][0] / r["correct"][1] for r in mine if r["correct"]]),
+                  100 * mean([r["polish"][0] / r["polish"][1] for r in mine if r["polish"]]),
+                  mean([r["looks"] or 0 for r in mine]), mean([r["wall"] / 60 for r in mine]),
+                  mean([r["cost"] or 0 for r in mine]), mean([r["tool_calls"] for r in mine]),
+                  mean([r["tool_errors"] for r in mine])))
+    gallery(out, results, blind=False)
+    gallery(out, results, blind=True)
+    print("\n%s\n%s" % (out / "gallery.html", out / "gallery-blind.html"))
 
 
 if __name__ == "__main__":
@@ -263,13 +299,11 @@ if __name__ == "__main__":
     parser.add_argument("--k", type=int, default=2)
     args = parser.parse_args()
     out = DATA / args.exp
-    if args.action == "report":
-        report(out)
-        sys.exit(0)
-    arms = args.arms.split(",")
-    for rep in range(1, args.k + 1):
-        # Each rep runs the arms in the other order, so none always runs first or last.
-        for arm in arms if rep % 2 else arms[::-1]:
-            run_one(out, arm, rep)
-    shutil.rmtree(out / "profile", ignore_errors=True)
+    if args.action == "run":
+        arms = args.arms.split(",")
+        for rep in range(1, args.k + 1):
+            # Each rep runs the arms in the other order, so none always runs first or last.
+            for arm in arms if rep % 2 else arms[::-1]:
+                run_one(out, arm, rep)
+        shutil.rmtree(out / "profile", ignore_errors=True)
     report(out)

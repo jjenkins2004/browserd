@@ -1,9 +1,9 @@
 """Record the tab a browserd session is working in as a timelapse, for a demo video cut beside the terminal.
 
-    python3 experiments/long-tasks/record.py "<session label>" <out folder> [--profile personal] [--fps 1] [--speed 30]
+    python3 experiments/long-tasks/record.py "<session label, or "">" <out folder> [--profile personal] [--fps 1] [--speed 30]
     python3 experiments/long-tasks/record.py --encode <out folder> [--fps 1] [--speed 30]
 
-It waits for the newest session of that label started after it, then each 1/fps seconds captures the tab whose record
+It waits for the first session of that label (of any, given "") started after it, then each 1/fps seconds captures the tab whose record
 folder changed last, through the profile's Chrome DevTools port, whether that tab is in front or not, into
 <out>/frames/ with a line in <out>/frames.tsv (frame, Unix time, tab). SIGTERM or Ctrl-C stops it and writes
 <out>/video.mp4, playing at fps * speed frames a second; --encode writes it again from the frames, at a new speed.
@@ -33,12 +33,13 @@ def stop(*_):
 
 
 def find_session(state, profile, label, since):
-    """The newest open session of that profile and label started at or after since, waiting until there is one."""
+    """The first open session of that profile and label (any label, given "") started at or after since, waiting until
+    there is one."""
     while not stopping:
-        found = [s for s in state.open_sessions()
-                 if s.profile.lower() == profile.lower() and s.label.lower() == label.lower() and s.started >= since]
+        found = [s for s in state.open_sessions() if s.profile.lower() == profile.lower() and s.started >= since and
+                 (not label or s.label.lower() == label.lower())]
         if found:
-            return found[-1]
+            return found[0]
         time.sleep(1)
 
 
@@ -54,7 +55,7 @@ def record(label, out, profile, fps):
         raise SystemExit("no browserd records at %s: set BROWSERD_HOME to the running server's" % paths.RUN)
     state = State(state_file)
     since = time.time()
-    print("waiting for a %s session labelled %r" % (profile, label), flush=True)
+    print("waiting for a %s session labelled %r" % (profile, label or "anything"), flush=True)
     session = find_session(state, profile, label, since)
     if not session:
         return
@@ -121,8 +122,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     out = Path(args.out).resolve()
     if not args.encode:
-        if not args.label:
-            parser.error("give the session's label, or --encode")
+        if args.label is None:
+            parser.error("give the session's label (\"\" for any), or --encode")
         signal.signal(signal.SIGTERM, stop)
         try:
             record(args.label, out, args.profile, args.fps)

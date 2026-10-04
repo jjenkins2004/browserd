@@ -7,9 +7,10 @@
 #     experiments/long-tasks/run.sh capex|trip <name>
 #
 # The run's folder, <data>/<name>/, is where Claude Code runs, and holds the recording (frames/, frames.tsv, video.mp4)
-# and record.log, and for trip flights-before.json, Google Flights as the run starts, for grade.py's --before. <data> is
+# and record.log, and for trip flights-before.json, Google Flights as the run starts, for judge.py's --before. <data> is
 # ../browserd-long-tasks beside the repo, or $BROWSERD_LONG_TASKS_DATA. The last line names the session's transcript,
-# which grade.py trip reads.
+# which judge.py reads. A prompt without a "with the label" line (trip's) has record.py follow the profile's first new
+# session, whatever its label.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 task=$1
