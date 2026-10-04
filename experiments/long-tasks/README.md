@@ -6,6 +6,7 @@ Long, bounded browser tasks for a demo of browserd: a real agent doing an hour-s
 logged-in Chrome (the `personal` profile), ending in Google files, with the tab it works in recorded as a timelapse.
 Each task names its entities, its sources (pinned where they can be), its fields and the exact files and slides it ends
 in, so a longer run means the harness struggled, not that the model chose to dig deeper. Each task has an answer key wherever the sources hold still.
+`compare.py` runs trip on browserd and on other browser MCP servers, each given the same logged-in Chrome, to compare them.
 
 ## Directory Layout
 
@@ -15,18 +16,20 @@ in, so a longer run means the harness struggled, not that the model chose to dig
         key.py      builds key.json from EDGAR's XBRL facts, each checked against the filing's text
         key.json    the 24 values in $ millions, each company's growth, slide title and lines
       trip/
-        prompt.md   the task: 3 cities' nonstop fares on Google Flights and November highs, then a 6-slide deck
+        prompt.md   a team offsite: 3 cities' 3 cheapest nonstops, a hotel and November highs, then a 6-slide deck
         key.py      builds key.json: each city's November high from the pinned Wikipedia revision
-        key.json    the 3 November highs; fares are live, so it has none
+        key.json    the 3 November highs; fares and hotels are live, so it has none
       run.sh        one run: a clean Claude Code on claude-sonnet-5-5 with the task's prompt, record.py beside it
       record.py     the timelapse: the session's working tab, captured over DevTools, into frames/ and video.mp4
-      grade.py      checks a run's deck (and capex's Sheet) against the key, and trip's fares against its records
+      grade.py      checks a run's deck (and capex's Sheet) against the key; trip's fares against Google Flights
+      compare.py    trip on each arm (browserd, playwright, devtools, agentbrowser) k times, headless, each graded
 
 ## Core Abstractions & Shared Pieces
 
 - **A task** is a folder with `prompt.md`, which holds everything the agent is told: the shared rules (browserd's
   profile and the session label, only the named sources, "n/a" over another source, exactly the slides listed,
   `tab_needs_input` on a login or captcha, nothing submitted or sent, stop at the end state), then the task itself.
+  Trip's browserd rules are one paragraph, "Browser: ...", which `compare.py` swaps for the other arms' own.
 - **A key** is `key.json`, written by the task's `key.py`, never by hand: the values a correct run ends with.
 - **A run** is `run.sh <task> <name>`: Claude Code, interactive so its turns can be filmed, started in the run's own
   folder, `<data>/<name>/` (`../browserd-long-tasks` beside the repo, or `$BROWSERD_LONG_TASKS_DATA`), with
@@ -36,12 +39,19 @@ in, so a longer run means the harness struggled, not that the model chose to dig
 - **The working tab** is the one whose record folder (`.run/calls/<profile>/<session>-<label>/<tab>/`) changed last:
   each queue writes there. `record.py` finds the session by its label in `state.db`, maps the tab to its DevTools target
   (`tabs.target`) and captures it on a connection of its own, so browserd never knows and the tab need not be in front.
-- **A grade** is `grade.py capex <deck URL> <sheet URL>` or `grade.py trip <deck URL> [--session ID]`: the deck's
+- **A grade** is `grade.py capex <deck URL> <sheet URL>` or `grade.py trip <deck URL> <transcript> [--before F]`: the deck's
   `.pptx` export and the Sheet's `.xlsx`, fetched with the profile's cookies from a background tab of its own on
   docs.google.com (closed after), read with `zipfile` and ElementTree, then one ok/BAD line per check and a score.
-  Text is compared through `norm` (compatibility forms, dashes, quotes, spacing, case). Trip's fares, times and airlines
-  must appear in the text records of the run's session, the newest labelled "weekend trip" unless `--session` names
-  one.
+  Text is compared through `norm` (compatibility forms, dashes, quotes, spacing, case). Trip has no key for what is
+  live: the grader reads Google Flights itself (`nonstops`, each result's aria-label), now and from `--before` (what
+  `grade.py flights` saved as the run began), and each city's 3 flights must be the 3 cheapest nonstops of either; each
+  hotel must appear in the run's transcript (stream-json or a session's `.jsonl`) with its price, 4-star and 4.0+;
+  slides 2 and 3 must agree with the city slides and their sums.
+- **A comparison** is `compare.py run <exp>`: per run, `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p` with
+  run.sh's flags, the arm's server alone, `TIMEOUT` (1 hour), graded at once into `grade.txt` and `result.json`;
+  `compare.py report <exp>` sums them. browserd runs on the main server's `personal` profile; every other arm attaches
+  over DevTools (`PORT`, 9290) to a Chrome started with browserd's flags on an APFS clone of a copy of that profile's
+  folder, made once per experiment, so all arms start signed in to the same account.
 
 ## Agent Gotchas & Invariants (⚠️)
 
@@ -60,3 +70,13 @@ in, so a longer run means the harness struggled, not that the model chose to dig
   the first proof.
 - Keep the profile's Chrome window open, even behind others: a minimized window may stop drawing frames (untested).
 - SEC refuses a User-Agent without a contact address: `key.py` sends a placeholder one, `SEC_USER_AGENT` a real one.
+- `grade.FLIGHTS_SEARCH` is Google Flights' own encoding of trip's search, copied from its address bar (dates, LAX, SEA,
+  nonstop); another city swaps in for SEA. New dates in `prompt.md` need a new copy. Grade a run at once: fares move
+  within minutes, and the before/after pair covers only a move during the run.
+- Trip says to stay on Google Flights' default "Best" tab: its "Cheapest" tab lists the same flights lower, through
+  third parties, and the grader reads the default tab.
+- The profile copy and each run's clone hold the account's cookies: `compare.py` removes a clone after its run and
+  the copy when the experiment ends. They live in the data folder, never the repo.
+- Every run shares the account's Drive and Google Flights' recent searches. A run that reports a deck an earlier run
+  made is not graded ("an earlier run's deck").
+- Run `compare.py run` detached (`nohup`): a batch started under a Claude Code session dies with its window.
