@@ -10,9 +10,10 @@ import time
 from browser import system
 from browser.chrome import cdp, focus
 from browser.tabs import sessions
+from browser.chrome.chromes import PLACEHOLDER
 from browser.chrome.profiles import Profile
 from browser.records.state import Tab
-from browser.tabs.tabs import LETTERS, PLACEHOLDER, Tabs
+from browser.tabs.tabs import LETTERS, Tabs
 from browser.tabs.worker import Worker, Workers
 from browser.tools import tab_tools
 from harness import (FakeChrome, FakeConnection, STAND_IN, call, check, open_session, refusal, rpc, serving,

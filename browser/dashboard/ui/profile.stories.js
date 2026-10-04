@@ -8,7 +8,7 @@ stories("Profile", "A profile's panel, under its tab: its Chrome, Open Chrome, Q
   "profile, then its sessions, the idle ones folded, and the tabs opened by hand. Each of those has its own states; " +
   "these are the panel as a whole.", {
   "Chrome off, nothing open": {
-    about: "A profile at rest: Open Chrome starts its Chrome, in a blank window, and there is nothing to quit. Delete " +
+    about: "A profile at rest: Open Chrome starts its Chrome, in a window on browserd's placeholder tab, and there is nothing to quit. Delete " +
       "profile asks first, then removes it, keeping its folder if its Chrome ever ran.",
     render: () => drawnProfile(sampleProfile({pid: null})),
   },

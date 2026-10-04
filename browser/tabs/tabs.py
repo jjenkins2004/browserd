@@ -7,10 +7,10 @@ import random
 import sqlite3
 import threading
 import time
-import urllib.parse
 
 from .. import system
 from ..chrome import cdp, focus
+from ..chrome.chromes import PLACEHOLDER
 from ..records.state import Tab
 from ..protocol.ws import WebSocketError
 
@@ -18,10 +18,6 @@ LETTERS = "abcdefghjkmnpqrstuvwxyz23456789"
 LOAD_WAIT = 10.0
 NOT_AN_ID = "%r is not a tab id (four characters, like k3f9); tab_open and tab_list give tab ids"
 NOT_YOURS = "no tab of this session has the id %r; tab_list gives this session's tabs"
-# A data: page, so nothing need serve it; README.md, "Agent Gotchas & Invariants", says why it is opened.
-PLACEHOLDER = "data:text/html," + urllib.parse.quote(
-    "<title>browserd placeholder</title>browserd opened this tab so the tabs it opens go into this window, not a new "
-    "one. Closing it is safe: browserd opens another when it needs one.")
 
 
 def is_id(tab):

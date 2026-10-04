@@ -7,6 +7,7 @@ README.md, "Core Abstractions & Shared Pieces", has the contract.
 import os
 import threading
 import time
+import urllib.parse
 
 from .. import system
 from ..config import paths
@@ -16,6 +17,11 @@ from ..protocol.ws import WebSocketError
 
 QUIT_WAIT = 15.0  # seconds quit_chrome waits for a Chrome to exit after Browser.close
 LOOK_AGAIN = 5.0  # seconds before downloads asks again whether a Chrome with no Folder runs
+# A data: page, so nothing need serve it, and no tab listing includes it; window opens it, and tabs.Tabs.open before
+# its tab; README.md, "Agent Gotchas & Invariants", says why.
+PLACEHOLDER = "data:text/html," + urllib.parse.quote(
+    "<title>browserd placeholder</title>browserd opened this tab so the tabs it opens go into this window, not a new "
+    "one. Closing it is safe: browserd opens another when it needs one.")
 
 
 def quit_chrome(profile):
@@ -132,8 +138,8 @@ class Chromes:
         return self.downloads(profile)
 
     def window(self, profile):
-        """Bring a profile's Chrome to the front, starting it if it is down and opening a blank window when it
-        has no page open.
+        """Bring a profile's Chrome to the front, starting it if it is down and opening a window on the placeholder
+        when it has no page open.
 
         Args:
             profile (Profile): whose Chrome.
@@ -144,7 +150,7 @@ class Chromes:
             targets = browser.call("Target.getTargets")["targetInfos"]
             page = next((target for target in targets if target.get("type") == "page"), None)
             if page is None:
-                browser.call("Target.createTarget", url="about:blank", newWindow=True)
+                browser.call("Target.createTarget", url=PLACEHOLDER, newWindow=True)
             else:
                 # Bringing Chrome to the front leaves a minimized window minimized.
                 window = browser.call("Browser.getWindowForTarget", targetId=page["targetId"])

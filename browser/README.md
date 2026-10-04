@@ -134,7 +134,7 @@ there, and a Folder that has not taken by then keeps trying, logged once. `adopt
 waits for them together; `downloads(profile)` starts one, not waited on, for a Chrome that runs without one, and
 gives a running one's Folder to each tab's `Worker`. `adopt` does the same for every profile's
 Chrome already running as the server starts, `window` is the page's Open Chrome (it brings a running Chrome to the
-front, restoring a minimized window, and opens a blank window only when it has no page open), `quit` (the page's Quit Chrome, and `profiles.delete`) quits one once any start of it under way has
+front, restoring a minimized window, and opens a window on `PLACEHOLDER` only when it has no page open), `quit` (the page's Quit Chrome, and `profiles.delete`) quits one once any start of it under way has
 finished, raising a `CdpError` when it is still running after, and `quit_all` quits every running one that way when the
 server stops, logging that error rather than raising it; no Chrome starts after it.
 
@@ -335,7 +335,7 @@ same tabs under the same ids. A crash leaves the same.
   without the tab's page, so a new chrome-devtools-mcp lists no page for the tab and its queues cannot pair it
   (measured in two runs: 6 and 8 of 25 tabs opened in new windows, each failing for over 60s with a new process per
   queue). So `Tabs.open`, in a Chrome with no page of its Chrome profile open,
-  first opens `tabs.PLACEHOLDER`, a `data:` page that no listing includes and so gets no tab id; the new window's
+  first opens `chromes.PLACEHOLDER`, as the page's Open Chrome does in a Chrome with no page open, a `data:` page that no listing includes and so gets no tab id; the new window's
   prerender goes to the placeholder, and the tab goes into that window beside it (measured: 0 of 25 failed, each opened
   in a Chrome with no window open). A lock per profile, in `Tabs._placing`, covers looking for a page and opening the
   placeholder, so two opens at once make one placeholder. The placeholder stays open until its Chrome quits or it is
