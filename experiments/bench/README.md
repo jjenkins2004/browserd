@@ -52,6 +52,7 @@ have not been run in full.
       haystack.py     suite haystack: one fact on a 40- or 80-section page
       ffserver.py     FormFactory's Flask app on 5055, each submission saved under its run
       mwserver.py     MiniWoB++'s pages on 4390, each reward saved under its run
+      allow.py        the claudechrome arm's --permission-prompt-tool: allows every permission prompt
       clickserver.py  the clicks page on 4395
       hayserver.py    the haystack pages on 4396
       assets/         sample.pdf, which setup.sh copies to the data folder's assets/
@@ -86,6 +87,12 @@ have not been run in full.
   - `agentbrowser`: Vercel's agent-browser (0.38.1), `agent-browser mcp`, headless. Its browser lives in a daemon
     outside the run's process group, so each run gets a session of its own (`AGENT_BROWSER_SESSION`, the run's
     token), and `agent-browser close` ends it after the run.
+  - `claudechrome`: Claude in Chrome, Claude Code's own `--chrome` tools. Its browser is a headed Chrome of the
+    bench's own, `<data>/chrome-claude/`, with the Claude extension signed in, started by hand with
+    `--remote-debugging-port=9295`; after each run the runner closes its tabs over that port. Claude Code asks before
+    each action on a site no `ClaudeInChromeDomain` rule names, whatever the permission mode, so `allow.py`, its
+    `--permission-prompt-tool`, allows every ask; claude.ai, where that Chrome is signed in, is denied. One extension
+    serves one run, so the arm is `solo`: its runs take turns, whatever `--jobs` says.
   - `browserd` (the main server on 9230, profile Research), `cap` and `nocap` are earlier experiments' arms.
 - **A run** is `run.run_one`: `claude -p` with the arm's servers only (`--strict-mcp-config`), the model
   (`claude-sonnet-5`), the suite's max turns, and its transcript streamed to `results/<exp>/<arm>/<task>-r<n>.jsonl`.

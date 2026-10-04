@@ -14,6 +14,7 @@ that the runs are broken.
 """
 import argparse
 import concurrent.futures
+import contextlib
 import hashlib
 import json
 import os
@@ -82,6 +83,20 @@ ARMS = {
                              "args": ["--headless", "--isolated", "--no-usage-statistics"]}},
         "system": "",
     },
+    "claudechrome": {
+        # Claude in Chrome: Claude Code's own --chrome tools, through the Claude extension in a headed Chrome of the
+        # bench's own (the data folder's chrome-claude, signed in to Claude, every site allowed), started with a
+        # DevTools port so each run's tabs can be closed after it. One extension serves one run, so its runs take turns.
+        # Claude Code asks before each of its actions on a site no rule names, and bypassPermissions does not answer
+        # it, so allow.py answers every ask with allow, hidden from the model; claude.ai, where that Chrome is signed
+        # in, is denied.
+        "mcp": {"allow": {"command": "python3", "args": [str(paths.BENCH / "allow.py")]}},
+        "flags": ["--chrome", "--permission-prompt-tool", "mcp__allow__approve",
+                  "--disallowedTools", "mcp__allow__approve", "ClaudeInChromeDomain(claude.ai)"],
+        "system": "",
+        "cdp": "http://127.0.0.1:9295",
+        "solo": True,
+    },
 }
 
 TIMEOUT = 900  # seconds a run may take before it is killed and counted as timed out
@@ -95,10 +110,13 @@ THROWAWAY_PROFILES = ("puppeteer_dev_chrome_profile", "playwright_chromiumdev_pr
 # logged in · Please run /login"; "Not logged in" alone also turns up when an agent reports a site it is logged out of.
 BROKEN = {"Please run /login": "claude -p is not logged in",
           "DevTools did not answer": "a browserd profile's Chrome has stopped answering"}
-IDLE = ("session_start", "tab_list")  # browserd calls that need no Chrome, so they succeed while it cannot start
+# Calls that need no Chrome, so they succeed while it cannot start: browserd's, and Claude in Chrome's list of the
+# browsers its extension connected.
+IDLE = ("session_start", "tab_list", "list_connected_browsers")
 DEAD_AFTER = 2  # runs in a row of one arm that reached no browser, after which the batch stops
 dead = {}  # arm name -> its runs in a row that reached no browser
 dead_lock = threading.Lock()
+solo = {name: threading.Lock() for name, arm in ARMS.items() if arm.get("solo")}  # arm name -> the turn its runs take
 stop = threading.Event()
 
 
@@ -246,6 +264,23 @@ def close_sessions(transcript, page_url):
     return closed
 
 
+def close_tabs(cdp):
+    """Close every tab of the Chrome at cdp but a new blank one, leaving the extension's own pages, and return how many
+    it closed: an arm whose Chrome outlives its runs leaves each run's tabs open."""
+    pages = [target for target in json.loads(urllib.request.urlopen(cdp + "/json/list", timeout=10).read())
+             if target.get("type") == "page" and not target.get("url", "").startswith("chrome-extension://")]
+    urllib.request.urlopen(urllib.request.Request(cdp + "/json/new?about:blank", method="PUT"), timeout=10).read()
+    for page in pages:
+        urllib.request.urlopen(cdp + "/json/close/" + page["id"], timeout=10).read()
+    return len(pages)
+
+
+def run_in_turn(suite, arm_name, *rest):
+    """run_one, waiting first for any run of the same solo arm to end."""
+    with solo.get(arm_name) or contextlib.nullcontext():
+        return run_one(suite, arm_name, *rest)
+
+
 def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
     arm = ARMS[arm_name]
     path = out / arm_name / ("%s-r%d.jsonl" % (task_name, rep))
@@ -271,6 +306,7 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
            "--setting-sources", "project",
            "--no-session-persistence",
            "--max-turns", str(max_turns)]
+    cmd += arm.get("flags", [])
     cmd += ["--append-system-prompt", " ".join(filter(None, [suite.SYSTEM, arm["system"]]))]
     started = time.time()
     timed_out = False
@@ -303,6 +339,12 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
     except (OSError, ValueError, AttributeError) as exc:
         stop.set()
         notes.append("could not close its browserd sessions (%s), so the batch stops" % exc)
+    if "cdp" in arm:
+        try:
+            notes.append("closed %d tabs" % close_tabs(arm["cdp"]))
+        except (OSError, ValueError) as exc:
+            stop.set()
+            notes.append("could not close its tabs (%s), so the batch stops" % exc)
     orphans = kill_orphans()
     if orphans:
         notes.append("killed %d orphaned Chrome" % orphans)
@@ -364,7 +406,7 @@ def main():
     runs = [(arm, name, task, rep) for rep in range(1, args.k + 1) for name, task in chosen.items() for arm in arms]
     print("%d runs, %d at a time" % (len(runs), args.jobs), flush=True)
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        pending = [pool.submit(run_one, suite, *r, args.model, max_turns, out) for r in runs]
+        pending = [pool.submit(run_in_turn, suite, *r, args.model, max_turns, out) for r in runs]
         for done in concurrent.futures.as_completed(pending):
             print(done.result(), flush=True)
 
