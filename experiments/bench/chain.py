@@ -50,7 +50,7 @@ def suite(name, arms, which, given):
 
 def main():
     if len(sys.argv) < 4:
-        raise SystemExit(__doc__.split("\n\n")[1])
+        raise SystemExit('usage: python experiments/bench/chain.py <name> <arms> "<suite>[:<run.py arguments>]"...')
     paths.RESULTS.mkdir(parents=True, exist_ok=True)
     name, arms, specs = sys.argv[1], sys.argv[2], sys.argv[3:]
     if not os.environ.get("CHAIN_DETACHED"):
@@ -60,6 +60,7 @@ def main():
                              **procs.DETACHED)
         print("chain %s started; progress in %s" % (name, paths.RESULTS / "chain.log"))
         return
+    procs.keep_awake()
     log("chain %s starts: arms %s; %s" % (name, arms, " ".join(specs)))
     for spec in specs:
         which, _, given = spec.partition(":")

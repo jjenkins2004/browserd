@@ -5,7 +5,7 @@ input FormFactory's own batch processor gives a model). ffserver.py saves each r
 and a run passes when that submission holds the gold value of every field it can be scored on. The server must be
 up first:
 
-    experiments/bench/sites.sh start
+    python experiments/bench/sites.py start
 """
 import json
 import re
@@ -17,7 +17,7 @@ import paths
 FF = paths.DATA / "formfactory"
 SUBMISSIONS = paths.RESULTS / "formfactory-submissions"
 BASE = "http://127.0.0.1:5055"
-# the file a form run uploads, copied here by setup.sh: Playwright MCP and chrome-devtools-mcp upload only files
+# the file a form run uploads, copied here by setup.py: Playwright MCP and chrome-devtools-mcp upload only files
 # under the data folder, where runs start
 UPLOAD = paths.DATA / "assets" / "sample.pdf"
 INSTANCES = 2  # gold records per form: the first ones whose documents cut cleanly
@@ -347,4 +347,4 @@ def check():
     """Refuse to start runs while the server is down or the file to upload is missing."""
     urllib.request.urlopen(BASE, timeout=5).read()
     if not UPLOAD.exists():
-        raise SystemExit("%s is missing; run experiments/bench/setup.sh" % UPLOAD)
+        raise SystemExit("%s is missing; run python experiments/bench/setup.py" % UPLOAD)

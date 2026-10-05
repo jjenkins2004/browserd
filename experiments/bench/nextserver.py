@@ -12,7 +12,7 @@ import argparse
 import os
 import sys
 
-BENCH_PORT = 9240  # the first Chrome port a bench profile may take
+BENCH_PORT = 9240  # the first Chrome port a bench profile may take, unless --from gives another
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--tree", required=True)
@@ -44,8 +44,9 @@ if args.profile:
     os.makedirs(server.RUN, exist_ok=True)
     state = State(server.STATE_FILE)
     # The main server gives its own profiles' Chrome the first free ports from profiles.FIRST_PORT up, so a bench
-    # profile takes one from BENCH_PORT up, where a profile the main server makes later does not land on it. Its
-    # Chrome folder is one per Mac, so a worktree after the first takes over the folder an earlier one made.
+    # profile takes one from --from (BENCH_PORT unless given) up, where a profile the main server makes later does not
+    # land on it. Its Chrome folder is one per machine, so a worktree after the first takes over the folder an earlier
+    # one made.
     folder = profiles.PREFIX + args.profile
     taken_over = folder if folder in profiles.free_folders(state.profiles()) else None
     print(profiles.make(state, args.profile, folder=taken_over, reserved=range(profiles.FIRST_PORT, args.first)))

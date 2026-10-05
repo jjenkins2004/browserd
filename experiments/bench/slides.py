@@ -2,8 +2,8 @@
 Slides draws each slide on a canvas of its own, while its menus, toolbar and palettes are named DOM controls, so a run
 presses both what click_down's on can name and what it cannot.
 
-Each run gets a deck of its own, made by the runner before the run (prepare) and titled "bench slides <token>", so
-every deck the bench made can be found by its title and trashed; DECKS logs each one's id. The deck is graded from
+Each run gets a deck of its own, made by the runner before the run (prepare) and titled "bench slides <token>"; DECKS
+logs each one's id, which finds it to trash even after rename-notes renames it. The deck is graded from
 itself: after the run, before the runner closes its session, its pptx export is fetched in the run's own Slides tab
 (same origin, the profile's cookies) and read with zipfile and ElementTree, along with the deck's name as the page
 shows it and every press the run made (collect).
@@ -11,6 +11,7 @@ shows it and every press the run made (collect).
 import base64
 import io
 import json
+import posixpath
 import re
 import time
 import urllib.parse
@@ -19,12 +20,13 @@ import zipfile
 
 import browserd_call
 import paths
+import transcripts
 
 SYSTEM = ("You are an agent for browser automation. Google Slides draws each slide on a canvas, so work from viewport "
           "screenshots and click with move_at, click_down and click_up.")
 MAX_TURNS = 40
 STATE = paths.RESULTS / "slides-state"  # <token>.json: what collect read for a run; <token>.pptx, the export itself
-DECKS = paths.RESULTS / "slides-decks.jsonl"  # one line per deck prepare made: token, id, url, title, when
+DECKS = paths.RESULTS / "slides-decks.jsonl"  # one line per deck prepare made: token, id, url, title, made
 CREATE = "https://docs.google.com/presentation/create?title="  # ?title= names the new deck
 DECK_ID = re.compile(r"/presentation/(?:u/\d+/)?d/([\w-]+)")
 CHUNK = 30000  # base64 characters one evaluate_script returns, under browserd's cut of a step's reply (40,000)
@@ -46,8 +48,8 @@ EXPORT = ("async () => { const id = location.pathname.match(/\\/d\\/([\\w-]+)/)[
           "size: bytes.length, length: window.__benchExport.length} }")
 SLICE = "() => (window.__benchExport || '').slice(%d, %d)"
 STATUS = ("() => { const s = document.querySelector('[aria-label^=\"Document status\"]'); "
-          "const t = document.querySelector('.docs-title-input'); "
-          "return {status: s && s.getAttribute('aria-label'), name: t && t.value, title: document.title} }")
+          "const t = document.querySelector('.docs-title-input'); return {url: location.href, "
+          "status: s && s.getAttribute('aria-label'), name: t && t.value, title: document.title} }")
 
 
 def _norm(text):
@@ -156,42 +158,24 @@ def load():
 
 
 def title(token):
-    """The name prepare gives a run's deck, which finds it again: "bench slides <token>"."""
+    """The name prepare gives a run's deck: "bench slides <token>"."""
     return "bench slides %s" % (token or "")
 
 
 def deck(token):
-    """The deck prepare made for a run, {token, id, url, title, made}, the latest if it made several; or None."""
-    found = None
-    if token and DECKS.exists():
-        for line in DECKS.read_text(encoding="utf-8").splitlines():
-            try:
-                each = json.loads(line)
-            except ValueError:
-                continue
-            if each.get("token") == token:
-                found = each
-    return found
+    """The deck prepare made for a run, {token, id, url, title, made}: the latest, if it made several."""
+    made = [json.loads(line) for line in DECKS.read_text(encoding="utf-8").splitlines()]
+    return [each for each in made if each["token"] == token][-1]
 
 
 def prompt(task, token=None):
-    made = deck(token)
-    # With no deck made (an arm without a profile), the agent makes one, named the same way by ?title=.
-    where = made["url"] if made else CREATE + urllib.parse.quote(title(token))
     return ("Open %s, a new, blank Google Slides presentation. If a \"Getting started\" dialog shows over it, close it. "
-            "%s When you are done, reply DONE." % (where, task["ask"].format(token=token or "")))
+            "%s When you are done, reply DONE." % (deck(token)["url"], task["ask"].format(token=token or "")))
 
 
-def prepare(task, mcp_url, profile, token=None):
-    """Make the run's deck, titled title(token), in a session of the runner's own, and log it in DECKS; the reply
-    holding that session's id, for the runner to close it."""
-    session = browserd_call.start(mcp_url, profile, "bench prepare")
-    text, failed = browserd_call.call(mcp_url, "tab_open", {
-        "session": session, "url": CREATE + urllib.parse.quote(title(token)),
-        "steps": [{"tool": "evaluate_script", "function": STATUS.replace("return {", "return {url: location.href, ")}]})
-    tab = text.split()[0] if text else None
-    if tab:
-        browserd_call.call(mcp_url, "tab_close", {"session": session, "tabs": [tab]})
+def prepare(task, mcp_url, session, token=None):
+    """Make the run's deck, titled title(token), in the runner's session, and log it in DECKS."""
+    text, failed = browserd_call.evaluate_once(mcp_url, session, CREATE + urllib.parse.quote(title(token)), STATUS)
     page = None if failed else browserd_call.returned(text)
     found = DECK_ID.search((page or {}).get("url") or "")
     if not found or (page or {}).get("name") != title(token):
@@ -201,32 +185,17 @@ def prepare(task, mcp_url, profile, token=None):
     DECKS.parent.mkdir(parents=True, exist_ok=True)
     with DECKS.open("a", encoding="utf-8") as log:
         log.write(json.dumps(made) + "\n")
-    return "session %s, on the " % session
-
-
-def _returned_all(text):
-    """Every JSON value the evaluate_script steps in a reply returned, in order."""
-    out = []
-    for found in browserd_call.RETURNED.finditer(text or ""):
-        try:
-            out.append(json.loads(found.group(1)))
-        except ValueError:
-            out.append(None)
-    return out
 
 
 def _run_tab(mcp_url, session, deck_id):
-    """The run's tab on its deck, by the deck's id in its URL, else on any deck; or None."""
-    listed, _ = browserd_call.call(mcp_url, "tab_list", {"session": session})
-    rows = [line.split() for line in listed.splitlines() if line.strip()]
-    on_deck = [row[0] for row in rows if deck_id and "/d/%s" % deck_id in row[-1]]
-    on_any = [row[0] for row in rows if DECK_ID.search(row[-1]) and "docs.google.com" in row[-1]]
-    return (on_deck or on_any or [None])[-1]
+    """The run's tab on its deck, by the deck's id in its URL, or None."""
+    return ([tab for tab, url in browserd_call.tabs(mcp_url, session) if "/d/%s" % deck_id in url] or [None])[-1]
 
 
 def export(mcp_url, session, tab):
-    """(pptx bytes, page) for the deck on a tab, once the page says its edits are saved: page is its name, title and
-    save status as it shows them."""
+    """(pptx bytes, page) for the deck on a tab, exported once the page says its edits are saved, or after SAVED_WAIT
+    seconds whatever it says (3 if it shows no save status): page is its name, title and save status as it shows
+    them."""
     page = {}
     waited = time.time()
     while time.time() - waited < SAVED_WAIT:
@@ -236,7 +205,7 @@ def export(mcp_url, session, tab):
         if "Saved" in (page.get("status") or "") or not page.get("status") and time.time() - waited > 3:
             break
         time.sleep(1)
-    got = None
+    got, text = None, ""
     for attempt in range(3):  # a refused or failed export is asked for again
         text, failed = browserd_call.call(mcp_url, "queue", {
             "session": session, "tab": tab, "steps": [{"tool": "evaluate_script", "function": EXPORT}]})
@@ -249,7 +218,7 @@ def export(mcp_url, session, tab):
     steps = [{"tool": "evaluate_script", "function": SLICE % (start, start + CHUNK)}
              for start in range(0, got["length"], CHUNK)]
     text, failed = browserd_call.call(mcp_url, "queue", {"session": session, "tab": tab, "steps": steps})
-    parts = _returned_all(text)
+    parts = browserd_call.returned_all(text)
     if failed or len(parts) != len(steps) or not all(isinstance(part, str) for part in parts):
         raise RuntimeError("could not read the export back: %s" % text[:300])
     data = base64.b64decode("".join(parts))
@@ -289,38 +258,29 @@ def _paragraphs(body):
 
 
 def _shape(element):
-    """What grading needs of one shape on a slide: a shape's placeholder, geometry, fill and text; a table's cells."""
+    """What grading needs of the shapes one element of a slide's tree holds, a group's shapes included: a shape's
+    placeholder, geometry, fill and text; a table's cells."""
     tag = element.tag.split("}")[-1]
     if tag == "sp":
         ph = element.find("p:nvSpPr/p:nvPr/p:ph", NS)
         spec = element.find("p:spPr", NS)
         geometry = spec.find("a:prstGeom", NS) if spec is not None else None
         props = element.find("p:nvSpPr/p:cNvSpPr", NS)
-        named = element.find("p:nvSpPr/p:cNvPr", NS)
-        return {"kind": "shape", "name": named.get("name") if named is not None else None,
-                # a placeholder with no type is a body, as in PowerPoint
-                "ph": None if ph is None else ph.get("type") or "body",
-                "geometry": geometry.get("prst") if geometry is not None else None,
-                "textbox": props is not None and props.get("txBox") in ("1", "true"),
-                "fill": _color(spec), "paragraphs": _paragraphs(element.find("p:txBody", NS))}
-    if tag == "graphicFrame":
+        yield {"kind": "shape",
+               # a placeholder with no type is the spec's default, obj (content), which holds body text: read as body
+               "ph": None if ph is None else ph.get("type") or "body",
+               "geometry": geometry.get("prst") if geometry is not None else None,
+               "textbox": props is not None and props.get("txBox") in ("1", "true"),
+               "fill": _color(spec), "paragraphs": _paragraphs(element.find("p:txBody", NS))}
+    elif tag == "graphicFrame":
         table = element.find(".//a:tbl", NS)
-        if table is not None:
-            return {"kind": "table", "columns": len(table.findall("a:tblGrid/a:gridCol", NS)),
-                    "rows": [[" ".join(p["text"] for p in _paragraphs(cell.find("a:txBody", NS)))
-                              for cell in row.findall("a:tc", NS)] for row in table.findall("a:tr", NS)]}
-        return {"kind": "frame"}
-    if tag == "grpSp":
-        return [_shape(child) for child in element if child.tag.split("}")[-1] in ("sp", "graphicFrame", "grpSp")]
-    return None
-
-
-def _flat(shapes):
-    for shape in shapes:
-        if isinstance(shape, list):
-            yield from _flat(shape)
-        elif shape is not None:
-            yield shape
+        yield {"kind": "frame"} if table is None else {
+            "kind": "table", "columns": len(table.findall("a:tblGrid/a:gridCol", NS)),
+            "rows": [[" ".join(p["text"] for p in _paragraphs(cell.find("a:txBody", NS)))
+                      for cell in row.findall("a:tc", NS)] for row in table.findall("a:tr", NS)]}
+    elif tag == "grpSp":
+        for child in element:
+            yield from _shape(child)
 
 
 def _rels(archive, part):
@@ -331,20 +291,14 @@ def _rels(archive, part):
         return {}
     out = {}
     for rel in ET.fromstring(archive.read(path)).findall("rel:Relationship", NS):
-        target = rel.get("Target")
-        parts = (folder + "/" + target).split("/") if not target.startswith("/") else target[1:].split("/")
-        resolved = []
-        for each in parts:
-            if each == "..":
-                resolved.pop()
-            elif each not in ("", "."):
-                resolved.append(each)
-        out[rel.get("Id")] = (rel.get("Type").rsplit("/", 1)[-1], "/".join(resolved))
+        target = rel.get("Target") or ""
+        resolved = target[1:] if target.startswith("/") else posixpath.normpath(posixpath.join(folder, target))
+        out[rel.get("Id")] = ((rel.get("Type") or "").rsplit("/", 1)[-1], resolved)
     return out
 
 
 def read_pptx(data):
-    """A pptx's slides in order, each {shapes, notes, layout}, and its core title: what the tasks are graded from."""
+    """A pptx's slides in order, each {shapes, notes}, and its core title: what the tasks are graded from."""
     archive = zipfile.ZipFile(io.BytesIO(data))
     presentation = ET.fromstring(archive.read("ppt/presentation.xml"))
     rels = _rels(archive, "ppt/presentation.xml")
@@ -353,16 +307,14 @@ def read_pptx(data):
         part = rels[entry.get("{%s}id" % NS["r"])][1]
         root = ET.fromstring(archive.read(part))
         tree = root.find("p:cSld/p:spTree", NS)
-        shapes = list(_flat(_shape(child) for child in tree)) if tree is not None else []
-        notes, layout = "", None
+        shapes = [shape for child in (tree if tree is not None else []) for shape in _shape(child)]
+        notes = ""
         for kind, target in _rels(archive, part).values():
             if kind == "notesSlide" and target in archive.namelist():
-                note = ET.fromstring(archive.read(target))
-                notes = "\n".join(_text(shape) for shape in _flat(_shape(child) for child in note.find("p:cSld/p:spTree", NS))
+                note = ET.fromstring(archive.read(target)).find("p:cSld/p:spTree", NS)
+                notes = "\n".join(_text(shape) for child in (note if note is not None else []) for shape in _shape(child)
                                   if shape.get("ph") == "body")
-            elif kind == "slideLayout" and target in archive.namelist():
-                layout = ET.fromstring(archive.read(target)).find("p:cSld", NS).get("name")
-        slides.append({"shapes": shapes, "notes": notes, "layout": layout})
+        slides.append({"shapes": shapes, "notes": notes})
     core_title = None
     if "docProps/core.xml" in archive.namelist():
         found = ET.fromstring(archive.read("docProps/core.xml")).find("dc:title", NS)
@@ -371,42 +323,35 @@ def read_pptx(data):
 
 
 def collect(task, token, transcript, mcp_url):
-    """Read the run's deck off its own tab (its pptx export and its name) and its presses off its transcript, into
-    STATE."""
+    """Read the run's presses off its transcript, then its deck off its own tab (its pptx export and its name), into
+    STATE; the presses are kept though the deck could not be read."""
     made = deck(token)
-    record = {"presses": browserd_call.presses(transcript), "deck": made, "state": None, "error": None}
-    started = browserd_call.SESSION.findall(transcript)
-    try:
-        if not started:
-            raise RuntimeError("the run started no browserd session")
-        session = started[0]
-        tab = _run_tab(mcp_url, session, made and made["id"])
-        if tab is None and made:  # the run closed its tab, or never opened the deck: open it in the run's session
-            text, failed = browserd_call.call(mcp_url, "tab_open", {"session": session, "url": made["url"]})
-            tab = None if failed or not text else text.split()[0]
-        if tab is None:
-            raise RuntimeError("no tab on the deck")
-        data, page = export(mcp_url, session, tab)
-        STATE.mkdir(parents=True, exist_ok=True)
-        (STATE / ("%s.pptx" % token)).write_bytes(data)
-        record["state"] = dict(read_pptx(data), name=page.get("name"), status=page.get("status"))
-    except Exception as exc:  # whatever went wrong, the run's presses are still kept, and it scores as failed
-        record["error"] = str(exc)[:500]
+    record = {"presses": transcripts.presses(transcript), "deck": made, "state": None}
+    path = STATE / ("%s.json" % token)
     STATE.mkdir(parents=True, exist_ok=True)
-    (STATE / ("%s.json" % token)).write_text(json.dumps(record, indent=2), encoding="utf-8")
-
-
-def passed(task, state, token=None):
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    started = browserd_call.SESSION.findall(transcript)
+    if not started:
+        raise RuntimeError("the run started no browserd session")
+    session = started[0]
+    tab = _run_tab(mcp_url, session, made["id"])
+    if tab is None:  # the run closed its tab, or never opened the deck: open it in the run's session
+        text, failed = browserd_call.call(mcp_url, "tab_open", {"session": session, "url": made["url"]})
+        tab = None if failed or not text else text.split()[0]
+    if tab is None:
+        raise RuntimeError("no tab on the deck")
+    data, page = export(mcp_url, session, tab)
+    (STATE / ("%s.pptx" % token)).write_bytes(data)
     try:
-        return bool(task["passed"](state, token))
-    except (TypeError, KeyError, AttributeError, IndexError):
-        return False
+        state = read_pptx(data)
+    except (zipfile.BadZipFile, ET.ParseError, KeyError) as exc:
+        raise RuntimeError("the export is not a pptx this suite reads: %s" % exc)
+    record["state"] = dict(state, name=page.get("name"), status=page.get("status"))
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
 
 
 def score(task, answer, token=None):
     path = STATE / ("%s.json" % token)
     record = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"state": None, "presses": {}}
-    presses = record.get("presses", {})
-    return dict({"passed": passed(task, record.get("state"), token), "read": record.get("state") is not None},
-                **{key: value for key, value in presses.items() if key != "refused"},
-                refusals=len(presses.get("refused", [])))
+    return dict({"passed": bool(task["passed"](record["state"], token)), "read": record["state"] is not None},
+                **transcripts.counts(record["presses"]))

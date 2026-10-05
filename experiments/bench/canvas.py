@@ -2,16 +2,19 @@
 (a toolbar whose buttons are named, a tool panel or shape thumbnails with no names, a drawn surface with no words), so
 click_down's on is met in every way it can be.
 
-Each task's page state is read through browserd before the runner closes the run's session (collect), and scored
-from it; so is every press the run made: how many named what they pressed, how many gave on "", how many were not
-pressed for their on, and what each refusal said. A task that keeps state between visits is cleared first (prepare).
+Each task's page state is read through browserd before the runner closes the run's session (collect), and the task is
+scored from it; each press the run made is read off its transcript and counted: how many named what they pressed, how
+many gave on "", how many were not pressed for their on. A task that keeps state between visits is cleared first
+(prepare).
 """
 import json
 import re
+import time
 import urllib.parse
 
 import browserd_call
 import paths
+import transcripts
 
 SYSTEM = ("You are an agent for browser automation. These apps draw on a canvas, so work from viewport screenshots and "
           "click with move_at, click_down and click_up.")
@@ -71,7 +74,8 @@ TASKS = {
         "passed": lambda state: _zoom(state) == 16,
     },
     "ethercalc-autosum": {
-        "url": "https://ethercalc.net/bench{token}",  # a new single sheet per run; a =_new workbook has no CSV
+        # A new single sheet per attempt, so a rerun starts empty; a =_new workbook has no CSV.
+        "url": "https://ethercalc.net/bench{token}x{started}",
         "ask": ("In the empty sheet, put 2 in A1, 3 in A2 and 4 in A3. Then select A4 and use the toolbar's Auto Sum "
                 "button, so A4 holds their sum."),
         "state": ("async () => { const u = location.href.split(/[?#]/)[0].replace(/\\/$/, ''); "
@@ -86,7 +90,7 @@ def load():
 
 
 def _url(task, token):
-    return task["url"].format(token=token or "")
+    return task["url"].format(token=token or "", started=int(time.time()))
 
 
 def prompt(task, token=None):
@@ -97,35 +101,23 @@ def _host(url):
     return urllib.parse.urlsplit(url).netloc
 
 
-def prepare(task, mcp_url, profile, token=None):
-    """Clear what the task's site kept from an earlier visit, in a session of the runner's own; the reply holding that
-    session's id, for the runner to close it."""
+def prepare(task, mcp_url, session, token=None):
+    """Clear what the task's site kept from an earlier visit, in the runner's session."""
     if "clear" not in task:
-        return ""
-    session = browserd_call.start(mcp_url, profile, "bench prepare")
-    text, failed = browserd_call.call(mcp_url, "tab_open", {
-        "session": session, "url": task["url"], "steps": [{"tool": "evaluate_script", "function": task["clear"]}]})
-    tab = text.split()[0] if text else None
-    if tab:
-        browserd_call.call(mcp_url, "tab_close", {"session": session, "tabs": [tab]})
+        return
+    text, failed = browserd_call.evaluate_once(mcp_url, session, _url(task, token), task["clear"])
     if failed:
-        raise RuntimeError("could not clear %s: %s" % (task["url"], text[:300]))
-    return "session %s, on the " % session
+        raise RuntimeError("could not clear %s: %s" % (_url(task, token), text[:300]))
 
 
 def collect(task, token, transcript, mcp_url):
     """Read the task's page state off the run's own tab, and its presses off its transcript, into STATE."""
-    record = {"presses": browserd_call.presses(transcript), "state": None}
+    record = {"presses": transcripts.presses(transcript), "state": None}
     started = browserd_call.SESSION.findall(transcript)
     if started:
-        session = started[0]
-        listed, _ = browserd_call.call(mcp_url, "tab_list", {"session": session})
-        tabs = [line.split()[0] for line in listed.splitlines()
-                if line.strip() and _host(line.split()[-1]) == _host(_url(task, token))]
+        tabs = [tab for tab, url in browserd_call.tabs(mcp_url, started[0]) if _host(url) == _host(_url(task, token))]
         if tabs:
-            text, failed = browserd_call.call(mcp_url, "queue", {
-                "session": session, "tab": tabs[-1], "steps": [{"tool": "evaluate_script", "function": task["state"]}]})
-            record["state"] = None if failed else browserd_call.returned(text)
+            record["state"] = browserd_call.evaluate(mcp_url, started[0], tabs[-1], task["state"])
     STATE.mkdir(parents=True, exist_ok=True)
     (STATE / ("%s.json" % token)).write_text(json.dumps(record, indent=2), encoding="utf-8")
 
@@ -133,9 +125,4 @@ def collect(task, token, transcript, mcp_url):
 def score(task, answer, token=None):
     path = STATE / ("%s.json" % token)
     record = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"state": None, "presses": {}}
-    try:
-        passed = bool(task["passed"](record["state"]))
-    except (TypeError, KeyError, AttributeError):
-        passed = False
-    return dict({"passed": passed}, **{key: value for key, value in record.get("presses", {}).items()
-                                      if key != "refused"}, refusals=len(record.get("presses", {}).get("refused", [])))
+    return dict({"passed": bool(task["passed"](record["state"]))}, **transcripts.counts(record["presses"]))

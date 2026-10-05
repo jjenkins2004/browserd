@@ -410,8 +410,9 @@ Chrome hung; those runs are in `results/_invalid/`.
   - 6 agents ran at once, each Playwright or devtools run with its own headless Chrome, beside another session's
     6-agent experiment on the `test` profile;
   - nothing watched memory, and nothing stopped when the Research Chrome hung.
-  - Since then `run.py` runs 2 at a time, starts a run only with 25% of memory free, refuses to run beside another
-    batch, kills each run's process group, and closes each run's browserd session on the browserd page.
+  - Since then `run.py` runs 2 at a time, stops each run's process tree, and closes each run's browserd session on
+    the browserd page; until 2026-10-04 it also started a run only with 25% of memory free and refused to run beside
+    another batch.
 - **Files left in `~/Downloads`** by browserd runs: "grampa's old note.txt" (×3) and "credentials.txt" (×2), WebGames'
   own files.
 - **Port 4173 was taken** by another local site, so WebGames moved to 4380; the first WebGames smoke run hit that site
@@ -420,7 +421,7 @@ Chrome hung; those runs are in `results/_invalid/`.
   anywhere, so an agent writing "Not logged into Hugging Face" stopped the batch. It now matches `claude -p`'s own
   "Please run /login", and stops on any run `claude -p` ended in an error before its first tool call.
 - **2026-09-28:**
-  - a Claude Code window refresh killed a batch started as its background task: `chain.sh` now detaches itself;
+  - a Claude Code window refresh killed a batch started as its background task: the chain (now `chain.py`) detaches itself;
   - a profile the main server made took the Bench Chrome's port (9226), so `main1`'s first batch was set aside and
     bench profiles now take ports from 9240;
   - a wifi outage: every arm's runs in its window were set aside and rerun;

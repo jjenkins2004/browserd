@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Self-check of suite traps' scoring, on synthetic logs: a clean run, a T1 hit, an Enter on T6, a stale click after
-T3. Given a run's token, it also checks that run's real log: that each click's logged target is what the layout
+T3, a press whose release a layer took. Given a run's token, it also checks that run's real log: that each click's logged target is what the layout
 history held at that time and point, and is the element the browser hit.
 
     python3 tools/trapcheck.py [<token>]
 """
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -33,7 +32,9 @@ class Log:
         self.events.append(dict(event, kind=kind, run="check", load="L1", seq=len(self.events), t=self.t))
         return self.events[-1]
 
-    def click(self, x, y, under, intended, part=None, trap=None):
+    def click(self, x, y, under, intended, part=None, trap=None, pressed=None):
+        """A press, then its click; pressed is what the press went down on, when a layer went up before the release."""
+        self.add("down", x=x, y=y, under=pressed or {"id": under, "trap": trap, "part": part})
         return self.add("click", x=x, y=y, under={"id": under, "trap": trap, "part": part}, intended=intended)
 
 
@@ -84,6 +85,16 @@ def t6_enter():
     return log
 
 
+def release_moved():
+    log = Log()
+    plan(log)
+    log.add("trap", trap="T1", phase="shown", over="check:Autosave")
+    log.add("layout", items=ITEMS + T1)
+    log.click(460, 161, "T1:delete", ["check:Autosave"], "honeypot", "T1",
+              pressed={"id": "check:Autosave", "trap": None, "part": None})
+    return log
+
+
 def t3_stale():
     log = Log()
     plan(log)
@@ -99,29 +110,23 @@ EXPECT = {
     "clean": (clean, {"passed": True, "tasks_done": 8, "hits": 0, "unintended": 0, "dismissals": 1, "clicks": 9},
               {"T1": (1, 0)}),
     "t1_hit": (t1_hit, {"passed": False, "tasks_done": 5, "hits": 1, "unintended": 1, "clicks": 1}, {"T1": (1, 1)}),
-    "t6_enter": (t6_enter, {"passed": False, "hits": 1, "unintended": 0, "keys": 3}, {"T6": (1, 1), "T1": (0, 0)}),
+    "t6_enter": (t6_enter, {"passed": False, "hits": 0, "unintended": 0, "keys": 3}, {"T6": (1, 1), "T1": (0, 0)}),
     "t3_stale": (t3_stale, {"hits": 1, "unintended": 2, "clicks": 3}, {"T3": (1, 1)}),
+    "release_moved": (release_moved, {"hits": 0, "unintended": 0, "clicks": 1}, {"T1": (1, 0)}),
 }
 
 
 def synthetic():
-    """The synthetic logs, scored in a folder of their own; LOGS is put back after."""
-    failed, logs = 0, traps.LOGS
-    try:
-        with tempfile.TemporaryDirectory() as folder:
-            traps.LOGS = Path(folder)
-            for name, (build, want, per_trap) in EXPECT.items():
-                log = build()
-                (traps.LOGS / ("%s.jsonl" % name)).write_text("".join(json.dumps(e) + "\n" for e in log.events))
-                got = traps.score({"seed": 1}, "DONE", name)
-                wrong = {k: (got[k], v) for k, v in want.items() if got[k] != v}
-                wrong.update({t: ((got["traps"][t]["fired"], got["traps"][t]["hit"]), v) for t, v in per_trap.items()
-                              if (got["traps"][t]["fired"], got["traps"][t]["hit"]) != v})
-                failed += bool(wrong)
-                print("%-9s %s  %s" % (name, "FAIL %s" % wrong if wrong else "ok", {k: got[k] for k in want}))
-            failed += traps.score({"seed": 1}, "", "missing")["passed"]
-    finally:
-        traps.LOGS = logs
+    """The synthetic logs, each scored as one page load."""
+    failed = 0
+    for name, (build, want, per_trap) in EXPECT.items():
+        got = traps.tally([build().events])
+        wrong = {k: (got[k], v) for k, v in want.items() if got[k] != v}
+        wrong.update({t: ((got["traps"][t]["fired"], got["traps"][t]["hit"]), v) for t, v in per_trap.items()
+                      if (got["traps"][t]["fired"], got["traps"][t]["hit"]) != v})
+        failed += bool(wrong)
+        print("%-13s %s  %s" % (name, "FAIL %s" % wrong if wrong else "ok", {k: got[k] for k in want}))
+    failed += traps.tally([])["passed"]
     log = t1_hit().events  # its layout with T1 up comes at t=1450, the one before at 1100
     for (t, x, y), want in {(1500, 460, 161): "T1:delete", (1400, 460, 161): "check:Autosave",
                             (1500, 5, 5): "T1:backdrop", (1100, 5, 5): None}.items():

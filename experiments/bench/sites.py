@@ -19,15 +19,10 @@ import procs
 PIDS = paths.DATA / "sites.json"
 
 
-def _venv_python():
-    """The data folder's venv's Python, which has Flask (setup.py makes it)."""
-    return str(paths.DATA / ".venv" / ("Scripts/python.exe" if procs.WINDOWS else "bin/python"))
-
-
 SITES = {  # name: (port, folder, command)
     "webgames-preview": (4380, paths.DATA / "webgames" / "webgames",
                          ["pnpm", "exec", "vite", "preview", "--host", "127.0.0.1", "--port", "4380", "--strictPort"]),
-    "ffserver": (5055, paths.BENCH, [_venv_python(), "ffserver.py"]),
+    "ffserver": (5055, paths.BENCH, [procs.venv_python(paths.DATA / ".venv"), "ffserver.py"]),  # Flask, from setup.py
     "mwserver": (4390, paths.BENCH, [sys.executable, "mwserver.py"]),
     "clickserver": (4395, paths.BENCH, [sys.executable, "clickserver.py"]),
     "hayserver": (4396, paths.BENCH, [sys.executable, "hayserver.py"]),
@@ -47,9 +42,13 @@ def start():
         raise SystemExit("ports %s are taken already; stop what holds them first" % ", ".join(map(str, taken)))
     started = {}
     for name, (port, folder, argv) in SITES.items():
-        with (paths.DATA / ("%s.log" % name)).open("a", encoding="utf-8") as log:
-            proc = subprocess.Popen(procs.command(argv), cwd=folder, stdin=subprocess.DEVNULL, stdout=log,
-                                    stderr=subprocess.STDOUT, **procs.DETACHED)
+        try:
+            with (paths.DATA / ("%s.log" % name)).open("a", encoding="utf-8") as log:
+                proc = subprocess.Popen(procs.command(argv), cwd=folder, stdin=subprocess.DEVNULL, stdout=log,
+                                        stderr=subprocess.STDOUT, **procs.DETACHED)
+        except OSError as exc:  # its folder or program is missing: setup.py has not made it
+            print("%s did not start: %s" % (name, exc))
+            continue
         started[name] = proc.pid
     PIDS.write_text(json.dumps(started), encoding="utf-8")
     time.sleep(5)
@@ -60,8 +59,9 @@ def start():
 
 def stop():
     started = json.loads(PIDS.read_text(encoding="utf-8")) if PIDS.exists() else {}
-    for pid in started.values():
-        procs.stop_pid(pid)
+    for name, pid in started.items():
+        if _listening(SITES[name][0]):  # a site that is down left its id free for any other process to take
+            procs.stop_tree(pid)
     if PIDS.exists():
         os.remove(PIDS)
 

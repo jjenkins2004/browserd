@@ -19,7 +19,9 @@ The suites, each `--suite` of `run.py`:
 | `miniwob` | synthetic form and widget drills | 38 × 2 seeds | the page's own reward |
 | `clicks`, `haystack` | click accuracy on small targets; finding a fact on long pages | 9; 12 | the bench's own |
 | `canvas` | pixel clicks in apps that draw (Excalidraw, Desmos, GeoGebra, diagrams.net, Maps, EtherCalc) | 6 | the app's own state, read through browserd after the run |
-| `traps` | clicks an agent never meant: a fake editor whose timed popups go up over its next target | 12 seeds | the page's own log of every trusted click and key |
+| `popups` | first-visit consent banners, welcome dialogs and look-alike buttons on 7 live sites (Forbes, HubSpot, Kayak, CNN, BBC, the Guardian, Sephora) | 7 | the popup seen, the press on the right button or the page's state after, and no press on its look-alike |
+| `slides` | edits to a new, blank Google Slides deck per run, on the `experiments` arm's profile signed in to Google | 6 | the deck's own pptx export, read in the run's tab after the run |
+| `traps` | clicks an agent never meant: a fake editor whose timed traps go up over its next target | 12 seeds | the page's own log of every trusted click and key |
 
 The last run (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`. `miniwob` (drills) and `botwall`
 have not been run in full.
@@ -35,7 +37,8 @@ have not been run in full.
     python experiments/bench/sites.py stop
 
 Everything runs the same on macOS, Linux and Windows; `procs.py` is the one place that differs by OS (how a process
-tree is started and stopped, and Windows' `.cmd` shims).
+tree is started and stopped, keeping the machine awake, where a venv keeps its Python, and Windows' `.cmd` shims).
+`python` is Python 3: `python3` where `python` is not on PATH.
 
 ## Directory Layout
 
@@ -47,8 +50,11 @@ tree is started and stopped, and Windows' `.cmd` shims).
       chain.py        several suites as one detached batch, each resumed once if it stops
       run.py          ARMS, the claude -p call, 2 runs at a time, cleanup, the stops
       procs.py        a process tree started and stopped the same way on every OS; Windows' .cmd shims
-      browserd_call.py  one browserd tool call from the bench's own code: a suite's prepare and collect
+      browserd_call.py  browserd tool calls from the bench's own code: a suite's prepare and collect
+      transcripts.py  what a run did, read off its transcript: its content blocks, and what its presses did
       canvas.py       suite canvas: pixel clicks in drawing apps, graded from the app's state
+      popups.py       suite popups: first-visit consent banners and look-alike buttons on live sites
+      slides.py       suite slides: edits to a new Google Slides deck per run, graded from its pptx export
       report.py       results/<exp>/scores.json, the per-arm summary, the task-by-arm table
       nextserver.py   browserd from a worktree on 9250/9251, beside the main server
       tasks.py        suite mcpuniverse: MCP-Universe's tasks, prompt and scoring, and tasks.lenient
@@ -67,11 +73,13 @@ tree is started and stopped, and Windows' `.cmd` shims).
       trapserver.py   the trap editor (trapapp.html) on 4397, each run's log under results/trap-logs/
       assets/         sample.pdf, which setup.py copies to the data folder's assets/
       tools/          analyze.py (tool use by arm), paired.py (sign tests), miscalls.py, cheats.py, ffmap.py,
-                      trapcheck.py (traps' scoring on synthetic logs; a real run's log against its layout history)
+                      trapcheck.py (traps' scoring on synthetic logs; a real run's log against its layout history),
+                      represses.py (an experiment's presses read again off its transcripts)
       probes/         the pairing bug's replays and probes (../findings/benchmark.md, "The pairing bug")
 
     <data folder>/    paths.DATA: ../../../browserd-bench beside the repo, or $BROWSERD_BENCH_DATA
-      results/<exp>/  config.json, one <arm>/<task>-r<n>.jsonl transcript and .err per run, scores.json
+      results/<exp>/  config.json, one <arm>/<task>-r<n>.jsonl transcript and .err per run (.part until its
+                      collect and cleanup are done), scores.json
       results/<exp>.log, results/chain.log      each run's line; each chain's starts, stops and ends
       results/_invalid/<exp>-<why>/             runs set aside (a broken setup, an outage), never deleted
       MCP-Universe/, formfactory/, webgames/, miniwob-plusplus/    the benchmarks' repos, from setup.py
@@ -81,22 +89,26 @@ tree is started and stopped, and Windows' `.cmd` shims).
 ## Core Abstractions & Shared Pieces
 
 - **A suite** is a module giving `SYSTEM`, `MAX_TURNS`, `load()` ({task name: task}), `prompt(task, token)` and
-  `score(task, answer, token)`, and optionally `check()`, which refuses to start while its site is down. `token`
-  (`run.token`) names one run, so a suite whose scoring reads what the run did on a page (formfactory, miniwob,
-  clicks) finds that run's own record. `run.SUITES` lists them.
-- **An arm** is one entry of `run.ARMS`: its MCP config, a system line, and for a browserd arm the page URL whose
-  Close session the run's cleanup uses. The current arms:
+  `score(task, answer, token)`, and optionally `check()`, which refuses to start while its site is down. On an arm with
+  a `profile`, a suite may also give `prepare(task, mcp_url, session, token)`, which sets its page up before the run in
+  a browserd session of the runner's own, and `collect(task, token, transcript, mcp_url)`, which reads what the run
+  left on its tabs before the runner closes its sessions, both through `browserd_call.py`. `token` (`run.token`) names
+  one run, so a suite whose scoring reads what the run did on a page (formfactory, miniwob, clicks, traps, canvas,
+  popups, slides) finds that run's own record. `run.SUITES` lists them.
+- **An arm** is one entry of `run.ARMS`: its MCP config, a system line, and for a browserd arm (`run._browserd`) the
+  page URL whose Close session the run's cleanup uses and the profile its runs use. The current arms:
   - `next`: browserd from a worktree, served by `nextserver.py` on 9250 with profile Bench, so the main server (9230)
     and its profiles are never touched. Point the worktree at the commit to measure (`git worktree add`, then
     `git -C <worktree> switch --detach <commit>`) and restart `nextserver.py`, which keeps the code it started with.
     A new worktree needs `node_modules/` (a symlink to the main checkout's will do) and its own Bench profile
-    (`--profile Bench`, which takes over the Chrome-Bench folder an earlier worktree made); serve one at a time.
+    (`--profile Bench`, which takes over the Chrome-Bench folder an earlier worktree made). A server beside another
+    takes ports of its own (`--port`, and `--from` for its profile's Chrome).
   - `playwright`: `npx @playwright/mcp@0.0.82 --headless --isolated`, MCP-Universe's own config, pinned so a release
     mid-batch cannot change the arm.
   - `devtools`: this checkout's chrome-devtools-mcp (`../node_modules`), stock, `--headless --isolated`: browserd's
     engine without browserd's layer.
   - `agentbrowser`: Vercel's agent-browser (0.38.1), `agent-browser mcp`, headless. Its browser lives in a daemon
-    outside the run's process group, so each run gets a session of its own (`AGENT_BROWSER_SESSION`, the run's
+    outside the run's process tree, so each run gets a session of its own (`AGENT_BROWSER_SESSION`, the run's
     token), and `agent-browser close` ends it after the run.
   - `claudechrome`: Claude in Chrome, Claude Code's own `--chrome` tools. Its browser is a headed Chrome of the
     bench's own, `<data>/chrome-claude/`, with the Claude extension signed in, started by hand with
@@ -104,11 +116,15 @@ tree is started and stopped, and Windows' `.cmd` shims).
     each action on a site no `ClaudeInChromeDomain` rule names, whatever the permission mode, so `allow.py`, its
     `--permission-prompt-tool`, allows every ask; claude.ai, where that Chrome is signed in, is denied. One extension
     serves one run, so the arm is `solo`: its runs take turns, whatever `--jobs` says.
-  - `browserd` (the main server on 9230, profile Research), `cap` and `nocap` are earlier experiments' arms.
+  - `experiments`: the main server (9230) on the profile signed in to Google, for `slides`.
+  - `trap-on`, `trap-none`, `trap-guard`: the text-check experiment's arms (`../findings/text-check.md`), worktrees of
+    their own served by `nextserver.py` on 9250, 9260 and 9270.
+  - `browserd` (the main server on 9230, profile research), `cap` and `nocap` are earlier experiments' arms.
 - **A run** is `run.run_one`: `claude -p` with the arm's servers only (`--strict-mcp-config`), the model
-  (`claude-sonnet-5`), the suite's max turns, and its transcript streamed to `results/<exp>/<arm>/<task>-r<n>.jsonl`.
-  Arms interleave task by task, so each sees a live site at about the same time. A run whose transcript ends in a
-  result is done, so running an experiment again runs only what is missing.
+  (`claude-sonnet-5`), the suite's max turns, and its transcript streamed to `results/<exp>/<arm>/<task>-r<n>.part`,
+  renamed `.jsonl` once its collect and cleanup are done. Arms interleave task by task, so each sees a live site at
+  about the same time. A run whose `.jsonl` ends in a result is done, so running an experiment again runs only what is
+  missing, a run cut off before its cleanup included.
 - **Scoring** is `report.py`, through each suite's `score`. For MCP-Universe it gives the benchmark's own strict score
   and `tasks.lenient`, which forgives formatting alone:
   - the JSON is taken from any text around it, unless the text holds several JSON values that differ;
@@ -133,12 +149,13 @@ tree is started and stopped, and Windows' `.cmd` shims).
 
 - **One batch at a time, 2 runs at a time.** A batch of 6 at a time that cleaned nothing up ran a Mac out of memory,
   and several agents opening heavy pages at once crashed a profile's Chrome out of memory on Windows (2026-10-04), so
-  run `--jobs 2` or fewer, and one batch at a time; `run.py` no longer checks memory or other batches itself.
+  run `--jobs 2` or fewer, and one batch at a time; `run.py` checks neither memory nor other batches itself.
 - **Never restart the main server (9230) for a run.** Measure a commit with the `next` arm: a worktree of its own
   served by `nextserver.py --tree`, which uses that worktree's own `.run/` (state, profiles, records). Never serve the
   checkout 9230 runs from: the two servers would share its `.run/`. A bench profile takes a Chrome port from
   `nextserver.BENCH_PORT` (9240) up, since the main server gives its own profiles the first free ports from 9223, and
-  a profile it made later once took the Bench Chrome's port.
+  a profile it made later once took the Bench Chrome's port. A bench server beside another gives its profile a range
+  of its own: `--profile <name> --from <port>`.
 - **Start long batches detached** (`chain.py` does it itself): a batch started as a background task of a Claude Code
   session dies with that session's window, as one did on 2026-09-28.
 - **Runs start in the data folder** (`cwd=paths.DATA`): `claude -p --setting-sources project` loads the settings of
@@ -149,16 +166,16 @@ tree is started and stopped, and Windows' `.cmd` shims).
   also stops after `run.DEAD_AFTER` (2) runs in a row of one arm that reached no browser (its server did not connect,
   or every call needing a Chrome failed): those count as done, so move their `.jsonl` and `.err` to
   `results/_invalid/<exp>-<why>/<arm>/` to rerun them. A rerun keeps the run's token (`run.token`), so for
-  formfactory, miniwob, clicks and traps also move its record,
-  `results/{formfactory-submissions,miniwob-rewards,click-hits,trap-logs}/<token>.jsonl`, or the set-aside run's
-  record is scored with the rerun's. A wifi outage looks the same: set aside the runs of every arm in the outage's
+  formfactory, miniwob and clicks also move its record, `results/{formfactory-submissions,miniwob-rewards,click-hits}/
+  <token>.jsonl` (and canvas', popups' and slides' `results/<suite>-state/<token>.json`), or the set-aside run's record
+  is scored with the rerun's; traps' prepare moves an earlier attempt's log to `results/_invalid/trap-logs/` itself. A wifi outage looks the same: set aside the runs of every arm in the outage's
   window, not just the flagged ones, and resume. A run the plan's session limit cuts off part way counts as done, and only the
   next run stops the batch: set aside each run whose transcript says "session limit", as well as the flagged ones.
-- **Cleanup is the runner's.** After each run it stops the run's process group, kills orphaned headless Chromes of
-  Puppeteer, Playwright and agent-browser, closes the agent-browser session, and closes each browserd session the run
-  started on the browserd page (Close session), only those. A run killed by hand leaves its sessions open: close them
-  with `run.close_sessions` on its transcript, and an agent-browser run's with `AGENT_BROWSER_SESSION=<its token>
-  agent-browser close`. Close only a run's own sessions: every other session on the page is the user's.
+- **Cleanup is the runner's.** After each run it stops the run's process tree (`procs.stop_tree`), closes the
+  agent-browser session, and closes each browserd session the run started on the browserd page (Close session), only
+  those. A run killed by hand leaves its sessions open: close them with
+  `run.close_sessions(browserd_call.SESSION.findall(<transcript>), <page>)`, and an agent-browser run's with
+  `AGENT_BROWSER_SESSION=<its token> agent-browser close`. Close only a run's own sessions: every other session on the page is the user's.
 - **A run times out after `run.TIMEOUT` (900s)** and has no result, so it runs again when the experiment is resumed.
 - **An experiment's name is its identity:** running a name again resumes it, keeping its done runs from whatever
   commit made them, so a new measurement needs a new name.

@@ -8,13 +8,15 @@ where it can go wrong:
 
 Each site's storage is cleared first (prepare), so the popup shows as on a first visit; a run whose transcript never
 shows the popup's words says nothing of on, and scores as not shown. Every press is read off the transcript, where its
-report names what it landed on, and the run's tab's URL and page state are read through browserd (collect).
+report names what it landed on; for a task with a state check, the page state of the run's last tab is read through
+browserd (collect).
 """
 import json
 import re
 
 import browserd_call
 import paths
+import transcripts
 
 SYSTEM = ("You are an agent for browser automation. Work from viewport screenshots and click with move_at, click_down "
           "and click_up.")
@@ -26,6 +28,9 @@ CLEAR = ("() => { localStorage.clear(); sessionStorage.clear(); const parts = lo
          "for (const each of document.cookie.split(';')) { const name = each.split('=')[0].trim(); if (!name) continue; "
          "for (const d of ['', ...domains.map(d => '; domain=.' + d)]) "
          "document.cookie = name + '=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/' + d; } return true }")
+# The agent's own words, said back to it: its session's label in saved files' paths, a refused press's on, a find's
+# query. A popup's words found only there do not show it was seen.
+ECHOED = re.compile(r'\S*[\\/]calls[\\/]\S*|, not "[^"]*"|so not whether it is "[^"]*"|lines matching "[^"]*"')
 
 TASKS = {
     "forbes-reject": {
@@ -60,16 +65,16 @@ TASKS = {
     "bbc-accept": {
         "url": "https://www.bbc.com/news",
         "ask": "Accept the terms of use and privacy prompt, so the news page can be read.",
+        # No expect: its buttons are in a frame from another site, where a press is named only by where it is from.
         "seen": r"Terms of Use|privacy",
-        "expect": r"^$",  # in a frame from another site: a press there is named only by where the frame is from
         "state": "() => !!document.querySelector('iframe[src*=\"privacy-mgmt\"], iframe[id^=\"sp_message_iframe\"]')",
         "state_ok": lambda state: state is False,
     },
     "guardian-consent": {
         "url": "https://www.theguardian.com/international",
         "ask": "Close the privacy banner at the bottom of the page.",
-        "seen": r"Do not sell|privacy",
-        "expect": r"^$",
+        # Its banner's words never reach the transcript; its close button reads as "Closer".
+        "seen": r'Do not sell|privacy|button "Closer"',
         "state": "() => !!document.querySelector('iframe[id^=\"sp_message_iframe\"]')",
         "state_ok": lambda state: state is False,
     },
@@ -78,7 +83,6 @@ TASKS = {
         "ask": ("On the home page there are two \"Sign Up Now\" buttons. Click the one for Sephora's text alerts, not the "
                 "one for Same-Day Unlimited, and wait for the page it opens to load."),
         "seen": r"Sign Up Now",
-        "expect": r"^$",
         "state": "() => location.href",
         "state_ok": lambda state: bool(state) and re.search(r"text", state, re.I) is not None
         and re.search(r"same-?day", state, re.I) is None,
@@ -94,34 +98,18 @@ def prompt(task, token=None):
     return "Open %s. %s When you are done, reply DONE." % (task["url"], task["ask"])
 
 
-def prepare(task, mcp_url, profile, token=None):
-    """Clear what the task's site kept, in a session of the runner's own, so its popup shows as on a first visit; the
-    reply holding that session's id, for the runner to close it."""
-    session = browserd_call.start(mcp_url, profile, "bench prepare")
-    text, failed = browserd_call.call(mcp_url, "tab_open", {
-        "session": session, "url": task["url"], "steps": [{"tool": "evaluate_script", "function": CLEAR}]})
-    tab = text.split()[0] if text else None
-    if tab:
-        browserd_call.call(mcp_url, "tab_close", {"session": session, "tabs": [tab]})
+def prepare(task, mcp_url, session, token=None):
+    """Clear what the task's site kept, in the runner's session, so its popup shows as on a first visit."""
+    text, failed = browserd_call.evaluate_once(mcp_url, session, task["url"], CLEAR)
     if failed:
         raise RuntimeError("could not clear %s: %s" % (task["url"], text[:300]))
-    return "session %s, on the " % session
 
 
 def _said(transcript):
-    """Every tool result's text in a transcript, joined: what the run saw of its pages."""
-    out = []
-    for line in transcript.splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        for block in (event.get("message") or {}).get("content") or []:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                inner = block.get("content")
-                out.append(inner if isinstance(inner, str) else "\n".join(
-                    part.get("text", "") for part in inner or [] if isinstance(part, dict)))
-    return "\n".join(out)
+    """Every tool result's text in a transcript, joined, but for the agent's own words said back: what the run saw of
+    its pages."""
+    return ECHOED.sub("", "\n".join(transcripts.text(block) for block in transcripts.blocks(transcript)
+                                     if block.get("type") == "tool_result"))
 
 
 def seen(task, transcript):
@@ -131,17 +119,12 @@ def seen(task, transcript):
 
 def collect(task, token, transcript, mcp_url):
     """The run's presses, whether its popup showed, and its tab's page state, into STATE."""
-    record = {"presses": browserd_call.presses(transcript), "seen": seen(task, transcript),
-              "state": None}
+    record = {"presses": transcripts.presses(transcript), "seen": seen(task, transcript), "state": None}
     started = browserd_call.SESSION.findall(transcript)
     if started and "state" in task:
-        session = started[0]
-        listed, _ = browserd_call.call(mcp_url, "tab_list", {"session": session})
-        tabs = [line.split()[0] for line in listed.splitlines() if line.strip()]
+        tabs = browserd_call.tabs(mcp_url, started[0])
         if tabs:
-            text, failed = browserd_call.call(mcp_url, "queue", {
-                "session": session, "tab": tabs[-1], "steps": [{"tool": "evaluate_script", "function": task["state"]}]})
-            record["state"] = None if failed else browserd_call.returned(text)
+            record["state"] = browserd_call.evaluate(mcp_url, started[0], tabs[-1][0], task["state"])
     STATE.mkdir(parents=True, exist_ok=True)
     (STATE / ("%s.json" % token)).write_text(json.dumps(record, indent=2), encoding="utf-8")
 
@@ -151,11 +134,8 @@ def score(task, answer, token=None):
     record = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"presses": {}, "seen": False}
     # Where each press, or each click by uid, landed, as browserd's report or the uid's snapshot line names it.
     landed = record["presses"].get("landed", []) + record["presses"].get("clicked", [])
-    hit = any(re.search(task["expect"], each, re.I) for each in landed) if task["expect"] != r"^$" else False
-    wrong = any(re.search(task["avoid"], each, re.I) for each in landed) if "avoid" in task else False
+    hit = "expect" in task and any(re.search(task["expect"], each, re.I) for each in landed)
+    wrong = "avoid" in task and any(re.search(task["avoid"], each, re.I) for each in landed)
     state_ok = task["state_ok"](record.get("state")) if "state_ok" in task else False
-    presses = record["presses"]
-    return {"passed": bool(record.get("seen")) and (hit or state_ok) and not wrong, "seen": bool(record.get("seen")),
-            "wrong": wrong, "sent": presses.get("sent", 0), "named": presses.get("named", 0),
-            "empty": presses.get("empty", 0), "refusals": len(presses.get("refused", [])),
-            "uid_clicks": presses.get("uid_clicks", 0)}
+    return dict({"passed": bool(record.get("seen")) and (hit or state_ok) and not wrong,
+                 "seen": bool(record.get("seen")), "wrong": wrong}, **transcripts.counts(record["presses"]))
