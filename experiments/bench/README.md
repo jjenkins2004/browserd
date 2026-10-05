@@ -18,29 +18,36 @@ The suites, each `--suite` of `run.py`:
 | `webgames` | widgets, timing, games, puzzles | 51 | the challenge's password in the answer |
 | `miniwob` | synthetic form and widget drills | 38 × 2 seeds | the page's own reward |
 | `clicks`, `haystack` | click accuracy on small targets; finding a fact on long pages | 9; 12 | the bench's own |
+| `canvas` | pixel clicks in apps that draw (Excalidraw, Desmos, GeoGebra, diagrams.net, Maps, EtherCalc) | 6 | the app's own state, read through browserd after the run |
 
 The last run (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`. `miniwob` (drills) and `botwall`
 have not been run in full.
 
-    experiments/bench/setup.sh                              fill the data folder once
-    experiments/bench/sites.sh start                        the local sites the suites need (WebGames, FormFactory, MiniWoB++, ...)
-    python3 experiments/bench/nextserver.py --tree <tree>   browserd from a worktree of its own, on 9250, for the next arm
-    experiments/bench/chain.sh <name> <arms> "<suite>[:<run.py args>]"...     suites one after another, detached
-    python3 experiments/bench/run.py --exp <name> --suite <suite> --arms <arms>
-                                                            one suite, in the foreground; always pass --arms, whose default is
-                                                            every arm, the main server's included
-    python3 experiments/bench/report.py <exp>               score an experiment, compare its arms
-    experiments/bench/sites.sh stop
+    python experiments/bench/setup.py                      fill the data folder once
+    python experiments/bench/sites.py start                the local sites the suites need (WebGames, FormFactory, MiniWoB++, ...)
+    python experiments/bench/nextserver.py --tree <tree>   browserd from a worktree of its own, on 9250, for the next arm
+    python experiments/bench/chain.py <name> <arms> "<suite>[:<run.py args>]"...     suites one after another, detached
+    python experiments/bench/run.py --exp <name> --suite <suite> --arms <arms>
+                                                           one suite, in the foreground; always pass --arms, whose default is
+                                                           every arm, the main server's included
+    python experiments/bench/report.py <exp>               score an experiment, compare its arms
+    python experiments/bench/sites.py stop
+
+Everything runs the same on macOS, Linux and Windows; `procs.py` is the one place that differs by OS (how a process
+tree is started and stopped, and Windows' `.cmd` shims).
 
 ## Directory Layout
 
     bench/
       README.md       this file
       paths.py        where the code (BENCH, ROOT) and the data (DATA, RESULTS) are
-      setup.sh        clones each benchmark at its pinned commit, builds WebGames, fetches its tasks, Flask venv
-      sites.sh        start|stop the local sites, detached, logs in the data folder
-      chain.sh        several suites as one detached batch, each resumed once if it stops
+      setup.py        clones each benchmark at its pinned commit, builds WebGames, fetches its tasks, Flask venv
+      sites.py        start|stop the local sites, detached, logs in the data folder
+      chain.py        several suites as one detached batch, each resumed once if it stops
       run.py          ARMS, the claude -p call, 2 runs at a time, cleanup, the stops
+      procs.py        a process tree started and stopped the same way on every OS; Windows' .cmd shims
+      browserd_call.py  one browserd tool call from the bench's own code: a suite's prepare and collect
+      canvas.py       suite canvas: pixel clicks in drawing apps, graded from the app's state
       report.py       results/<exp>/scores.json, the per-arm summary, the task-by-arm table
       nextserver.py   browserd from a worktree on 9250/9251, beside the main server
       tasks.py        suite mcpuniverse: MCP-Universe's tasks, prompt and scoring, and tasks.lenient
@@ -55,7 +62,7 @@ have not been run in full.
       allow.py        the claudechrome arm's --permission-prompt-tool: allows every permission prompt
       clickserver.py  the clicks page on 4395
       hayserver.py    the haystack pages on 4396
-      assets/         sample.pdf, which setup.sh copies to the data folder's assets/
+      assets/         sample.pdf, which setup.py copies to the data folder's assets/
       tools/          analyze.py (tool use by arm), paired.py (sign tests), miscalls.py, cheats.py, ffmap.py
       probes/         the pairing bug's replays and probes (../findings/benchmark.md, "The pairing bug")
 
@@ -63,9 +70,9 @@ have not been run in full.
       results/<exp>/  config.json, one <arm>/<task>-r<n>.jsonl transcript and .err per run, scores.json
       results/<exp>.log, results/chain.log      each run's line; each chain's starts, stops and ends
       results/_invalid/<exp>-<why>/             runs set aside (a broken setup, an outage), never deleted
-      MCP-Universe/, formfactory/, webgames/, miniwob-plusplus/    the benchmarks' repos, from setup.sh
+      MCP-Universe/, formfactory/, webgames/, miniwob-plusplus/    the benchmarks' repos, from setup.py
       webgames-data/hf-test.jsonl, .venv/, *.log
-      assets/sample.pdf                         formfactory.UPLOAD, from setup.sh
+      assets/sample.pdf                         formfactory.UPLOAD, from setup.py
 
 ## Core Abstractions & Shared Pieces
 
@@ -120,17 +127,15 @@ have not been run in full.
 
 ## Agent Gotchas & Invariants (⚠️)
 
-- **One batch at a time, 2 runs at a time.** A batch of 6 at a time that cleaned nothing up ran the Mac out of memory,
-  so `run.py` refuses to start beside other `claude -p` processes (unless `--beside`), runs `--jobs 2`, and starts a
-  run only with `FREE_LEAST` (25%) of memory free, waiting up to `FREE_WAIT` (10 minutes) before the batch stops. It
-  checks for other batches only as it starts: anything else heavy started later (other agents on browserd) can still
-  run the Mac out of memory, as a job-application batch of 5 agents did on 2026-09-28.
+- **One batch at a time, 2 runs at a time.** A batch of 6 at a time that cleaned nothing up ran a Mac out of memory,
+  and several agents opening heavy pages at once crashed a profile's Chrome out of memory on Windows (2026-10-04), so
+  run `--jobs 2` or fewer, and one batch at a time; `run.py` no longer checks memory or other batches itself.
 - **Never restart the main server (9230) for a run.** Measure a commit with the `next` arm: a worktree of its own
   served by `nextserver.py --tree`, which uses that worktree's own `.run/` (state, profiles, records). Never serve the
   checkout 9230 runs from: the two servers would share its `.run/`. A bench profile takes a Chrome port from
   `nextserver.BENCH_PORT` (9240) up, since the main server gives its own profiles the first free ports from 9223, and
   a profile it made later once took the Bench Chrome's port.
-- **Start long batches detached** (`chain.sh` does it itself): a batch started as a background task of a Claude Code
+- **Start long batches detached** (`chain.py` does it itself): a batch started as a background task of a Claude Code
   session dies with that session's window, as one did on 2026-09-28.
 - **Runs start in the data folder** (`cwd=paths.DATA`): `claude -p --setting-sources project` loads the settings of
   the folder it runs in, so a run started in the repo would load the repo's.

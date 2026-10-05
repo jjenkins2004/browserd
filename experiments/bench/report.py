@@ -18,7 +18,7 @@ def read_run(path):
     """What one transcript says: the final answer and the run's cost, turns, time, tokens and tool calls."""
     run = {"answer": None, "end": "no result", "turns": None, "cost": 0.0, "seconds": None,
            "tokens_in": 0, "tokens_out": 0, "tool_calls": 0, "tool_errors": 0}
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
         event = json.loads(line)
@@ -46,7 +46,7 @@ def _median(values):
 
 def main():
     exp = paths.RESULTS / sys.argv[1]
-    suite = run.SUITES[json.loads((exp / "config.json").read_text()).get("suite", "mcpuniverse")]
+    suite = run.SUITES[json.loads((exp / "config.json").read_text(encoding="utf-8", errors="replace")).get("suite", "mcpuniverse")]
     all_tasks = suite.load()
     runs = []
     for path in sorted(exp.glob("*/*.jsonl")):
