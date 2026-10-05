@@ -1,7 +1,6 @@
-#!/usr/bin/env python3
 """MiniWoB++'s task pages on 127.0.0.1:4390, each run's reward saved under its token.
 
-    python3 mwserver.py
+    python experiments/bench/sites.py start
 
 Every miniwob/<task>.html is served with HOOK added before </body>, after the task's own scripts and before its
 window.onload starts the episode. HOOK starts the episode at once (no START cover), seeded by the page's ?seed=,

@@ -1,10 +1,9 @@
-#!/usr/bin/env python3
 """The click-accuracy page on 127.0.0.1:4395: numbered squares of 4, 8, 16 and 32 px drawn on a canvas, where only
 pixels reach them (no uid), each trusted click on it saved under the run's token.
 
-    python3 clickserver.py
+    python experiments/bench/sites.py start
 
-GET /?run=<token>&seed=<n> draws TARGETS squares at seeded places, POSTs their layout to /layout, and POSTs each
+GET /?run=<token>&seed=<n> draws 12 squares at seeded places, POSTs their layout to /layout, and POSTs each
 trusted click on the canvas to /click. Both land in results/click-hits/<token>.jsonl.
 """
 import http.server

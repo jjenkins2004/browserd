@@ -3,14 +3,14 @@
 T3, a press whose release a layer took. Given a run's token, it also checks that run's real log: that each press's
 logged target is what the layout history held at that time and point, and is the element the browser hit.
 
-    python3 tools/trapcheck.py [<token>]
+    python experiments/bench/tools/trapcheck.py [<token>]
 """
 import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import traps  # noqa: E402
+from suites import traps  # noqa: E402
 
 ITEMS = [["canvas", 0, 100, 600, 300, None, None], ["cell:B2", 100, 140, 40, 40, None, None],
          ["cell:B1", 100, 100, 40, 40, None, None], ["check:Autosave", 400, 150, 120, 22, None, None],

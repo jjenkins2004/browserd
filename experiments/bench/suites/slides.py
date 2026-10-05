@@ -168,12 +168,12 @@ def deck(token):
     return [each for each in made if each["token"] == token][-1]
 
 
-def prompt(task, token=None):
+def prompt(task, token):
     return ("Open %s, a new, blank Google Slides presentation. If a \"Getting started\" dialog shows over it, close it. "
             "%s When you are done, reply DONE." % (deck(token)["url"], task["ask"].format(token=token or "")))
 
 
-def prepare(task, mcp_url, session, token=None):
+def prepare(task, mcp_url, session, token):
     """Make the run's deck, titled title(token), in the runner's session, and log it in DECKS."""
     text, failed = browserd_call.evaluate_once(mcp_url, session, CREATE + urllib.parse.quote(title(token)), STATUS)
     page = None if failed else browserd_call.returned(text)
@@ -350,7 +350,7 @@ def collect(task, token, transcript, mcp_url):
     path.write_text(json.dumps(record, indent=2), encoding="utf-8")
 
 
-def score(task, answer, token=None):
+def score(task, answer, token):
     path = STATE / ("%s.json" % token)
     record = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"state": None, "presses": {}}
     return dict({"passed": bool(task["passed"](record["state"], token)), "read": record["state"] is not None},

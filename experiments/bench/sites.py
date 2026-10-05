@@ -22,11 +22,12 @@ PIDS = paths.DATA / "sites.json"
 SITES = {  # name: (port, folder, command)
     "webgames-preview": (4380, paths.DATA / "webgames" / "webgames",
                          ["pnpm", "exec", "vite", "preview", "--host", "127.0.0.1", "--port", "4380", "--strictPort"]),
-    "ffserver": (5055, paths.BENCH, [procs.venv_python(paths.DATA / ".venv"), "ffserver.py"]),  # Flask, from setup.py
-    "mwserver": (4390, paths.BENCH, [sys.executable, "mwserver.py"]),
-    "clickserver": (4395, paths.BENCH, [sys.executable, "clickserver.py"]),
-    "hayserver": (4396, paths.BENCH, [sys.executable, "hayserver.py"]),
-    "trapserver": (4397, paths.BENCH, [sys.executable, "trapserver.py"]),
+    # Flask, in the venv setup.py makes.
+    "ffserver": (5055, paths.BENCH, [procs.venv_python(paths.DATA / ".venv"), "-m", "suites.ffserver"]),
+    "mwserver": (4390, paths.BENCH, [sys.executable, "-m", "suites.mwserver"]),
+    "clickserver": (4395, paths.BENCH, [sys.executable, "-m", "suites.clickserver"]),
+    "hayserver": (4396, paths.BENCH, [sys.executable, "-m", "suites.hayserver"]),
+    "trapserver": (4397, paths.BENCH, [sys.executable, "-m", "suites.trapserver"]),
 }
 
 

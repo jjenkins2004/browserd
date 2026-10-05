@@ -2,7 +2,7 @@
 
 A run passes when its episode's raw reward, as the task's own script gave it, is above 0. The server must be up:
 
-    python3 mwserver.py
+    python experiments/bench/sites.py start
 """
 import json
 import urllib.request

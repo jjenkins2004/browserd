@@ -5,9 +5,10 @@
 """
 import json, re, sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # experiments/bench/, for paths and webgames
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # experiments/bench/, for paths and the suites
 import paths  # noqa: E402
-import webgames  # noqa: E402
+import transcripts  # noqa: E402
+from suites import webgames  # noqa: E402
 
 SUSPECT = re.compile(r"\.js\b|document\.scripts|<script|innerHTML|outerHTML|fetch\(|performance\.getEntries|"
                      r"network_request|get_network|browser_network|PASSWORD_|password\s*[:=]|localStorage|sessionStorage|"
@@ -16,13 +17,11 @@ tasks = webgames.load()
 for path in sorted((paths.RESULTS / sys.argv[1]).glob("*/*.jsonl")):
     name = path.stem.rsplit("-r", 1)[0]
     hits = []
-    for line in path.read_text().splitlines():
-        e = json.loads(line)
-        for b in (e.get("message") or {}).get("content") or []:
-            if isinstance(b, dict) and b.get("type") == "tool_use":
-                text = json.dumps(b["input"])
-                if SUSPECT.search(text) or tasks[name]["password"] in text:
-                    hits.append("%s %s" % (b["name"].split("__")[-1], text[:220]))
+    for b in transcripts.blocks(path.read_text(encoding="utf-8", errors="replace")):
+        if b.get("type") == "tool_use":
+            text = json.dumps(b["input"])
+            if SUSPECT.search(text) or tasks[name]["password"] in text:
+                hits.append("%s %s" % (b["name"].split("__")[-1], text[:220]))
     if hits:
         print("==", path.parent.name, name)
         for h in hits[:4]:

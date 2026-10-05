@@ -10,15 +10,15 @@ the user's own browsing.
 ## Directory Layout
 
     experiments/
-      bench/      the benchmarks against other browser MCP servers: suites, arms, runner, scoring
-      findings/   what each experiment found, one write-up per experiment; benchmark.md is bench/'s
+      bench/      the runner, its suites, arms and scoring: browserd against other browser MCP servers, and against
+                  variants of itself
+      findings/   what each experiment found, one write-up per experiment
       long-tasks/ long, bounded tasks on real sites in the user's own Chrome, for a demo video, with answer keys
 
 ## Core Abstractions & Shared Pieces
 
 - Code here that imports browserd's own modules puts the checkout root on the import path itself (long-tasks'
-  scripts, `bench/probes/served.py`; `nextserver.py` takes a worktree's); `bench/paths.py`'s `ROOT` is that root for the
-  bench's own use.
+  scripts; `nextserver.py` takes a worktree's); `bench/paths.py`'s `ROOT` is that root for the bench's own use.
 - Write-ups in `findings/` name the code they measured by path, from the repo root or relative to `findings/`.
 
 ## Agent Gotchas & Invariants (⚠️)

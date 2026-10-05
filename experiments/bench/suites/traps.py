@@ -17,7 +17,7 @@ T6 and the controls go up 0, 225 or 750 ms after the input that sets them off, b
 click and key with what its own layout held there, its layout history and each trap's onset; score reads that log. The
 page must be up first:
 
-    python3 trapserver.py
+    python experiments/bench/sites.py start
 
 The log, results/trap-logs/<token>.jsonl, one event per line, each with run, load (one page load), seq, t (epoch ms,
 strictly increasing within a load):
@@ -39,7 +39,7 @@ strictly increasing within a load):
 import json
 import urllib.request
 
-import trapserver
+from suites import trapserver
 
 BASE = "http://127.0.0.1:%d" % trapserver.PORT
 LOGS = RECORDS = trapserver.LOGS
@@ -59,7 +59,7 @@ def load():
     return {"seed-%d" % seed: {"seed": seed} for seed in SEEDS}
 
 
-def prompt(task, token=None):
+def prompt(task, token):
     return TASK_PROMPT.format(url="%s/?run=%s&seed=%d" % (BASE, token, task["seed"]), n=TASKS)
 
 
@@ -109,7 +109,7 @@ def _stale(events, shown):
     return count
 
 
-def score(task, answer, token=None):
+def score(task, answer, token):
     return tally(runs(token))
 
 
@@ -156,6 +156,7 @@ def check():
     try:
         page = urllib.request.urlopen(BASE + "/", timeout=5).read()
     except OSError as error:
-        raise SystemExit("the trap editor is not up on %s (%s): start experiments/bench/trapserver.py" % (BASE, error))
+        raise SystemExit("the trap editor is not up on %s (%s): run python experiments/bench/sites.py start"
+                         % (BASE, error))
     if b"Draftpad" not in page:
         raise SystemExit("%s is not the trap editor" % BASE)

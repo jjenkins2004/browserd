@@ -36,7 +36,7 @@ def main():
         (paths.DATA / folder).mkdir(parents=True, exist_ok=True)
     upload = paths.DATA / "assets" / "sample.pdf"  # formfactory.UPLOAD
     if not upload.exists():
-        shutil.copy(paths.BENCH / "assets" / "sample.pdf", upload)
+        shutil.copy(paths.BENCH / "suites" / "sample.pdf", upload)
 
     for folder, (repo, commit) in REPOS.items():
         if not (paths.DATA / folder / ".git").exists():

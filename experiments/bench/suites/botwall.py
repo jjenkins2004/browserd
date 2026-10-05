@@ -41,11 +41,11 @@ def load():
     return {name: {"url": url, "query": query} for name, (url, query) in SITES.items()}
 
 
-def prompt(task, token=None):
+def prompt(task, token):
     return PROMPT.format(**task)
 
 
-def score(task, answer, token=None):
+def score(task, answer, token):
     try:
         text = (answer or "").strip().strip("`").strip()
         decoded = json.loads(text[4:] if text.startswith("json") else text)

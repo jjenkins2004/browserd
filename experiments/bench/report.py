@@ -19,10 +19,7 @@ def read_run(path):
     """What one transcript says: the final answer and the run's cost, turns, time, tokens and tool calls."""
     run = {"answer": None, "end": "no result", "turns": None, "cost": 0.0, "seconds": None,
            "tokens_in": 0, "tokens_out": 0, "tool_calls": 0, "tool_errors": 0}
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
-        event = json.loads(line)
+    for event in transcripts.events(path.read_text(encoding="utf-8", errors="replace")):
         content = (event.get("message") or {}).get("content")
         if isinstance(content, list):
             for block in content:
@@ -76,7 +73,7 @@ def main():
             sum(r["tool_calls"] == 0 for r in mine), ends))
         judged = [r["lenient"] for r in mine if r.get("lenient") is not None]
         if judged:
-            print("%-11s lenient %d/%d (%.0f%%), formatting forgiven, NO_LENIENT left out (tasks.lenient)" % (
+            print("%-11s lenient %d/%d (%.0f%%), formatting forgiven, NO_LENIENT left out (mcpuniverse.lenient)" % (
                 "", sum(judged), len(judged), 100 * sum(judged) / len(judged)))
         if "fields" in mine[0]:
             print("%-11s fields right %d/%d (%.0f%%), submitted %d/%d" % (

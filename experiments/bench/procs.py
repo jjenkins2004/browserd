@@ -1,5 +1,5 @@
 """Starting a program as its own process tree, and stopping that whole tree, the same way on every OS: the one place
-the bench meets how each OS groups processes and lays out a venv.
+the bench meets how each OS groups processes, starts a .cmd shim, keeps the machine awake and lays out a venv.
 
     proc = subprocess.Popen(command(["claude", "-p"]), **TREE)
     stop_tree(proc.pid)

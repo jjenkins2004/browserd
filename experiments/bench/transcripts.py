@@ -1,4 +1,5 @@
-"""What a run did, read off its claude -p stream-json transcript: every content block, and what its presses did.
+"""What a run did, read off its claude -p stream-json transcript: its events and content blocks, and what its
+presses did.
 
     record = {"presses": presses(transcript)}
     score = dict({"passed": ...}, **counts(record["presses"]))
@@ -17,13 +18,18 @@ CLICK_RAN = re.compile(r"^--- (\d+) click ok ", re.M)  # a queue's report of a c
 STOPPED = re.compile(r"^--- stopped ", re.M)
 
 
-def blocks(transcript):
-    """Every content block of a run's transcript, in order."""
+def events(transcript):
+    """A transcript's events, passing over a line that is not JSON, as the last of a run stopped mid-write is."""
     for line in transcript.splitlines():
         try:
-            event = json.loads(line)
+            yield json.loads(line)
         except ValueError:
             continue
+
+
+def blocks(transcript):
+    """Every content block of a run's transcript, in order."""
+    for event in events(transcript):
         content = (event.get("message") or {}).get("content")
         yield from content if isinstance(content, list) else []
 

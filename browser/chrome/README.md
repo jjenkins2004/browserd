@@ -25,8 +25,8 @@ it first.
   and one `downloads.Folder` thread per running Chrome, and on one `downloads.Watcher` thread per tab with a process.
   So `Chromes` takes a lock per Chrome folder to start or quit it, `opens.tab` one to open the placeholder, and
   `profiles.make` one to pick a port.
-- **`launch.launch`** is also called by the checks' throwaway Chrome (`../../tests/throwaway.py`), `check_browser.py`
-  and the bench's probes, so a switch every profile's Chrome needs goes in `launch._open`.
+- **`launch.launch`** is also called by the checks' throwaway Chrome (`../../tests/throwaway.py`) and
+  `check_browser.py`, so a switch every profile's Chrome needs goes in `launch._open`.
 - **Downloads**: a Chrome's `downloads.Folder` (started by `Chromes`) sets where it saves and hears where each file
   went; each tab's `downloads.Watcher` (started by its `Worker`, `../tabs/`) hears what the tab begins and asks the
   Folder; `steps.run` reports it after each step (`../steps/`).

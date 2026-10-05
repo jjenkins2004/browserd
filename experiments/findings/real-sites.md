@@ -1,7 +1,8 @@
 # Findings: the click guard on real sites
 
 Run 2026-09-26. Follows [click-guard.md](click-guard.md), where B (a check before every `click_at`) won on a made-up
-app with settings tuned on a lab page. The plan, with every rule fixed before the counted runs and a record of each
+app with settings tuned on a lab page. B was built into browserd with the selection below (238a58a) and removed in
+7dc5101 ([text-check.md](text-check.md)). The plan, with every rule fixed before the counted runs and a record of each
 change, is kept with the raw data, as `EXPERIMENT-real-sites.md` in `.run/experiments/archive-2026-09-26/`.
 
 ## The result
@@ -89,8 +90,8 @@ data they are scored on, or sites that never show a popup.
 
 ### Ground truth: what a click at a point would reach
 
-Truth is computed from the DOM (`browser/truth.py`), never from the detectors' signals, so it cannot agree with them
-by construction.
+Truth is computed from the DOM (`truth.py`, in the archive above), never from the detectors' signals, so it cannot agree
+with them by construction.
 
 - **The target at a point** is the first of:
   1. the nearest actionable ancestor: a link, button, input, select, textarea, summary or label, a contenteditable

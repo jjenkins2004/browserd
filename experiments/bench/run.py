@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run each task through `claude -p` once per arm and repeat: same model, same prompt, only the browser MCP differs.
 
-    python experiments/bench/run.py --exp probe1 [--suite mcpuniverse] [--arms next,playwright] [--k 1] [--jobs 2] [--tasks sports]
+    python experiments/bench/run.py --exp probe1 --arms next,playwright [--suite mcpuniverse] [--k 1] [--jobs 2] [--tasks sports]
 
 Each run's stream-json transcript lands in the data folder's results/<exp>/<arm>/<task>-r<n>.jsonl. A run whose
 transcript already ends in a result is skipped, so running the same --exp again finishes what is missing.
@@ -19,7 +19,6 @@ import concurrent.futures
 import contextlib
 import hashlib
 import io
-import uuid
 import json
 import os
 import re
@@ -31,27 +30,16 @@ import typing
 import urllib.error
 import urllib.request
 
-import botwall
 import browserd_call
-import formfactory
-import haystack
 import paths
 import procs
-import canvas
-import clicks
-import miniwob
-import pagenow
-import popups
-import slides
-import traps
-import tasks
-import webgames
+import transcripts
+from suites import (botwall, canvas, clicks, formfactory, haystack, mcpuniverse, miniwob, popups, slides, traps,
+                    webgames)
 
-SUITES = {"mcpuniverse": tasks, "webgames": webgames, "formfactory": formfactory, "botwall": botwall, "miniwob": miniwob,
-          "clicks": clicks, "haystack": haystack, "canvas": canvas,
-          "popups": popups, "slides": slides,
-          "traps": traps, "pagenow": pagenow}
-
+SUITES = {"mcpuniverse": mcpuniverse, "webgames": webgames, "formfactory": formfactory, "botwall": botwall,
+          "miniwob": miniwob, "clicks": clicks, "haystack": haystack, "canvas": canvas, "popups": popups,
+          "slides": slides, "traps": traps}
 
 
 def _browserd(port, profile):
@@ -62,27 +50,18 @@ def _browserd(port, profile):
 
 
 ARMS = {
+    # The main server, on the research profile, for canvas and popups.
     "browserd": _browserd(9230, "research"),
     # browserd from the worktree nextserver.py serves, beside the main server, on a Chrome of its own.
     "next": _browserd(9250, "Bench"),
-    # The same server as next: benchmark-fixes with the view cap, on 9250.
-    "cap": _browserd(9250, "Bench"),
     # The main server, on the profile signed in to Google, for suites that need a login (slides).
     "experiments": _browserd(9230, "experiments"),
-    # The text-check experiment's three arms: main as it is (click_down's on), main without on, and main with the click
-    # guard back in on's place; each a worktree of its own (browserd-arm-<name>) served by nextserver.py. Their
+    # The text-check experiment's three arms: main at 94ba345 (click_down's on), main without on, and main with the
+    # click guard back in on's place; each a worktree of its own (browserd-arm-<name>) served by nextserver.py. Their
     # profiles' names say nothing of the arm, since the agent reads them.
     "trap-on": _browserd(9250, "BenchA"),
     "trap-none": _browserd(9260, "BenchB"),
     "trap-guard": _browserd(9270, "BenchC"),
-    # The page-now experiment's three arms (../findings/page-now.md): each a worktree of its own (browserd-pn-<letter>)
-    # served by nextserver.py; which stop reply each gives is in the data folder's arms.json, never in what the agent
-    # sees.
-    "pn-a": _browserd(9310, "PnA"),
-    "pn-b": _browserd(9320, "PnB"),
-    "pn-c": _browserd(9330, "PnC"),
-    # benchmark-fixes before the view cap (the browserd-nocap worktree), on 9260, on a Chrome of its own.
-    "nocap": _browserd(9260, "Bench2"),
     "playwright": {
         # MCP-Universe's own entry for this domain, mcpuniverse/mcp/configs/server_list.json, with its @latest pinned
         # so a release mid-batch cannot change the arm.
@@ -151,17 +130,8 @@ def finished(path):
     if not path.exists():
         return False
     text = path.read_text(encoding="utf-8", errors="replace")
-    return (any(event.get("type") == "result" for event in _events(text))
+    return (any(event.get("type") == "result" for event in transcripts.events(text))
             and not any(line in text for line in BROKEN) and refusal(text) is None)
-
-
-def _events(text):
-    """A transcript's events, passing over a line that is not JSON, as the last of a run stopped mid-write is."""
-    for line in text.splitlines():
-        try:
-            yield json.loads(line)
-        except ValueError:
-            continue
 
 
 def refusal(text):
@@ -172,7 +142,7 @@ def refusal(text):
         text (str): the run's stream-json transcript.
     """
     called, result = False, None
-    for event in _events(text):
+    for event in transcripts.events(text):
         content = (event.get("message") or {}).get("content")
         blocks = content if isinstance(content, list) else []
         called = called or any(block.get("type") == "tool_use" for block in blocks)
@@ -192,7 +162,7 @@ def reached_browser(text):
         text (str): the run's stream-json transcript.
     """
     names, tried = {}, False
-    for event in _events(text):
+    for event in transcripts.events(text):
         if event.get("subtype") == "init" and any(server.get("status") != "connected"
                                                   for server in event.get("mcp_servers", [])):
             return False
@@ -315,15 +285,8 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
            "--tools", "",
            "--permission-mode", "bypassPermissions",
            "--setting-sources", "project",
+           "--no-session-persistence",
            "--max-turns", str(max_turns)])
-    if getattr(suite, "SESSIONS", False):
-        # Kept, under an id of this launch's own written beside its transcript, so the run can be forked at a step of
-        # its own (pnfork.py); and each message's final usage, which only the partial messages carry.
-        session = str(uuid.uuid4())
-        path.with_suffix(".session").write_text(session, encoding="utf-8")
-        cmd += ["--session-id", session, "--include-partial-messages"]
-    else:
-        cmd += ["--no-session-persistence"]
     cmd += arm.get("flags", [])
     cmd += ["--append-system-prompt", " ".join(filter(None, [suite.SYSTEM, arm["system"]]))]
     started = time.time()
@@ -412,7 +375,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp", required=True)
     parser.add_argument("--suite", default="mcpuniverse", choices=SUITES)
-    parser.add_argument("--arms", default=",".join(ARMS))
+    parser.add_argument("--arms", required=True, help="comma-separated names from ARMS")
     parser.add_argument("--k", type=int, default=1)
     parser.add_argument("--jobs", type=int, default=2)
     parser.add_argument("--model", default="claude-sonnet-5")

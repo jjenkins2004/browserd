@@ -175,16 +175,16 @@ Fixed after the runs, against v5:
 - v4 and v5 ran after `base` finished, not beside it, on live sites that can change.
 - Both arms used fresh Chromes, BenchB and BenchD, not Research with its history.
 - Hidden output counts tool arguments at 3.5 characters a token: an estimate.
-- The bench's `run.py` stops a batch on any transcript holding "Not logged in". It stopped `desc4`'s first batch on an
-  agent's "Not logged into Hugging Face". From then on the runs used a wrapper, `runbench.py`, that matches claude
-  -p's own line, "Not logged in · Please run /login"; `run.py` still has the loose match.
+- The bench's `run.py` of the time stopped a batch on any transcript holding "Not logged in". It stopped `desc4`'s first
+  batch on an agent's "Not logged into Hugging Face". From then on the runs used a wrapper, `runbench.py`, that matches
+  claude -p's own line, "Not logged in · Please run /login", as `run.py` has since it moved into the repo (5576cbb).
 - One batch stopped on a single `/json/version` timeout from BenchB's Chrome, which answered again at once. Its run
   ran again.
 
 ## Next
 
-- Cut what a page costs to read, not what the tool text says. The 10,000-character view cut on branch
-  `benchmark-fixes` (b5019bd) measured 38% fewer input tokens on 40- and 80-section pages. `tab_open` could also
-  return a short view without being given a step: on main, 30 of 117 tab_opens carried none.
+- Cut what a page costs to read, not what the tool text says. The 10,000-character view cut (b5019bd, since merged into
+  main) measured 38% fewer input tokens on 40- and 80-section pages. `tab_open` could also return a short view without
+  being given a step: on main, 30 of 117 tab_opens carried none.
 - Blind reviewers find what reads badly, but before a sentence is cut, check in git why it was added: text that
   reads as jargon can be what prevents a mistake.

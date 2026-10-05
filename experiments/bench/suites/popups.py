@@ -95,11 +95,11 @@ def load():
     return dict(TASKS)
 
 
-def prompt(task, token=None):
+def prompt(task, token):
     return "Open %s. %s When you are done, reply DONE." % (task["url"], task["ask"])
 
 
-def prepare(task, mcp_url, session, token=None):
+def prepare(task, mcp_url, session, token):
     """Clear what the task's site kept, in the runner's session, so its popup shows as on a first visit."""
     text, failed = browserd_call.evaluate_once(mcp_url, session, task["url"], CLEAR)
     if failed:
@@ -130,7 +130,7 @@ def collect(task, token, transcript, mcp_url):
     (STATE / ("%s.json" % token)).write_text(json.dumps(record, indent=2), encoding="utf-8")
 
 
-def score(task, answer, token=None):
+def score(task, answer, token):
     path = STATE / ("%s.json" % token)
     record = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"presses": {}, "seen": False}
     # Where each press, or each click by uid, landed, as browserd's report or the uid's snapshot line names it.

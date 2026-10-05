@@ -36,11 +36,11 @@ def homepage(task):
     return "%s/%s" % (BASE, task["path"].replace("*", ""))
 
 
-def prompt(task, token=None):
+def prompt(task, token):
     return TASK_PROMPT.format(description=task["description"], homepage=homepage(task))
 
 
-def score(task, answer, token=None):
+def score(task, answer, token):
     return {"passed": task["password"] in (answer or "")}
 
 

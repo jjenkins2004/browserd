@@ -20,7 +20,7 @@ median MCP-Universe run went from 35s to 21s and its FormFactory run from 41s to
 23s to 20s; the first comparison ran 4 to 6 at a time, the final run 2).
 
 The bench is `../bench/`, whose README says how to run it:
-- transcripts and scores are in its data folder (`paths.DATA`: `../browserd-bench` beside the repo, or
+- transcripts and scores are in its data folder (`paths.DATA`: `browserd-bench` beside the repo, or
   `$BROWSERD_BENCH_DATA`), one folder per experiment in `results/`:
   - `probe1/` (MCP-Universe), `ff1/` (FormFactory), `wg1/` (WebGames): the first comparison;
   - `fix8/` (MCP-Universe after the fixes), `clicks1/` (click accuracy), `hay1/` (the view cap);
@@ -28,10 +28,9 @@ The bench is `../bench/`, whose README says how to run it:
     and `final-ff/` (the 2026-09-28 run), `fillrun-ff/` (fills read in one call);
   - `final2-mcpuniverse/`, `final2-formfactory/`, `final2-webgames/`: the final run;
   - `_invalid/`, the runs thrown out (below);
-- `../bench/report.py <exp>` scores an experiment; `../bench/tools/analyze.py` breaks down its tool use, and
-  `../bench/tools/miscalls.py` counts calls of a name browserd does not serve;
-- `../bench/probes/` holds `replay*.py`, `pairrepro.py`, `attach.py` and `pp*.mjs`, the pairing bug's replays and probes
-  (below).
+- `../bench/report.py <exp>` scores an experiment and `../bench/tools/analyze.py` breaks down its tool use;
+  `tools/miscalls.py`, which counted calls of a name browserd does not serve, and `probes/`, the pairing bug's replays
+  and probes (below), are in `../bench/` at b58ef7b.
 
 The tool-description experiment that followed is [queue-descriptions.md](queue-descriptions.md).
 
@@ -45,8 +44,8 @@ The tool-description experiment that followed is [queue-descriptions.md](queue-d
   - `playwright`: `npx @playwright/mcp@latest --headless --isolated` (0.0.82), MCP-Universe's own config.
   - `devtools`: browserd's own pinned chrome-devtools-mcp 1.9.0, stock, `--headless --isolated`: the engine under
     browserd's queue without browserd, so browserd against devtools isolates what browserd's layer adds.
-  - `next` (the reruns): the `benchmark-fixes` branch served from its worktree on 9250 by `nextserver.py`, profile
-    Bench, so the main server on 9230 was never restarted. From 2026-09-28 it serves main.
+  - `next` (the reruns): the `benchmark-fixes` branch (since merged into main) served from its worktree on 9250 by
+    `nextserver.py`, profile Bench, so the main server on 9230 was never restarted. From 2026-09-28 it serves main.
   - `agentbrowser` (from 2026-09-28): Vercel's agent-browser 0.38.1, `agent-browser mcp`, headless, a session of its
     own per run.
   - From 2026-09-28 the playwright arm is pinned to `@playwright/mcp@0.0.82`.
@@ -127,7 +126,8 @@ paper's best model scored about 50%.
     other arms too.
 - **browserd leaned on vision:** 241 take_screenshots and 229 click_ats, 220 images kept in context, hence $30.55
   against Playwright's $25.53 despite fewer turns and tokens.
-- Two agents called `tab_show` on their own, and it failed: "macOS did not bring that Chrome to the front".
+- Two agents called `tab_show` (since removed, e4f6945) on their own, and it failed: "macOS did not bring that Chrome
+  to the front".
 - A click on a moving target also waited 30s before failing, the same wait as the date fields.
 - **No cheating found:** no run read the site's source for a password. Every arm read the page's own DOM (a chart's
   SVG).
@@ -238,7 +238,8 @@ attaches first, Puppeteer finishes connecting before the tab's own page is attac
 `list_pages` lists no page for the tab. Which child attaches first held steady for a given tab, so each new process
 failed the same way. A fresh throwaway Chrome never prerenders, so the live checks never saw it.
 
-**Measured** by replaying the runs' browserd calls against the Bench Chrome with no agents (`../bench/probes/replay*.py`):
+**Measured** by replaying the runs' browserd calls against the Bench Chrome with no agents
+(`experiments/bench/probes/replay*.py` at b58ef7b):
 
 | | Tabs that failed |
 |---|---|
@@ -254,8 +255,8 @@ failed the same way. A fresh throwaway Chrome never prerenders, so the live chec
   Chrome profile open first opens a `data:` placeholder tab that no listing includes, and the tab goes into its
   window. A tab that still cannot be paired fails its queue saying to open its url again with `tab_open` before
   closing it with `tab_close`.
-- **Not covered:** a tab in a window browserd did not open (the page's Open Chrome, or a tab opened by hand and handed
-  over), where the race is not measured.
+- **Not covered:** a tab in a window browserd did not open (a tab opened by hand and handed over), where the race is
+  not measured. Since 26a1bb5 the page's Open Chrome opens the placeholder too.
 
 ## A fourth arm, and a lenient score (2026-09-28)
 
@@ -267,8 +268,9 @@ failed the same way. A fresh throwaway Chrome never prerenders, so the live chec
 - **The run was stopped part way** (`full-mcpu`, `full-ff`): agent-browser had caught up with browserd on MCP-Universe,
   and most of every arm's failures there were formatting, not browsing, so the strict score no longer told the arms
   apart. 7 of the 8 paper tasks want each paper's full title as a JSON key, which the prompt does not say, and
-  `huggingface_task_0002` needs a Hugging Face login no arm has. Since then `report.py` gives a lenient score beside
-  the strict one (`tasks.lenient`, in `../bench/README.md`), out of 46: it leaves out `huggingface_task_0002`'s 2 runs.
+  `huggingface_task_0002` needs a Hugging Face login no arm has. Since then `report.py` gives a lenient score beside the
+  strict one (`mcpuniverse.lenient`, in `../bench/README.md`), out of 46: it leaves out `huggingface_task_0002`'s 2
+  runs.
 - **One browserd miss was browserd's own:** `find` showed its matches one after another, so agents read them as
   neighbours. On one task `find: "ROLE"` showed `<ROLE>`, the block's first line and `</ROLE>`, and the agent answered
   with the first line alone; the second was left out between two matches. 9d72503 puts a line such as "(3 lines
@@ -436,7 +438,7 @@ Chrome hung; those runs are in `results/_invalid/`.
     for those two arms. 55e83a2 puts it back; their 52 runs (26 each: the 13 forms with an upload, 2 records each) were
     set aside (`_invalid/final2-formfactory-upload-refused/`) and rerun;
   - `run.py` refused to start beside another session's `claude -p` batch, so the chain halted; it was restarted with
-    `--beside`.
+    `--beside` (a flag since removed, 361314c).
 
 ## Caveats
 

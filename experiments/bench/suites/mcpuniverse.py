@@ -1,9 +1,4 @@
-"""MCP-Universe's browser_automation tasks: which ones this probe runs, the prompt each gets, and its scoring.
-
-Each suite module (this one, webgames.py, formfactory.py) gives run.py and report.py the same five names: SYSTEM,
-MAX_TURNS, load(), prompt(task, token) and score(task, answer, token). token names one run, for a suite whose
-scoring reads what that run did on a page.
-"""
+"""MCP-Universe's browser_automation tasks: which ones the bench runs, the prompt each gets, and its scoring."""
 import json
 import re
 
@@ -20,18 +15,18 @@ You must respond with valid JSON only, with no triple backticks. No markdown for
 No extra text. Do not wrap in ```json code fences. Property names must be enclosed in double quotes.
 """.strip()
 
-# The ops this probe scores offline. The google_maps ops need a Maps API key and the booking ones re-scrape
+# The ops the bench scores offline. The google_maps ops need a Maps API key and the booking ones re-scrape
 # booking.com at scoring time, so tasks using them are left out.
 SCORED_OPS = {"playwright.is_dict_equal"}
 
-# MCP-Universe's instruction for this domain, then a line of this probe's own: a run that answers from memory
+# MCP-Universe's instruction for this domain, then a line of the bench's own: a run that answers from memory
 # says nothing about its browser.
 SYSTEM = "You are an agent for Browser automation. Find every answer with the browser, not from memory."
 MAX_TURNS = 30  # MCP-Universe's ReAct agent used 20 iterations
 
 
 def load():
-    """Every task this probe can score, as {name: task}, in name order."""
+    """Every task the bench can score, as {name: task}, in name order."""
     tasks = {}
     for path in sorted(TASK_DIR.glob("*.json")):
         task = json.loads(path.read_text())
@@ -40,7 +35,7 @@ def load():
     return tasks
 
 
-def prompt(task, token=None):
+def prompt(task, token):
     """The message MCP-Universe's agents send: the question, then the output format."""
     return task["question"] + "\n\n" + OUTPUT_FORMAT_PROMPT.format(
         output_format=json.dumps(task["output_format"], indent=2))
@@ -115,5 +110,5 @@ def lenient(task, answer):
     return True
 
 
-def score(task, answer, token=None):
+def score(task, answer, token):
     return {"passed": passed(task, answer), "lenient": None if task["name"] in NO_LENIENT else lenient(task, answer)}

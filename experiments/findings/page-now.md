@@ -1,7 +1,7 @@
 # Findings: what a stopped queue's reply shows of the page now
 
 Started 2026-10-04. A queue stops at its first failed step, or at a `click_down` whose `on` does not match what is at
-the point. Today the stop reply is an MCP error (`isError: true`) that ends with a "page now" view of up to
+the point. Until d8de3f4 the stop reply was an MCP error (`isError: true`) that ended with a "page now" view of up to
 `steps.ERROR_MOST` (9,000) characters. On the trip deck (`trip-compare.md`, prelim3) those views were 46% of browserd's
 tool text and $1.49 of cache reads, and Claude Code dropped every image of an error result (36 screenshots). Checked
 again on 2026-10-04: an error result still reaches the agent as text only.
@@ -410,7 +410,7 @@ The oracle was checked against the real next action after each run's first stop,
   then press the toolbar control again.
   - The real queues worked, but the oracle said they failed. It judged every press against the layout at the stop,
     with the popover still open.
-  - A press on either popover button closes it (`../bench/pagenow/deck.html`).
+  - A press on either popover button closes it (`experiments/bench/pagenow/deck.html` at 1e598d5).
 - **The fix:** once one of the popover's buttons is pressed, by point or by uid, the oracle drops the popover for the
   queue's later steps. Deck then agrees 7 of 7, with 5 unjudged.
 - **What it changed:**
@@ -519,7 +519,8 @@ view is carried on every later turn.
 
 ## What this means for browserd
 
-- **Already decided:** a stop is a normal result (branch `stop-replies` in `browserd-pn-keep`). It is not on main yet.
+- **Already decided:** a stop is a normal result. d8de3f4 put it on main with the page now as decided below, the
+  screenshot only within a queue's first `steps.SHOT_BEFORE` (30s).
 - **The page now, as decided:**
   - note for a gone uid, a wait that ran out, and a slip;
   - shot for a refused press.
@@ -540,13 +541,15 @@ view is carried on every later turn.
 
 ## Data and reproduction
 
-- **Code:**
-  - `../bench/pagenow.py`, the suite, and `../bench/pagenow/`, its apps;
-  - `../bench/pnserver.py`, which serves them;
-  - `../bench/pnbatch.py`, the batch;
-  - `../bench/pnfork.py` with `pnhook.py` and `stubmcp.py`, the forks;
-  - `../bench/tools/pnreport.py`, the report;
-  - `../bench/run.py`'s arms pn-a, pn-b and pn-c.
+- **Code,** in `experiments/bench/` at 1e598d5, removed from the tree once d8de3f4 shipped the decision
+  (`git worktree add <dir> 1e598d5` gives it back):
+  - `pagenow.py`, the suite, and `pagenow/`, its apps;
+  - `pnserver.py`, which serves them;
+  - `pnbatch.py`, the batch;
+  - `pnfork.py` with `pnhook.py` and `stubmcp.py`, the forks;
+  - `tools/pnreport.py`, the report;
+  - `run.py`'s arms pn-a, pn-b and pn-c, and its keeping of each run's Claude Code session for a suite with
+    `SESSIONS` (`pagenow.py`).
 - **Arms:**
   - the worktrees `browserd-pn-a`, `-b` and `-c`, at e28fadd with the patches in the data folder's `patches/`
     (`stop-replies.diff`, `arm-*.diff`);
@@ -557,8 +560,9 @@ view is carried on every later turn.
     as it ran, not as committed.
   - `forks/pagenow-1/<arm>/<run>/stop<k>/<reply>-s<n>/`: each fork.
   - `sessions/pagenow-1/`: the runs' Claude Code sessions.
-- **The report:** `BROWSERD_BENCH_DATA=<data> python3 experiments/bench/tools/pnreport.py pagenow-1 [--json out.json]`.
-- **A rerun:**
+- **The report,** from a checkout of 1e598d5: `BROWSERD_BENCH_DATA=<data> python3 experiments/bench/tools/pnreport.py
+  pagenow-1 [--json out.json]`.
+- **A rerun,** from a checkout of 1e598d5:
   1. `BROWSERD_BENCH_CLAUDE` set to the pinned Claude Code 2.1.289;
   2. `pnserver.py`, and `nextserver.py` for each arm on 9310, 9320 and 9330;
   3. `pnfork.py capture`;

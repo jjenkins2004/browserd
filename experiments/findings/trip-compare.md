@@ -4,7 +4,7 @@ Run 2026-10-04 on the `personal` profile with `../long-tasks/compare.py`. This i
 per arm (round 1). Round 2 never ran, because the plan's session limit cut it off. Playwright MCP beat browserd on this
 task. The transcripts were then diagnosed call by call, and the gap traced to browserd's click guard in Slides, not to
 the method or to Playwright. **The guard has since been removed** (7dc5101), so Next steps 1 and 2, on `guard.py`,
-no longer apply.
+no longer apply; step 3 landed in d8de3f4 ([page-now.md](page-now.md)). Code named below is as it was at 48bee1f.
 
 Raw data lives outside the repo, on the Mac that ran it only: `../browserd-long-tasks/prelim3/`.
 - Per run (`<arm>-r1/`): `transcript.jsonl`, `result.json`, `video.mp4`, `frames/`, `slides/`, `deck.pdf`.
@@ -239,10 +239,10 @@ queue). Its guard is what kept it from batching in Slides.
 Do not move browserd onto Playwright MCP. Playwright won with browserd's own method, and browserd won research
 outright. Moving would give up sessions, tab isolation, profiles on the user's own Chrome, the hand-off for logins and
 captchas, the records and the dashboard. In this very experiment, Playwright took over browserd's placeholder tab on
-its first move. The click-guard experiment (`click-guard.md`) still holds that a check before a click wins. These are
+its first move. The click-guard experiment (`click-guard.md`) held that a check before a click wins; these were
 two blind spots in it.
 
-## Next steps (proposed, not started)
+## Next steps (proposed: 1 and 2 dropped with the guard, 3 done in d8de3f4)
 
 1. **Focus check (`guard.py` `_keys`, `focusKept` / `deepActive`).**
    - Follow focus into same-origin iframes.

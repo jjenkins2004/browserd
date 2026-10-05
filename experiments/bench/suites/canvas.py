@@ -93,7 +93,7 @@ def _url(task, token):
     return task["url"].format(token=token or "", started=int(time.time()))
 
 
-def prompt(task, token=None):
+def prompt(task, token):
     return "Open %s. %s When you are done, reply DONE." % (_url(task, token), task["ask"])
 
 
@@ -101,7 +101,7 @@ def _host(url):
     return urllib.parse.urlsplit(url).netloc
 
 
-def prepare(task, mcp_url, session, token=None):
+def prepare(task, mcp_url, session, token):
     """Clear what the task's site kept from an earlier visit, in the runner's session."""
     if "clear" not in task:
         return
@@ -122,7 +122,7 @@ def collect(task, token, transcript, mcp_url):
     (STATE / ("%s.json" % token)).write_text(json.dumps(record, indent=2), encoding="utf-8")
 
 
-def score(task, answer, token=None):
+def score(task, answer, token):
     path = STATE / ("%s.json" % token)
     record = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"state": None, "presses": {}}
     return dict({"passed": bool(task["passed"](record["state"]))}, **transcripts.counts(record["presses"]))

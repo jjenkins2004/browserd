@@ -3,11 +3,11 @@
 Each seed runs three ways: every screenshot at full size, every one at scale 0.5, and the agent's own choice. A
 square counts as hit when a click lands inside it. The page must be up first:
 
-    python3 clickserver.py
+    python experiments/bench/sites.py start
 """
 import json
 import urllib.request
-import clickserver
+from suites import clickserver
 
 BASE = "http://127.0.0.1:%d" % clickserver.PORT
 SEEDS = (1, 2, 3)
@@ -29,7 +29,7 @@ def load():
     return {"%s-s%d" % (how, seed): {"how": how, "seed": seed} for how in HOW for seed in SEEDS}
 
 
-def prompt(task, token=None):
+def prompt(task, token):
     url = "%s/?run=%s&seed=%d" % (BASE, token, task["seed"])
     return TASK_PROMPT.format(url=url, how=HOW[task["how"]]).replace("  ", " ")
 
@@ -47,7 +47,7 @@ def hits(token):
     return targets, clicks
 
 
-def score(task, answer, token=None):
+def score(task, answer, token):
     targets, clicks = hits(token)
     hit = {t["n"] for t in targets if any(t["x"] <= x < t["x"] + t["size"] and t["y"] <= y < t["y"] + t["size"]
                                           for x, y in clicks)}

@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
 """The trap editor on 127.0.0.1:4397: a fake editor whose timed traps go up over the agent's next target, each trusted
 click and key on it, its layout history and each trap's onset saved under the run's token.
 
-    python3 trapserver.py
+    python experiments/bench/sites.py start
 
 GET /?run=<token>&seed=<n> serves trapapp.html, which lays the editor out by seed and POSTs every event it logs to
 /log. Each lands, as one JSON line, in results/trap-logs/<token>.jsonl; traps.py scores it.
@@ -16,7 +15,7 @@ import urllib.parse
 import paths
 
 LOGS = paths.RESULTS / "trap-logs"
-PAGE = paths.BENCH / "trapapp.html"
+PAGE = paths.BENCH / "suites" / "trapapp.html"
 PORT = 4397
 WRITE = threading.Lock()  # one line at a time, whatever thread
 

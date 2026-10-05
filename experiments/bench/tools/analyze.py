@@ -4,7 +4,6 @@
     python3 experiments/bench/tools/analyze.py ff1
 """
 import collections
-import json
 import statistics
 import sys
 from pathlib import Path
@@ -18,10 +17,7 @@ def runs(exp):
     for path in sorted((paths.RESULTS / exp).glob("*/*.jsonl")):
         calls, results = {}, []
         api_ms = total_ms = None
-        for line in path.read_text().splitlines():
-            if not line.strip():
-                continue
-            e = json.loads(line)
+        for e in transcripts.events(path.read_text(encoding="utf-8", errors="replace")):
             content = (e.get("message") or {}).get("content")
             if isinstance(content, list):
                 for b in content:

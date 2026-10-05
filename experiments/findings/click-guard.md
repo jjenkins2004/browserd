@@ -1,7 +1,8 @@
 # Findings: stopping a pixel click the agent did not intend
 
 Run 2026-09-25 on the `test` profile. Chosen: **B, a check before every click**, with the detector settings below.
-The settings still need a test on real sites before they are locked.
+Its test on real sites is [real-sites.md](real-sites.md). B shipped as browserd's click guard (238a58a) and was removed
+in 7dc5101 ([trip-compare.md](trip-compare.md), [text-check.md](text-check.md)).
 
 Raw data, scripts and the lab pages are kept in `.run/experiments/click-guard/`, which is gitignored:
 - the Layer 1 points: `layer1-lab.jsonl`, `real-*.jsonl`, `calib.jsonl`;
@@ -195,7 +196,7 @@ Rules 1 and 2 count only trap slots that fired in all four runs of their batch: 
 - **1: `unchecked`.** Agents used it 47 times, 45 on spots that had not changed, so it bought nothing. The one use
   on a changed spot clicked the invisible backdrop.
 
-## What B needs before it ships
+## What B needed before it shipped (238a58a)
 
 1. **Close the race:** re-test S2 and S3 right before the click is dispatched. They are cheap (one `evaluate`),
    and this shrinks the window from about 100 ms to a few.

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """FormFactory's own Flask app on 127.0.0.1:5055, with each submission saved under the run that made it.
 
     python experiments/bench/sites.py start

@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
 """The haystack page on 127.0.0.1:4396: a long field-office handbook (40 or 80 sections, each a heading, paragraphs
 and a staff table), built the same for a seed, with one needle in a middle section.
 
-    python3 hayserver.py
+    python experiments/bench/sites.py start
 
 GET /?seed=<n>&needle=<code|row|twin>&sections=<40|80> serves the page. haystack.py builds the tasks and their answers from the same
 seed with page(), so the answer never has to be read back from the server.

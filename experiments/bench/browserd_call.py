@@ -20,10 +20,7 @@ def call(endpoint, tool, arguments):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                        "params": {"name": tool, "arguments": arguments}}).encode()
     request = urllib.request.Request(endpoint, data=body, method="POST", headers={"Content-Type": "application/json"})
-    raw = urllib.request.urlopen(request, timeout=180).read().decode("utf-8")
-    if raw.startswith("event:"):  # a stream, as after a restart: the answer is its last message
-        raw = [line[len("data: "):] for line in raw.splitlines() if line.startswith("data: ")][-1]
-    answer = json.loads(raw)
+    answer = json.loads(urllib.request.urlopen(request, timeout=180).read().decode("utf-8"))
     if "error" in answer:
         return answer["error"].get("message", str(answer["error"])), True
     result = answer["result"]

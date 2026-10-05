@@ -4,12 +4,12 @@ page's view is about 57,000 characters, an 80-section page's about twice that.
 Three needles, each on two seeds and both page lengths: a locker code in a sentence (code), the one staff row whose badge expired in 2019
 (row), and the one section whose safety officer is also its deputy (twin). The page must be up first:
 
-    python3 hayserver.py
+    python experiments/bench/sites.py start
 """
 import re
 import urllib.request
 
-import hayserver
+from suites import hayserver
 
 BASE = "http://127.0.0.1:%d" % hayserver.PORT
 SEEDS = (1, 2)
@@ -31,12 +31,12 @@ def load():
             for needle in QUESTIONS for sections in (40, 80) for seed in SEEDS}
 
 
-def prompt(task, token=None):
+def prompt(task, token):
     url = "%s/?seed=%d&needle=%s&sections=%d" % (BASE, task["seed"], task["needle"], task["sections"])
     return TASK_PROMPT.format(url=url, question=QUESTIONS[task["needle"]])
 
 
-def score(task, answer, token=None):
+def score(task, answer, token):
     expected = hayserver.page(task["seed"], task["needle"], task["sections"])[2]
     found = re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(expected), answer or "", re.I)
     return {"passed": found is not None, "expected": expected}

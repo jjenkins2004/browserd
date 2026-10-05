@@ -5,8 +5,9 @@
 Measures browserd against other browser MCP servers on public benchmarks. Every run is `claude -p` with every
 built-in tool off (`--tools ""`), so the browser MCP server is the only way to the web. The model, prompt and scoring
 stay the same across arms; only the server changes. This folder holds the code; the data (the benchmarks' own repos,
-every run's transcript, the scores) lives in a data folder outside the repo (`paths.DATA`, below). Every result is in
-`../findings/benchmark.md`. `../../.claude/skills/benchmark/SKILL.md` walks an agent through a rerun.
+every run's transcript, the scores) lives in a data folder outside the repo (`paths.DATA`, below). The comparisons'
+results are in `../findings/benchmark.md`, and the bench's other experiments are written up in `../findings/` too.
+`../../.claude/skills/benchmark/SKILL.md` walks an agent through a rerun.
 
 The suites, each `--suite` of `run.py`:
 
@@ -22,7 +23,6 @@ The suites, each `--suite` of `run.py`:
 | `popups` | first-visit consent banners, welcome dialogs and look-alike buttons on 7 live sites (Forbes, HubSpot, Kayak, CNN, BBC, the Guardian, Sephora) | 7 | the popup seen, the press on the right button or the page's state after, and no press on its look-alike |
 | `slides` | edits to a new, blank Google Slides deck per run, on the `experiments` arm's profile signed in to Google | 6 | the deck's own pptx export, read in the run's tab after the run |
 | `traps` | clicks an agent never meant: a fake editor whose timed traps go up over its next target | 12 seeds | the page's own log of every trusted click and key |
-| `pagenow` | what a stopped queue's reply should show of the page now: replicas of real pages where a queue step fails early (`../findings/page-now.md`) | 5 | the app's own log and the answer; export and consent by the answer alone |
 
 The last run of the other servers' arms (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`.
 `miniwob` (drills) and `botwall` have not been run in full.
@@ -31,9 +31,7 @@ The last run of the other servers' arms (2026-09-29, `final2`) was `mcpuniverse`
     python experiments/bench/sites.py start                the local sites the suites need (WebGames, FormFactory, MiniWoB++, ...)
     python experiments/bench/nextserver.py --tree <tree>   browserd from a worktree of its own, on 9250, for the next arm
     python experiments/bench/chain.py <name> <arms> "<suite>[:<run.py args>]"...     suites one after another, detached
-    python experiments/bench/run.py --exp <name> --suite <suite> --arms <arms>
-                                                           one suite, in the foreground; always pass --arms, whose default is
-                                                           every arm, the main server's included
+    python experiments/bench/run.py --exp <name> --suite <suite> --arms <arms>    one suite, in the foreground
     python experiments/bench/report.py <exp>               score an experiment, compare its arms
     python experiments/bench/sites.py stop
 
@@ -44,71 +42,48 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
 ## Directory Layout
 
     bench/
-      README.md       this file
-      paths.py        where the code (BENCH, ROOT) and the data (DATA, RESULTS) are
+      run.py          ARMS and SUITES, the claude -p call, 2 runs at a time, cleanup, the stops
+      chain.py        several suites as one detached batch, each resumed once if it stops
+      report.py       results/<exp>/scores.json, the per-arm summary, the task-by-arm table
       setup.py        clones each benchmark at its pinned commit, builds WebGames, fetches its tasks, Flask venv
       sites.py        start|stop the local sites, detached, logs in the data folder
-      chain.py        several suites as one detached batch, each resumed once if it stops
-      run.py          ARMS, the claude -p call, 2 runs at a time, cleanup, the stops
+      nextserver.py   browserd from a worktree on 9250/9251, beside the main server
+      paths.py        where the code (BENCH, ROOT) and the data (DATA, RESULTS) are
       procs.py        a process tree started and stopped the same way on every OS; Windows' .cmd shims
       browserd_call.py  browserd tool calls from the bench's own code: a suite's prepare and collect
-      transcripts.py  what a run did, read off its transcript: its content blocks, and what its presses did
-      canvas.py       suite canvas: pixel clicks in drawing apps, graded from the app's state
-      popups.py       suite popups: first-visit consent banners and look-alike buttons on live sites
-      slides.py       suite slides: edits to a new Google Slides deck per run, graded from its pptx export
-      report.py       results/<exp>/scores.json, the per-arm summary, the task-by-arm table
-      nextserver.py   browserd from a worktree on 9250/9251, beside the main server
-      tasks.py        suite mcpuniverse: MCP-Universe's tasks, prompt and scoring, and tasks.lenient
-      formfactory.py  suite formfactory: gold records, the documents, field-by-field scoring
-      botwall.py      suite botwall: 20 live sites
-      webgames.py     suite webgames
-      miniwob.py      suite miniwob
-      clicks.py       suite clicks: squares of 4 to 32 px to click in order
-      haystack.py     suite haystack: one fact on a 40- or 80-section page
-      traps.py        suite traps: 8 tasks in a fake editor, 6 timed traps over the next target
-      ffserver.py     FormFactory's Flask app on 5055, each submission saved under its run
-      mwserver.py     MiniWoB++'s pages on 4390, each reward saved under its run
+      transcripts.py  what a run did, read off its transcript: its events and content blocks, and what its presses did
       allow.py        the claudechrome arms' --permission-prompt-tool, here and in ../long-tasks/compare.py: allows
                       every permission prompt
-      clickserver.py  the clicks page on 4395
-      hayserver.py    the haystack pages on 4396
-      trapserver.py   the trap editor (trapapp.html) on 4397, each run's log under results/trap-logs/
-      pagenow.py      suite pagenow: its apps (pagenow/) are served by pnserver.py on 4398, each run's log under
-                      results/pn-logs/
-      pnbatch.py      one page-now batch on the pn arms, with each scenario's k and the hashes of what it runs
-      pnfork.py       forks each page-now run at its stops, 5 times per reply at its first stop and once at a later
-                      one; pnhook.py (the fork's PreToolUse hook) and stubmcp.py (its browserd, answering from the
-                      page at the stop) serve each fork
-      assets/         sample.pdf, which setup.py copies to the data folder's assets/
-      tools/          analyze.py (tool use by arm), paired.py (sign tests), miscalls.py, cheats.py, ffmap.py,
-                      trapcheck.py (traps' scoring on synthetic logs; a real run's log against its layout history),
-                      represses.py (an experiment's presses read again off its transcripts),
-                      pnreport.py (the page-now experiment's numbers and decision)
-      probes/         the pairing bug's replays and probes (../findings/benchmark.md, "The pairing bug")
+      suites/         a module per suite, named as the suite (mcpuniverse.py for mcpuniverse), and beside it the local
+                      site it runs against, which sites.py starts as `python -m suites.<server>`: ffserver.py
+                      (FormFactory's Flask app, 5055), mwserver.py (MiniWoB++, 4390), clickserver.py (4395),
+                      hayserver.py (4396), trapserver.py (trapapp.html, 4397); sample.pdf, which setup.py copies to
+                      the data folder's assets/
+      tools/          analyze.py (tool use by arm), paired.py (sign tests), cheats.py (WebGames runs whose calls read
+                      the source or name the password), represses.py (an experiment's presses read again off its
+                      transcripts, for a suite with a STATE), trapcheck.py (traps' scoring on synthetic logs; a real
+                      run's log against its layout history)
 
     <data folder>/    paths.DATA: ../../../browserd-bench beside the repo, or $BROWSERD_BENCH_DATA
       results/<exp>/  config.json, one <arm>/<task>-r<n>.jsonl transcript and .err per run (.part until its
                       collect and cleanup are done), scores.json
       results/<exp>.log, results/chain.log      each run's line; each chain's starts, stops and ends
+      results/chain-<name>.out                  a detached chain's own output
       results/_invalid/<exp>-<why>/             runs set aside (a broken setup, an outage), never deleted
-      forks/<exp>/, sessions/<exp>/             pnfork.py's forks, and the Claude Code sessions they were cut from
-      pn-tools/                                 each pn arm's initialize and tools/list, which pnfork.py capture records
-                                                for the stub
       MCP-Universe/, formfactory/, webgames/, miniwob-plusplus/    the benchmarks' repos, from setup.py
       webgames-data/hf-test.jsonl, .venv/, *.log
       assets/sample.pdf                         formfactory.UPLOAD, from setup.py
 
 ## Core Abstractions & Shared Pieces
 
-- **A suite** is a module giving `SYSTEM`, `MAX_TURNS`, `load()` ({task name: task}), `prompt(task, token)` and
-  `score(task, answer, token)`, and optionally `check()`, which refuses to start while its site is down, and
-  `RECORDS`, the folder where each run leaves `<token>.*` files its score reads, and `SESSIONS`, which keeps each
-  run's Claude Code session, its id in `<task>-r<n>.session` beside the transcript, for `pnfork.py`. On an arm with
-  a `profile`, a suite may also give `prepare(task, mcp_url, session, token)`, which sets its page up before the run in
-  a browserd session of the runner's own, and `collect(task, token, transcript, mcp_url)`, which reads what the run
-  left on its tabs before the runner closes its sessions, both through `browserd_call.py`. `token` (`run.token`) names
-  one run, so a suite whose scoring reads what the run did on a page (formfactory, miniwob, clicks, traps, canvas,
-  popups, slides) finds that run's own record. `run.SUITES` lists them.
+- **A suite** is a module of `suites/` giving `SYSTEM`, `MAX_TURNS`, `load()` ({task name: task}), `prompt(task, token)`
+  and `score(task, answer, token)`, and optionally `check()`, which refuses to start while its site is down, and
+  `RECORDS`, the folder where each run leaves `<token>.*` files its score reads. On an arm with a `profile`, a suite may
+  also give `prepare(task, mcp_url, session, token)`, which sets its page up before the run in a browserd session of the
+  runner's own, and `collect(task, token, transcript, mcp_url)`, which reads what the run left on its tabs before the
+  runner closes its sessions, both through `browserd_call.py`. `token` (`run.token`) names one run, so a suite whose
+  scoring reads what the run did on a page (formfactory, miniwob, clicks, traps, canvas, popups, slides) finds that
+  run's own record. `run.SUITES` lists them.
 - **An arm** is one entry of `run.ARMS`: its MCP config, a system line, and for a browserd arm (`run._browserd`) the
   page URL whose Close session the run's cleanup uses and the profile its runs use. The current arms:
   - `next`: browserd from a worktree, served by `nextserver.py` on 9250 with profile Bench, so the main server (9230)
@@ -133,10 +108,7 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   - `experiments`: the main server (9230) on the profile signed in to Google, for `slides`.
   - `trap-on`, `trap-none`, `trap-guard`: the text-check experiment's arms (`../findings/text-check.md`), worktrees of
     their own served by `nextserver.py` on 9250, 9260 and 9270.
-  - `browserd` (the main server on 9230, profile research), `cap` and `nocap` are earlier experiments' arms.
-  - `pn-a`, `pn-b`, `pn-c`: the page-now experiment's arms, the worktrees `browserd-pn-<letter>` served by
-    `nextserver.py` on 9310, 9320 and 9330. Which stop reply each holds is in the data folder's `arms.json`, never in
-    what the agent sees.
+  - `browserd`: the main server (9230) on profile research, for `canvas` and `popups`.
 - **A run** is `run.run_one`: `claude -p` (PATH's, or `$BROWSERD_BENCH_CLAUDE`) with the arm's servers only
   (`--strict-mcp-config`), the model (`--model`, default `claude-sonnet-5`), the suite's max turns, and its transcript
   streamed to `results/<exp>/<arm>/<task>-r<n>.part`, each line stamped `_t` (when it arrived), renamed `.jsonl` once
@@ -144,7 +116,7 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   run whose `.jsonl` ends in a result is done, so running an experiment again runs only what is missing, a run cut off
   before its cleanup included.
 - **Scoring** is `report.py`, through each suite's `score`. For MCP-Universe it gives the benchmark's own strict score
-  and `tasks.lenient`, which forgives formatting alone:
+  and `mcpuniverse.lenient`, which forgives formatting alone:
   - the JSON is taken from any text around it, unless the text holds several JSON values that differ;
   - a task whose format names keys its evaluator does not use (`Name_of_the_paper_1` where it wants the paper's
     title) is scored on its values alone, exactly, so two IDs swapped between papers still pass;
@@ -178,6 +150,8 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   session dies with that session's window, as one did on 2026-09-28.
 - **Runs start in the data folder** (`cwd=paths.DATA`): `claude -p --setting-sources project` loads the settings of
   the folder it runs in, so a run started in the repo would load the repo's.
+- **A module in `suites/` runs only with `experiments/bench/` on the import path:** run.py and the tools put it there,
+  and sites.py starts each server as `python -m suites.<server>` from it, so never run one as a script.
 - **The stops.** A batch stops at the first run that `claude -p` ended in an error before its first tool call (logged
   out, a used-up plan) or whose transcript says a browserd profile's Chrome stopped answering; such a run does not
   count as done and runs again. It stops too at a run whose sessions could not be closed, which does count as done. It
