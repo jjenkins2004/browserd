@@ -3,7 +3,8 @@
 Run 2026-10-04 on the `personal` profile with `../long-tasks/compare.py`. This is preliminary and incomplete: one run
 per arm (round 1). Round 2 never ran, because the plan's session limit cut it off. Playwright MCP beat browserd on this
 task. The transcripts were then diagnosed call by call, and the gap traced to browserd's click guard in Slides, not to
-the method or to Playwright. **No fix is made yet.** See "Next steps".
+the method or to Playwright. **The guard has since been removed** (7dc5101), so Next steps 1 and 2, on `guard.py`,
+no longer apply.
 
 Raw data lives outside the repo, on the Mac that ran it only: `../browserd-long-tasks/prelim3/`.
 - Per run (`<arm>-r1/`): `transcript.jsonl`, `result.json`, `video.mp4`, `frames/`, `slides/`, `deck.pdf`.

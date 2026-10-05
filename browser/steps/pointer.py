@@ -28,12 +28,6 @@ class Busy(cdp.CdpError):
 _pointers = {}  # target id: {"x", "y", "held": [buttons down]}; a tab's steps run in turn, under its Worker's lock
 
 
-def where(target):
-    """(x, y) in CSS px where a tab's pointer is, or None before any move_at on it since browserd started."""
-    placed = _pointers.get(target)
-    return (placed["x"], placed["y"]) if placed else None
-
-
 def problem(step):
     """Why a pointer step cannot run as written, or None. The queue asks this of each one before any step runs."""
     tool = step["tool"]

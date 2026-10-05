@@ -355,7 +355,8 @@ same tabs under the same ids. A crash leaves the same.
   without the tab's page, so a new chrome-devtools-mcp lists no page for the tab and its queues cannot pair it
   (measured in two runs: 6 and 8 of 25 tabs opened in new windows, each failing for over 60s with a new process per
   queue). So `opens.tab`, in a Chrome with no page of its Chrome profile open,
-  first opens `opens.PLACEHOLDER` with `opens.window`, as the page's Open Chrome does in a Chrome with no page open, a `data:` page that no listing includes and so gets no tab id; the new window's
+  first opens `opens.PLACEHOLDER` with `opens.window`, a `data:` page that no listing includes and so gets no tab id
+  (the page's Open Chrome opens it too, in a Chrome with no page open); the new window's
   prerender goes to the placeholder, and the tab goes into that window beside it (measured: 0 of 25 failed, each opened
   in a Chrome with no window open). A lock per Chrome folder, in `opens._placing`, covers looking for a page and opening the
   placeholder, so two opens at once make one placeholder. The placeholder stays open until its Chrome quits or it is
@@ -545,12 +546,6 @@ same tabs under the same ids. A crash leaves the same.
   double or triple click takes `on`. Keys are not checked. chrome-devtools-mcp's own `click_at` (behind `--experimental-vision`, which browserd does
   not pass) cannot hover or drag: WebGames' herding needs the pointer moved over a canvas, and an agent given
   `click_at` spent 40 of them standing in for moves.
-- **No check compares a press with the agent's last screenshot.** browserd had one, a click guard that stopped a
-  press, or keys, when the page had changed there since that screenshot (`../experiments/findings/click-guard.md`,
-  `real-sites.md`). It was removed: on a Slides deck it made 22 stops, none needed, since Slides types into a frame it
-  could not follow, and a press after a step of the same queue that changed the page always looked changed; the agent
-  stopped chaining clicks and took twice Playwright's deck turns (`trip-compare.md`). A press names what it presses
-  in `on` instead, checked against what is there (above).
 - **Every snapshot a queue reports is a view**: `take_snapshot`'s, `wait_for`'s, an `includeSnapshot`
   step's and the failed queue's. A reply's snapshot runs from chrome-devtools-mcp's
   `## Latest page snapshot` line to the next of the headers it can put after one
