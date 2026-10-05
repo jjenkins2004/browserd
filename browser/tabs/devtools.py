@@ -1,6 +1,7 @@
 """One chrome-devtools-mcp process, spoken to as an MCP client over its stdin and stdout.
 
-The browser MCP server runs one of these per tab it drives, and one at start to list the tools; README.md, "Core Abstractions & Shared Pieces".
+The browser MCP server runs one of these per tab it drives, and one at start to list the tools; README.md, "Agent
+Gotchas & Invariants", says why one per tab.
 """
 
 import json

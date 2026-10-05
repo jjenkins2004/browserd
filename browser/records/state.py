@@ -116,6 +116,7 @@ class State:
                                                    "ORDER BY closed DESC LIMIT ?", profile, most)]
 
     def close_session(self, session_id, when):
+        """Mark a session closed, unless it is already; Tabs.close_session closes its tabs."""
         self._run("UPDATE sessions SET closed = ? WHERE id = ? AND closed IS NULL", when, session_id)
 
     def touch(self, session_id, when):
@@ -147,6 +148,7 @@ class State:
         self._run("UPDATE tabs SET session = ? WHERE id = ?", session_id, tab_id)
 
     def close_tab(self, tab_id, when):
+        """Mark a tab closed, unless it is already, and clear its needs_input mark."""
         with self._lock:
             self._db.execute("UPDATE tabs SET closed = ? WHERE id = ? AND closed IS NULL", (when, tab_id))
             self._db.execute("DELETE FROM needs_input WHERE tab = ?", (tab_id,))

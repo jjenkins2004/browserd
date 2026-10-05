@@ -1,7 +1,5 @@
 """Sessions: one agent's task on one profile. What an id and a label may be, the record folder they name, and when a
 session counts as paused.
-
-README.md, "Core Abstractions & Shared Pieces", has the contract.
 """
 
 import random

@@ -59,19 +59,22 @@ class Worker:
     def ensure(self):
         """(Devtools, page id, restarted): the running process, starting and pairing one when there is none.
 
-        restarted is True when uids this tab was given may be gone: an earlier process for it died, or the tab is
-        carried over from an earlier server, whose processes stopped with it.
+        restarted is True when uids this tab was given may be gone: an earlier process for it ended (it died, its
+        session was paused, or it was closed after "No page found"), or the tab is carried over from an earlier server,
+        whose processes stopped with it.
         """
         if self._devtools is not None and self._devtools.alive():
             self._listen()
             return self._devtools, self.page_id, False
-        # The dead process stays here until a new one pairs, so this holds.
+        # _devtools keeps an ended process (died, paused, or closed after "No page found") until a new one pairs, so
+        # not None here means one ended.
         restarted = self._devtools is not None or self._carried
         devtools = Devtools(os.path.join(self._log_dir, "devtools-%s.log" % self.tab), self.profile.endpoint)
         try:
             self.page_id = self._pair(devtools)
-            # README.md, "Core Abstractions & Shared Pieces", says why the page is selected. Never bringToFront, which
-            # would take the user's focus.
+            # Selected, so chrome-devtools-mcp gives the page its own timeouts: a click or fill fails after 5s, not
+            # Puppeteer's 30s (measured: 5.1s against 30.1s), and a navigation after 10s (steps.NAVIGATE_TIMEOUT
+            # lengthens it). Never bringToFront, which would take the user's focus.
             devtools.text("select_page", {"pageId": self.page_id})
         except Exception:
             devtools.close()  # stored nowhere yet, so nothing else could ever stop it
@@ -87,7 +90,9 @@ class Worker:
             self.watcher.start_listening()
 
     def _pair(self, devtools):
-        """This tab's page id in chrome-devtools-mcp; README.md, "Agent Gotchas & Invariants", says how it is found."""
+        """This tab's page id in chrome-devtools-mcp, whose page ids mean nothing to DevTools: a random value is set on
+        the tab through the server's own connection and looked for through chrome-devtools-mcp, pages at the tab's URL
+        first, then deleted."""
         listing = devtools.text("list_pages", {})
         pages = [(int(found.group(1)), found.group(2)) for found in PAGE_LINE.finditer(listing)]
         refused = []
@@ -135,8 +140,8 @@ class Worker:
             self._devtools = None
 
     def pause(self):
-        """Stop the process to free its memory, and return whether one was running; README.md, "Core Abstractions &
-        Shared Pieces", says why the dead process stays."""
+        """Stop the process to free its memory, and return whether one was running. The ended process stays, so ensure
+        reports the uids gone."""
         watcher, self.watcher = self.watcher, None  # stop_all may stop it too as the server stops
         if watcher is not None:
             watcher.stop()

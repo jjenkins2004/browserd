@@ -1,7 +1,4 @@
-"""Tab ids, and opening, listing, showing, closing and handing over tabs in a profile's Chrome.
-
-README.md, "Core Abstractions & Shared Pieces", has the contract.
-"""
+"""Tab ids, and opening, listing, showing, closing and handing over tabs in a profile's Chrome."""
 
 import random
 import sqlite3
@@ -25,6 +22,10 @@ def is_id(tab):
 
 
 class Tabs:
+    """Each page of a profile's Chrome that tab_list can show (none of another browser context, nor the placeholder,
+    devtools:// or chrome-extension:// pages) as a tab id that is never given out again, and the session it belongs to.
+    Each operation that reaches Chrome opens a proven connection of its own, re-proving the Chrome."""
+
     def __init__(self, state, connect, start=None):
         """
         Args:
@@ -64,7 +65,8 @@ class Tabs:
         ]
         if not default:
             if not pages:
-                # No window open, so Chrome unloaded its Chrome profile; ../chrome/README.md, "Agent Gotchas & Invariants".
+                # No window open, so Chrome unloaded its Chrome profile; ../chrome/README.md, "Agent Gotchas &
+                # Invariants".
                 return [], 0, asked
             raise cdp.CdpError("the %s Chrome did not say which browser context is its Chrome profile" % profile.name)
         own = [info for info in pages if info.get("browserContextId") == default]
@@ -98,7 +100,7 @@ class Tabs:
             if target in rows:
                 return rows[target].session
             if target not in owners:
-                owners[target] = None  # also what a loop of openers comes to
+                owners[target] = None  # set first, so a loop of openers ends with None
                 opener = pages[target].get("openerId")
                 if opener in pages:
                     owners[target] = owner(opener)
@@ -111,7 +113,7 @@ class Tabs:
             if target in rows:
                 continue
             earlier = self._state.tab_for_target(profile.name, target)
-            if earlier is None or earlier.closed < asked:  # closed since Chrome was asked: going, not new
+            if earlier is None or earlier.closed < asked:  # a tab closed since Chrome was asked is going away, not new
                 rows[target] = self._add(profile, target, owner(target), now)
         return rows
 

@@ -42,11 +42,7 @@ server.py tools.py, and cli/ server.py too, which it starts and stops. Each fold
       records/       what browserd keeps in the records folder
         state.py     .run/state.db: the profiles, sessions, tabs and their `needs_input` marks
         record.py    one queue call's numbered files in a folder
-      tabs/          a session's tabs, and the process that drives each
-        sessions.py  session ids, labels, record folder names, when a session is paused
-        tabs.py      tab ids in state.db; open, list, show, close, hand over
-        worker.py    one tab's process, paired with its page; Workers registry
-        devtools.py  MCP client for one chrome-devtools-mcp process over stdio
+      tabs/          sessions, tab ids, and each tab's chrome-devtools-mcp; its own README
       steps/         the queue tool's steps
         steps.py     the queue: load, check, run, report; snapshot views
         checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused, read_fills
@@ -111,7 +107,7 @@ registered, so after the MCP port changes its registration needs that line again
 
 **`state.State`** keeps the profiles (`profiles.Profile`: a name, its folder and its debugging port) in
 `../.run/state.db`, with the sessions, the tabs and the tabs' marks of needing the user's input (`needs_input`: a
-note and since when; closing a tab clears its mark), one SQLite connection shared by the server's threads; the file
+note and since when), one SQLite connection shared by the server's threads; the file
 is gitignored, so each person's profiles stay theirs, and a name is taken whatever its case. `profiles.make`
 and `profiles.delete` (`chrome/profiles.py`) make and delete one.
 
@@ -128,19 +124,6 @@ session owns to an open session of its profile) and `/close-paused` (every pause
 served, though no button posts either. A tab of a session closed as it opened (a `tab_open` or popup under way) is shown with those by hand,
 so it can still be closed. A `ProfileError`,
 `page.Refused` or `cdp.CdpError` is answered as `{"error": ...}` for the page to show.
-
-**`state.Session`** is one agent's task on one profile: a six-character id (`k3f9x2`), the profile's name, a
-label, and its last call. `sessions.py` holds what an id and a label may be, the record folder they name
-(`<id>-<the label's words, dashed>`), and `sessions.paused`: no call for `sessions.PAUSE_AFTER` (30 minutes).
-
-**`tabs.Tabs`** gives each page of a profile's Chrome a four-character tab id (`k3f9`), kept in `state.db`
-as a `state.Tab` with its target id and its session, and never given out again. `list`, `open`, `target`, `show`
-and `close` take the asking session, and a tab of any other session is "no tab of this session"; the page asks
-as `None`, and reaches every tab. It opens a new `cdp.Browser` for every
-operation, through its `connect`, so every tab tool re-proves the Chrome; `open` first calls its `start`, which
-starts the profile's Chrome, and a Chrome not running lists no tabs. Each listing (`_sync`) marks closed every
-tab whose page is gone, and gives each new page but the placeholder (`opens.PLACEHOLDER`) a tab: the session of the page that opened it (its
-`openerId`, followed through a popup's own popups and through an opener since closed), or no session's.
 
 **`mcp.Server`** takes tools as dicts (`name`, `description`, `inputSchema`, `run(arguments)`).
 `run` returns a string, a list of MCP content items, or a whole result dict, which is passed through
@@ -165,24 +148,6 @@ into `tools.CALLS/<profile>/<session>-<label>/<tab>/`, so it refuses a tab argum
 makes a `record.Call` and writes what was asked as sent, so a queue refused for its other arguments or its
 steps is recorded too, with a `file`'s steps added once read; once they pass, what was asked is rewritten as
 the steps it runs, and what came back is written through `_recorded`, a refusal or raised error included.
-
-**`worker.Worker`** is one tab's `devtools.Devtools` process and its page id there, behind a lock,
-so one tab's queues run in turn and different tabs run at once. The process is pointed at the tab's
-profile's Chrome (`--browser-url`), and `Worker.connect` is how the queue's dialog answerer and paste
-reach the tab. `Worker.ensure()` starts and pairs
-the process on the tab's first queue, and again after it dies, then selects the tab's page there (`select_page` without
-`bringToFront`): chrome-devtools-mcp sets its own timeouts on a page only once it is selected, 5s for a click or fill
-to finish, its wait for the element included, and 10s for a navigation, and one it never selected keeps Puppeteer's 30s
-for both (measured: a fill on a date's Month part failed after 30.1s unselected, 5.1s selected). A navigation that
-runs out its timeout still reports ok, on a page half loaded, so `steps.run` gives a `navigate_page` that names no
-`timeout` `steps.NAVIGATE_TIMEOUT` (30s), what it had before. The first report on a tab older than this
-server (carried over: `Workers.get`'s `made` is before `Workers.started`) also says its uids are gone, since an
-earlier server's process may have given some out. **`worker.Workers`** holds
-one per tab id. `tab_close`, the page's Close, Close session, Quit Chrome and Delete profile, `/close-paused`, `tab_list` (for tabs found closed) and a
-queue on a tab found closed drop it;
-any other failure to reach a tab leaves its process and uids alone. `Workers.pause` stops the processes of a
-paused session's tabs but keeps each dead one, so its next queue starts a new one and says the uids are gone;
-it asks once more, as each queue lets go of its tab, whether the session is paused still.
 
 **`steps.place_screenshots`** first gives each `take_screenshot` without a `filePath` one among the
 call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added (and
@@ -226,15 +191,11 @@ same tabs under the same ids. A crash leaves the same.
   starts would make that Chrome fail.
 - **No agent ends a session.** An agent would end one while its task still needed it, so only Joshua
   closes one: on the page (Close session, or Delete profile for every one of its profile's) or with `browserd stop`;
-  `profile_delete` is refused while its profile has one open. `Tabs.close_session` marks the
-  session closed before it closes its tabs, so any call of the session's made meanwhile is refused. A session is paused after 30 minutes without a call, which stops its tabs' chrome-devtools-mcp processes;
-  any call resumes it. A closed session's id is refused, pointing at `session_start`. Every agent, a subagent
+  `profile_delete` is refused while its profile has one open. A session is paused after 30 minutes without a call,
+  which stops its tabs' chrome-devtools-mcp processes; any call resumes it. A closed session's id is refused, pointing at `session_start`. Every agent, a subagent
   included, starts its own session; `SESSION_HELP` says so, and that only an agent carrying on the same task
   in the same tabs is given another's id. Sessions of one profile share its logins and cookies: one signing
   out of a site signs every one out.
-- **A tab opened by hand is no session's** until `/handover` gives it to one. It gets a tab id at the next listing, but
-  no session's `tab_list` shows it before then. A tab
-  closed outside the server is marked closed at the next listing or use, and its id stays refused.
 - **The MCP port, `ports.MCP`, refuses any request with an `Origin` header, a `Host` other than
   `127.0.0.1:<that port>` or `localhost:<that port>`, or a body that is not `application/json`.** A web page
   open in any Chrome could otherwise POST to it and drive the browser.
@@ -247,14 +208,6 @@ same tabs under the same ids. A crash leaves the same.
 - **`browserd stop` and `restart` only signal a pid whose command line runs `-m browser.server`.** A stale pid file
   can name a reused pid. `browserd start` holds `.run/start.lock` while it checks and spawns, and treats
   anything answering on the MCP port under another server name as a refusal.
-- **One chrome-devtools-mcp process runs one tool call at a time** (one `Mutex` in its
-  `McpServer`, taken by every `ToolHandler.handle`), so a single shared process would put every
-  tab in one line. Each tab gets its own, about 180MB each.
-- **Its page ids mean nothing to DevTools.** `Worker._pair` sets a random value on the tab
-  through the server's own connection (`window[Symbol.for('resume-tools-tab')]`), looks for it
-  through chrome-devtools-mcp, URL matches first, then deletes it. The probe passes an empty
-  `dialogAction` and no DOM wait, so it never answers a dialog raised in another tab. When no listed page holds the
-  marker, the queue fails, saying to open the tab's url again with `tab_open` before closing it with `tab_close`.
 - **A queue's step is `{"tool": name, ...arguments}`, never with `pageId`.** `steps.check` refuses
   the whole queue before anything runs for a tool in `steps.LEFT_OUT` (opening, listing, choosing
   and closing tabs; lighthouse; heap snapshots), an unknown tool (the refusal names every tool a
@@ -508,19 +461,6 @@ same tabs under the same ids. A crash leaves the same.
     a typed box's `change`, fired as the next fill takes the focus) or by work of its own (a reply or timer landing),
     is filled on the read from before: chrome-devtools-mcp's `fill` empties a read-only one and reports success, and
     fails a disabled one after 5s.
-- **Element uids come from `take_snapshot` and live in that tab's process.** They stay valid
-  across queue calls until the page navigates or the element goes away. When the process died and
-  was restarted, the next report opens with a note that they are gone. A step failing with
-  chrome-devtools-mcp's "No page found" (it renumbered its pages after reconnecting) stops the
-  process, so the next queue re-pairs.
-- **chrome-devtools-mcp's file tools may only touch `devtools.FILE_ROOTS`: the Desktop (`~/Desktop`, or on
-  Windows the Desktop known folder, wherever OneDrive moved it), this project's folder (which holds the record
-  folders in a checkout; an installed copy's records folder, outside it, is added) and, on a Mac, `/private/tmp` (all `--workspace`), and the temporary folder, which it always adds.**
-  `steps.check` refuses a `filePath` or `filePaths` outside them (`devtools.may_touch`, which compares them
-  case-folded and refuses a network path before resolving it), or relative, before any step runs: the server's
-  working folder is this project's, so a relative or `~` path would land inside it. A `file` of steps on a network
-  path is never read either; one is read as UTF-8, a byte order mark (Windows PowerShell's) skipped. Usage statistics and CrUX are off, and the performance, network and
-  emulation tools are not loaded.
 - **No tool types a password safely.** A queue's chrome-devtools-mcp steps refuse nothing, and every
   step's arguments are recorded in the tab's record folder, and a refused call's in `../.run/server.log` too.
 - **Checks.** Each component is checked for what it does against stand-ins, offline, and only what needs a real

@@ -21,7 +21,9 @@ LEFT_OUT = PAGE_TOOLS | {"lighthouse_audit", "take_heapsnapshot"}
 RESTARTED = ("note: this tab's chrome-devtools-mcp had stopped and was started again, so element uids from before "
              "are gone; take a new snapshot")
 GAP = 0.1  # seconds between steps but two fills, so the page can react to one step before the next
-NAVIGATE_TIMEOUT = 30000  # ms a navigate_page that names none gives the load; README.md, "Core Abstractions & Shared Pieces"
+# ms a navigate_page that names no timeout gets, longer than a selected page's own (worker.py's select_page): a
+# navigation that runs out its timeout still reports ok, on a page half loaded.
+NAVIGATE_TIMEOUT = 30000
 QUEUE_MOST = 50.0  # seconds a queue starts steps for; README.md, "Agent Gotchas & Invariants", says why
 DOWNLOAD_WAIT = 5.0  # seconds a step waits for a download it began to end; README.md, "Agent Gotchas & Invariants"
 REPLY_MOST = 40000  # characters of one step's reply a report holds; the whole reply is saved when longer
@@ -191,7 +193,8 @@ def _command_key(step):
 def check(steps, allowed):
     """Refuse the whole queue, before any step runs, when any step could only fail or do what it was not meant to.
 
-    README.md, "Agent Gotchas & Invariants", says what it refuses and what it rewrites, in the steps themselves.
+    README.md, "Agent Gotchas & Invariants", says what it refuses and what it rewrites, in the steps themselves;
+    ../tabs/README.md, which file paths it refuses.
 
     Args:
         steps (list[dict]): from load.
