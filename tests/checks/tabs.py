@@ -24,6 +24,8 @@ from harness import (FakeChrome, FakeConnection, STAND_IN, call, check, open_ses
 
 
 def tabs_offline():
+    """Tabs against a stand-in Chrome and system.bring, with state.db in a temporary folder: tab ids, listings, which
+    session a page belongs to, open, show and close; then session_tools_offline."""
     workdir = tempfile.mkdtemp(prefix="browser-tabs-")
     state = stand_in_state(workdir)
     mine, theirs = open_session(state, "mine"), open_session(state, "theirs")

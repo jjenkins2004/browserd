@@ -1,6 +1,6 @@
 """Checks for the connection to a profile's Chrome: the websocket, the proof the port is it, and launch.
 
-browser/README.md, "Agent Gotchas & Invariants", "Checks", says what each group needs and touches. None needs Chrome:
+README.md says what the groups need and touch. None needs Chrome:
 check_server.py's live group checks the connection to a real one.
 
     python3 tests/check_browser.py [--list] [GROUP ...]    (py -3 tests\\check_browser.py on Windows)

@@ -85,7 +85,8 @@ def parallel(*blocks):
     all have ended. Each block's lines are printed in that order too: its own as soon as it and every block before it
     have ended. A block that raises fails, its traceback the detail, and the rest run on.
 
-    Each block owns what it opens and closes it; what the blocks share must take calls from threads at once."""
+    Each block owns what it opens and closes it, and a module global it changes must be one no other block reads; what
+    the blocks share must take calls from threads at once."""
     def run(block):
         _held.lines = lines = []
         try:

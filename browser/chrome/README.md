@@ -59,8 +59,7 @@ it first.
 - **Only `check_server.py --headed` puts windows on screen.** The offline checks hold `opens.py`, `launch.py` and the
   OS's window code to what they ask of Chrome and the OS (`focus_offline`, `owning_windows`, `owning_mac`), but the
   live checks run headless by default, so whether a real Chrome then shows a window or takes the focus is seen only
-  headed. The headed run puts windows on screen and moves the user's focus: ask the user to run it (`../README.md`,
-  "Agent Gotchas & Invariants", the Checks bullet).
+  headed. Ask the user for that run (`../../tests/README.md`).
 - **Every profile's Chrome starts with `--allow-pre-commit-input` (`cdp.INPUT_FLAG`).** Without it Chrome holds a
   page's input until the page first draws, and it never draws a background tab by itself, so such a tab drops every key
   press and click while `Input.dispatchKeyEvent` and `dispatchMouseEvent` report success (measured: 40 of 40 first key

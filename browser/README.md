@@ -60,12 +60,6 @@ server.py tools.py, and cli/ server.py too, which it starts and stops. Each fold
     ../browserd, ../browserd.cmd  the command, on macOS and Windows
     ../.run/                    gitignored, a checkout's records folder: server.pid, server.log, start.lock, state.db, ports.json, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
     ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
-    ../tests/check_server.py    runs checks/'s groups in order: protocol, tab ids, sessions, focus, queue, recording, profiles, page, service; live: tabs, windows (--headed), queue, downloads; any group by name
-    ../tests/checks/            a module per folder here (protocol, tabs, chrome, steps, records, tools, dashboard, cli), and live.py, every live group
-    ../tests/harness.py         check and its tallies, the stand-in profile and state, a served MCP to call, the shared stand-ins
-    ../tests/check_browser.py   framing, a profile's Chrome proof, launch; each OS's owner and launch checks
-    ../tests/throwaway.py       the live checks' own Chrome, on a new folder and a free port
-    ../tests/popups.py          on Windows, every window that comes on screen or takes the focus while checks run
 
 ## Core Abstractions & Shared Pieces
 
@@ -431,71 +425,3 @@ same tabs under the same ids. A crash leaves the same.
     fails a disabled one after 5s.
 - **No tool types a password safely.** A queue's chrome-devtools-mcp steps refuse nothing, and every
   step's arguments are recorded in the tab's record folder, and a refused call's in `../.run/server.log` too.
-- **Checks.** Each component is checked for what it does against stand-ins, offline, and only what needs a real
-  Chrome or chrome-devtools-mcp is checked live, once: the offline groups take about 3s, the whole of
-  `check_server.py` about 18s, `check_browser.py` about 0.4s. Either script runs groups by name (`[--list] [GROUP
-  ...]`). `check_server.py` also takes `--headed`, and names each offline group by its function name without
-  `_offline`, `live`, `windows_live`, `queue_live`, `downloads_live`, and `offline` and `live:all`; the checks' Chrome
-  starts only for a live group. `check_browser.py`'s groups are `framing`, `connecting` and `owning`, none with a
-  Chrome.
-  - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for the OS
-    (`system.listeners`, `command`, `switches`, `chrome_owner`) and the port, then asks the real OS about ports it
-    holds itself; `owning_mac` checks the lock, `ps`, `lsof` and `open`, and `owning_windows` a real
-    `Chrome_MessageWindow` in a process of its own, a pid it cannot read, and how Chrome is started.
-    `tabs_offline` and `session_tools_offline` stand in for Chrome and `osascript`, with `state.db` in a
-    temporary folder; `focus_offline` for the OS's front app and window record, and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
-    `checked_offline` for a widget's chrome-devtools-mcp (pick, expect, type and wait, each reading back what the field
-    holds); `pairing_offline` for a tab's chrome-devtools-mcp and the connection that marks the tab;
-    `queue_tools_offline` for Chrome and each tab's chrome-devtools-mcp, behind `tab_open`, `tab_list`, `tab_close`
-    and `queue`;
-    `dialogs_offline` for the answerer's connection; `downloads_offline` for the Folder's and the watcher's connections; `paste_offline` for chrome-devtools-mcp and
-    the connection that hands the page its text and presses the paste key; `screenshot_offline` for the connection
-    a viewport screenshot is taken over; `pointer_offline` for the connection mouse input is sent over; `limits_offline` for a slow tool;
-    `recording_offline` for Chrome, recording into a temporary folder; `profiles_offline` for the Google folder
-    and a folder's running Chrome, `profile_tools_offline` for the Google folder and the profile's Chrome, and `page_offline` for Chrome, `system.bring` and each tab's Worker, with `.run/state.db` and the Google
-    folder each in a temporary folder;
-    `service_offline` for the spawned server, with real `ps`, and for the server `browserd stop` and `restart`
-    signal, a process that runs `-m browser.server` in its command line. None of them waits more than a moment on a real clock: a wait
-    or a retry runs on a stand-in clock whose sleep moves its time on (`Clock`), a module's waits are cut for the
-    check, and the stand-in servers and `state.db` skip what only slows them (a 0.5s shutdown poll, a disk sync
-    each write).
-  - **Live:** the live groups start a Chrome of their own, `throwaway.chrome()`, on a new folder under
-    `$TMPDIR` and a free port, and quit it after, so no live check touches a profile's Chrome; with no
-    Chrome installed they skip. It runs headless (`--headless=new`, passed through `launch.launch`'s `flags`, which
-    no profile's Chrome is given), so no live check puts a window on screen or moves the user's focus, and they run
-    while the user works. `check_server.py --headed` runs them on a Chrome with windows instead, and adds `windows_live`, the checks of windows and the focus: the first tab's window
-    minimized, and a page's popup and `target=_blank` link put back, each within `popups.allowing`'s 0.25s
-    (measured: under a tenth of a second) while the focus moves and comes back. `live` first checks the Chrome passes `require`, its folder's owner is
-    on its port, a load is heard, and `check_folder` passes. `queue_live` also needs `npm ci` done, and skips
-    without it, and records into a temporary folder. Its four blocks run at once (`harness.parallel`, at most four,
-    each block's lines printed in order), each opening and closing its own tabs, each tab with its own
-    chrome-devtools-mcp: `a` and `b` on one form page (the form, a date input, a disabled button, two download links
-    and a cross-origin frame); the pointer page, the one block with pointer steps or viewport screenshots, so the
-    waits it cuts are its own; the checked page; and a confirm page of its own, whose Warn me click with no
-    handle_dialog takes about 5s, so its 5s runs while the other blocks do. Its checked steps run on a local page
-    whose dropdown and one textarea take only trusted input, whose `parseResume()` runs a stand-in resume parser, and
-    whose Stopper editor puts a paste in itself and stops it without cancelling Chrome's own insert, as Slides does;
-    one script reads every kind of element `READ_JS`, `SELECT_JS`, `FILL_JS` and `FOCUS_JS` treat apart. Its paste checks read the Mac's clipboard's
-    change count, never its contents, and check nothing wrote it. Its pixel checks find a red square drawn on a
-    canvas down a scrolled page in a viewport screenshot's own pixels, and click it there with `move_at`,
-    `click_down` and `click_up`; its pointer checks drag across a pad that records trusted mouse events, click a
-    button whose alert holds the let-go, and then try a `move_at` and a screenshot with that alert still open, each
-    waiting 2s (`pointer.DIALOG_WAIT` and `screenshot.ANSWER_WAIT`, cut for the check). Its press checks press under
-    a layer raised since (not pressed for its `on`, then pressed with `on: ""`), and twice for a double click, and
-    read what each press landed on.
-  - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
-    them, and close them; their downloads go in a `Folder` of their own in a temporary folder, never `~/Downloads`
-    (`throwaway.chrome()` writes the profile's Default/Preferences, set to ask where to save each file, before its
-    Chrome first starts, so every live download proves no Save As window opens); a tab already open is never
-    touched. Every window and tab a live check opens comes
-    from `opens.window` or `opens.tab`, and `opens.watch` runs on the throwaway Chrome as the server runs it, so the
-    tabs the checks have a page open are put back; that moves the focus only back to the app that had it.
-    `Tabs.show` is checked offline only. On Windows, `tests/popups.py` watches the screen through every live group,
-    headless or not: a window of the checks' own processes that comes on screen or takes the focus fails the checks,
-    but for one a page opens inside `popups.allowing` (`windows_live`'s popup and link, `queue_live`'s popup
-    download), put back within 0.25s. `py -3 tests/popups.py -- <command>` watches any command's processes and every
-    Chrome started with `--remote-debugging-port`, and exits with the command's own code when that fails, else 2 on
-    any pop-up.
-  - **Never automated:** `browserd start`, `stop`, `restart`, `setup` and `uninstall` are never run, since each acts on the
-    real browserd: stopping quits every profile's Chrome, restarting replaces the one running, and uninstalling
-    removes it.

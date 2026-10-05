@@ -48,6 +48,8 @@ class Blocked:
 
 @mock.patch.object(steps, "GAP", 0)  # a stand-in page has nothing to react to between steps
 def queue_offline():
+    """The queue's own work against a stand-in chrome-devtools-mcp: what steps.load and steps.check refuse and rewrite,
+    the steps' description, views, the report and its stops, fills, dialogs a step meets, and Workers."""
     workdir = tempfile.mkdtemp(prefix="browser-steps-")
     try:
         def load(**arguments):

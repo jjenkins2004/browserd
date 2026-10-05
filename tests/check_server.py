@@ -1,6 +1,6 @@
 """Checks for the browser MCP server.
 
-browser/README.md, "Agent Gotchas & Invariants", "Checks", says what each group needs and touches. The live groups
+README.md says what the groups need and touch. The live groups
 run on a headless Chrome, which puts no window on screen; --headed runs them on a Chrome with windows, and adds the
 checks of windows and the focus, which put windows on screen for a moment and move the user's focus.
 

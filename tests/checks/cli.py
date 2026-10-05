@@ -18,6 +18,8 @@ from harness import check, refusal, serving
 
 
 def service_offline():
+    """browserd start, stop and restart against stand-in MCP servers and a records folder of the checks' own, its spawn
+    stood in; stop and restart reach a real Python process running -m browser.server, which the OS reads."""
     saved = (server.URL, server.PORT, server.ROOT, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE,
              service.time, subprocess.Popen)
     code = paths.ROOT  # the folder holding the browser package

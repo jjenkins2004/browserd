@@ -33,8 +33,7 @@ def chrome(headed=False):
     if not os.path.exists(cdp.CHROME):
         yield None
         return
-    # One spelling of the folder, long and resolved, as a profile's folder always is: Chrome on Windows knows its
-    # folder by the spelling it was given.
+    # One spelling of the folder, long and resolved, as a profile's folder always is (../browser/system/README.md).
     folder = os.path.realpath(tempfile.mkdtemp(prefix="Chrome-Check-"))
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))

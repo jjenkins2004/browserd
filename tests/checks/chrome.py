@@ -481,6 +481,7 @@ def downloads_offline():
 
 
 def quitting():
+    """A Chrome that drops the connection as it quits, against a stand-in cdp.Browser and cdp.owner."""
     saved = (cdp.Browser, cdp.owner)
 
     class Drops:

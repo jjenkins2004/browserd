@@ -61,6 +61,8 @@ def records_offline():
 
 
 def recording_offline():
+    """A queue's record folder, against a stand-in Chrome: where it sits, what is refused before anything is written,
+    and what is recorded as sent and as run; and the queue's description."""
     root = tempfile.mkdtemp(prefix="browser-calls-")
     workdir = tempfile.mkdtemp(prefix="browser-state-")
     state = stand_in_state(workdir)

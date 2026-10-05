@@ -72,9 +72,7 @@ A git checkout runs as it is, and keeps its records in `.run/` beside the code: 
     install.sh, install.ps1 the macOS and Windows installers, run from GitHub; Formula/browserd.rb is Homebrew's
     scripts/release         cuts a release: VERSION, the tag, and the formula's archive and sha256
     .run/                   gitignored, a checkout's records: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs, needs_input), ports.json, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
-    tests/                  check_browser.py, check_server.py, which runs checks/, one module per browser/ folder, with
-                            harness.py's shared stand-ins; throwaway.py, the live checks' own Chrome; popups.py,
-                            which fails on a window that comes on screen or takes the focus
+    tests/                  the checks, and their own README
     preview/                every state of the page's parts from made-up data: `python3 preview/preview.py`, then http://127.0.0.1:9320/
     experiments/            what measures browserd: bench/, the benchmarks against other browser MCP servers; long-tasks/, the demo tasks; findings/, what each found
     .claude/skills/         benchmark: a rerun's steps, for an agent
@@ -87,12 +85,8 @@ browserd call and has them from its next turn; one that connected to a browserd 
 
 ## Tests
 
-    python3 tests/check_browser.py    framing, a profile's Chrome proof, launch; each OS's own owner and launch checks
-    python3 tests/check_server.py     protocol, tab ids, sessions, focus, queue, recording, profiles, page, service
+    python3 tests/check_browser.py
+    python3 tests/check_server.py
 
-On Windows, `py -3 tests\check_browser.py` and `py -3 tests\check_server.py`. They take about 0.4s and 18s. Either
-runs only the groups named (`--list` lists them), as `check_server.py offline` or `check_server.py queue_live`.
-
-The live groups start a Chrome of their own on a new folder and a free port, and quit it after, so
-they never touch a profile's Chrome; `check_server.py`'s queue checks need `npm ci` done. That Chrome is headless, so no
-check puts a window on screen; `check_server.py --headed` adds the checks of windows and the focus, which do.
+On Windows, `py -3 tests\check_browser.py` and `py -3 tests\check_server.py`. `tests/README.md` says what each checks, needs
+and touches, and how long each takes.
