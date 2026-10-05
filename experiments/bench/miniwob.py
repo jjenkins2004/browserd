@@ -9,7 +9,7 @@ import urllib.request
 
 import paths
 
-REWARDS = paths.RESULTS / "miniwob-rewards"
+REWARDS = RECORDS = paths.RESULTS / "miniwob-rewards"
 BASE = "http://127.0.0.1:4390"
 SEEDS = (1, 2)
 

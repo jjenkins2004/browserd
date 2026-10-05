@@ -8,9 +8,11 @@ transcript already ends in a result is skipped, so running the same --exp again 
 
 Every run cleans up after itself: its whole process tree is stopped (its MCP servers, and through them any Chrome they
 started), its agent-browser session is closed, and each browserd session it started is closed on the browserd page,
-which closes that session's tabs. A suite with a prepare(task, mcp_url, session, token) sets its page up before the
-run, in a browserd session of the runner's own, and one with a collect(task, token, transcript, mcp_url) reads what the
-run left on its tabs first, both through browserd. The batch stops at the first sign that the runs are broken.
+which closes that session's tabs. Before a run starts, what an earlier attempt of it left in its suite's RECORDS (its
+<token>.* files) is moved to results/_invalid/. A suite with a prepare(task, mcp_url, session, token) sets its page up
+before the run, in a browserd session of the runner's own, and one with a collect(task, token, transcript, mcp_url)
+reads what the run left on its tabs first, both through browserd. The batch stops at the first sign that the runs are
+broken.
 """
 import argparse
 import concurrent.futures
@@ -139,8 +141,17 @@ def finished(path):
     if not path.exists():
         return False
     text = path.read_text(encoding="utf-8", errors="replace")
-    return (any(json.loads(line).get("type") == "result" for line in text.splitlines() if line.strip())
+    return (any(event.get("type") == "result" for event in _events(text))
             and not any(line in text for line in BROKEN) and refusal(text) is None)
+
+
+def _events(text):
+    """A transcript's events, passing over a line that is not JSON, as the last of a run stopped mid-write is."""
+    for line in text.splitlines():
+        try:
+            yield json.loads(line)
+        except ValueError:
+            continue
 
 
 def refusal(text):
@@ -151,11 +162,7 @@ def refusal(text):
         text (str): the run's stream-json transcript.
     """
     called, result = False, None
-    for line in text.splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
+    for event in _events(text):
         content = (event.get("message") or {}).get("content")
         blocks = content if isinstance(content, list) else []
         called = called or any(block.get("type") == "tool_use" for block in blocks)
@@ -175,11 +182,7 @@ def reached_browser(text):
         text (str): the run's stream-json transcript.
     """
     names, tried = {}, False
-    for line in text.splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
+    for event in _events(text):
         if event.get("subtype") == "init" and any(server.get("status") != "connected"
                                                   for server in event.get("mcp_servers", [])):
             return False
@@ -239,6 +242,15 @@ def close_tabs(cdp):
     return len(pages)
 
 
+def set_aside(records, run_token):
+    """Move the <token>.* files an earlier attempt of a run left in records to results/_invalid/<records' name>/: a
+    rerun keeps the run's token, so its score would read them too."""
+    aside, stamp = paths.RESULTS / "_invalid" / records.name, int(time.time())
+    for path in records.glob("%s.*" % run_token):
+        aside.mkdir(parents=True, exist_ok=True)
+        os.replace(path, aside / ("%s-%d%s" % (run_token, stamp, path.suffix)))
+
+
 def prepare(suite, task, arm, run_token):
     """Set the run's page up with the suite's prepare, in a browserd session of the runner's own that it closes after;
     why that failed, or None."""
@@ -285,6 +297,8 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
     cmd += ["--append-system-prompt", " ".join(filter(None, [suite.SYSTEM, arm["system"]]))]
     started = time.time()
     timed_out = False
+    if hasattr(suite, "RECORDS"):
+        set_aside(suite.RECORDS, run_token)
     if hasattr(suite, "prepare") and "profile" in arm:
         problem = prepare(suite, task, arm, run_token)
         if problem is not None:

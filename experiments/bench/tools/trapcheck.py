@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Self-check of suite traps' scoring, on synthetic logs: a clean run, a T1 hit, an Enter on T6, a stale click after
-T3, a press whose release a layer took. Given a run's token, it also checks that run's real log: that each click's logged target is what the layout
-history held at that time and point, and is the element the browser hit.
+T3, a press whose release a layer took. Given a run's token, it also checks that run's real log: that each press's
+logged target is what the layout history held at that time and point, and is the element the browser hit.
 
     python3 tools/trapcheck.py [<token>]
 """
@@ -140,7 +140,8 @@ CANVAS = ("cell:", "check:", "T2:", "canvas")
 
 
 def real(token):
-    """Each click's logged target against the layout history and the element hit; the plan; the score."""
+    """Each press's logged target against the layout history and the element hit, as tally judges a click by its
+    press; the plan; the score."""
     loads = traps.runs(token)
     failed = 0 if loads else 1
     if not loads:
@@ -155,13 +156,13 @@ def real(token):
             if event["kind"] == "trap" and event["phase"] != "armed":
                 print("  t+%6d ms  %s %s %s" % (event["t"] - events[0]["t"], event["trap"], event["phase"],
                                                 event.get("over") or event.get("how") or ""))
-            if event["kind"] != "click":
+            if event["kind"] != "down":
                 continue
             under, dom = event["under"]["id"], event.get("dom")
             again = traps.held(events, event["t"], event["x"], event["y"])["id"]
             agrees = dom == under or (dom == "canvas" and (under or "").startswith(CANVAS))
             failed += again != under or not agrees
-            print("  t+%6d ms  click (%.0f, %.0f) on %s%s%s" % (
+            print("  t+%6d ms  press (%.0f, %.0f) on %s%s%s" % (
                 event["t"] - events[0]["t"], event["x"], event["y"], under,
                 "" if again == under else "  FAIL history says %s" % again,
                 "" if agrees else "  FAIL browser hit %s" % dom))

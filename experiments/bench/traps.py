@@ -37,15 +37,12 @@ strictly increasing within a load):
     done      task, type
 """
 import json
-import os
-import time
 import urllib.request
 
-import paths
 import trapserver
 
 BASE = "http://127.0.0.1:%d" % trapserver.PORT
-LOGS = trapserver.LOGS
+LOGS = RECORDS = trapserver.LOGS
 SEEDS = range(1, 13)
 TASKS = 8
 TRAPS = ("T1", "T2", "T3", "T4", "T5", "T6")
@@ -64,15 +61,6 @@ def load():
 
 def prompt(task, token=None):
     return TASK_PROMPT.format(url="%s/?run=%s&seed=%d" % (BASE, token, task["seed"]), n=TASKS)
-
-
-def prepare(task, mcp_url, session, token=None):
-    """Set aside what an earlier attempt of this run logged, as one cut off logs, so the run is scored alone."""
-    old = LOGS / ("%s.jsonl" % token)
-    if old.exists():
-        aside = paths.RESULTS / "_invalid" / "trap-logs"
-        aside.mkdir(parents=True, exist_ok=True)
-        os.replace(old, aside / ("%s-%d.jsonl" % (token, time.time())))
 
 
 def runs(token):
