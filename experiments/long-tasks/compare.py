@@ -37,7 +37,6 @@ DATA = Path(os.environ.get("BROWSERD_LONG_TASKS_DATA", ROOT.parent / "browserd-l
 MODEL = "claude-sonnet-5-5"
 PROFILE = "personal"
 TIMEOUT = 3600  # seconds a run may take before it is stopped
-FREE_LEAST = 25  # percent of the Mac's memory that must be free before a run starts
 ARMS = ["browserd", "playwright", "devtools", "agentbrowser"]
 # The other arms' sentence for prompt.md's browserd one: the same request, minus the server's name and profile.
 OTHER_BROWSER = "Use the browser, where I'm signed in to Google."
@@ -68,13 +67,6 @@ def servers(arm, run, port, session):
     (run / "agent-browser.json").write_text(json.dumps({"cdp": str(port)}))
     return {"agent-browser": {"command": "agent-browser", "args": ["mcp"],
                               "env": {"AGENT_BROWSER_CONFIG": str(run / "agent-browser.json"), "AGENT_BROWSER_SESSION": session}}}
-
-
-def free_memory():
-    """The percent of the Mac's memory free, as memory_pressure says."""
-    said = subprocess.run(["memory_pressure"], capture_output=True, text=True).stdout
-    found = re.search(r"free percentage: (\d+)%", said)
-    return int(found.group(1)) if found else 100
 
 
 def start_recorder(arm, run, profile):
@@ -122,14 +114,21 @@ def clean_start(state, browser):
     return fresh
 
 
-def stop_group(pgid):
-    """Stop every process left in a run's process group: SIGTERM first, so an MCP server can let go of its browser."""
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(pgid, sig)
-        except (ProcessLookupError, PermissionError):  # macOS says EPERM for a group of zombies alone
-            return
-        time.sleep(3)
+if sys.platform == "win32":
+    def stop_tree(pid):
+        """Stop a run's claude and every process it started, at once (taskkill cannot ask one with no window to quit),
+        while claude still runs: after it ends, taskkill finds none of them."""
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+else:
+    def stop_tree(pid):
+        """Stop every process left in a run's process group: SIGTERM first, so an MCP server can let go of its
+        browser."""
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(pid, sig)
+            except (ProcessLookupError, PermissionError):  # macOS says EPERM for a group of zombies alone
+                return
+            time.sleep(3)
 
 
 def claude(arm, run, servers):
@@ -142,15 +141,18 @@ def claude(arm, run, servers):
     if arm == "browserd":
         cmd += ["--disallowedTools", "mcp__browserd__profile_new", "mcp__browserd__profile_delete"]
     with (run / "transcript.jsonl").open("w") as stdout, (run / "stderr.txt").open("w") as stderr:
+        # Out of the terminal's Ctrl-C, as on macOS: there a session of its own, which stop_tree's killpg also uses
+        # to reach the MCP servers claude starts; on Windows a process group of its own, which Ctrl-C skips.
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=run, env=judge.env(),
-                                text=True, start_new_session=True)
+                                text=True, start_new_session=True,
+                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0)
         try:
             proc.communicate((run / "prompt.md").read_text(), timeout=TIMEOUT)
             return False
         except subprocess.TimeoutExpired:
             return True
         finally:
-            stop_group(proc.pid)
+            stop_tree(proc.pid)
             proc.wait()
 
 
@@ -185,8 +187,6 @@ def run_one(out, arm, rep, stopped):
     run = out / ("%s-r%d" % (arm, rep))
     if (run / "result.json").exists() or stopped.is_set():
         return
-    while free_memory() < FREE_LEAST and not stopped.is_set():
-        time.sleep(30)
     run.mkdir(parents=True, exist_ok=True)
     (run / "prompt.md").write_text(prompt(arm))
     before = grade.reference(PROFILE)
