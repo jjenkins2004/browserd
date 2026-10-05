@@ -814,6 +814,11 @@ def screenshot_offline():
               "again while Chrome holds it", not failed_ and captured == [{
                   "nudge": screenshot.NUDGE, "format": "jpeg", "quality": screenshot.QUALITY, "clip": {
                       "x": 0, "y": 300, "width": 1200, "height": 792, "scale": 0.5}}], repr(shots.calls))
+        methods = [method for method, _ in shots.calls]
+        check("Chrome draws the tab for the capture's length, a screencast begun before it and ended after, so a tab in "
+              "a minimized window keeps its size", methods[-3:] == ["Page.startScreencast", "Page.captureScreenshot",
+                                                                     "Page.stopScreencast"]
+              and shots.calls[-3][1] == screenshot.DRAWN, repr(shots.calls))
         check("it is saved to the step's filePath", open(path, "rb").read() == b"img")
         check("and sent back as an image after a line giving its size in CSS pixels and where it is saved",
               content[1:] == [{"type": "image", "data": base64.b64encode(b"img").decode(), "mimeType": "image/jpeg"}]

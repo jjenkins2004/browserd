@@ -5,6 +5,7 @@ README.md, "Agent Gotchas & Invariants", says why chrome-devtools-mcp's own take
 """
 
 import base64
+import contextlib
 
 from ..chrome import cdp
 from ..protocol.ws import WebSocketError
@@ -14,6 +15,9 @@ ANSWER_WAIT = 5.0  # seconds the page has to answer before a screenshot fails, a
 # Seconds a capture waits before asking again: Chrome on Windows can hold a background tab's capture for a frame that
 # only another capture brings (measured: every capture answered within 3s nudged, where one in two hung for 60s).
 NUDGE = 0.5
+# A screencast run for a capture's length, so Chrome draws a tab it is not drawing (each in a minimized window, a
+# background tab): smallest frames, and few of them, which nothing reads.
+DRAWN = {"format": "jpeg", "quality": 1, "maxWidth": 16, "maxHeight": 16, "everyNthFrame": 1000}
 LONGEST = 2000  # pixels on the image's longer side; Claude Code shrinks a larger image, moving every point read off it
 
 
@@ -81,7 +85,15 @@ def capture(browser, session, kind, quality, scale):
     clip = {"x": css["pageX"], "y": css["pageY"], "width": css["clientWidth"], "height": css["clientHeight"],
             "scale": fit * css["clientWidth"] / device["clientWidth"]}
     extra = {} if kind == "png" else {"quality": quality}
-    data = browser.call("Page.captureScreenshot", session, nudge=NUDGE, format=kind, clip=clip, **extra)["data"]
+    # A scaled capture of a tab Chrome is not drawing could leave the tab laid out at the scaled size, which moves
+    # every point read off a screenshot after it (measured in minimized windows: 3 of 15 captures at a scale of 0.5,
+    # each halving the viewport); with Chrome drawing it, 0 of 15, and the capture answered at once.
+    browser.call("Page.startScreencast", session, **DRAWN)
+    try:
+        data = browser.call("Page.captureScreenshot", session, nudge=NUDGE, format=kind, clip=clip, **extra)["data"]
+    finally:
+        with contextlib.suppress(cdp.CdpError, WebSocketError, OSError):
+            browser.call("Page.stopScreencast", session)
     return data, css, fit
 
 
