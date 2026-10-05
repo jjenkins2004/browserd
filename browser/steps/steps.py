@@ -99,6 +99,10 @@ CONTROLS = {"button", "checkbox", "ColorWell", "combobox", "Date", "DateTime", "
 POPUPS = {"menu", "dialog", "alertdialog"}
 SELECT_LEFT_OFF = {"disableable", "expandable", "focusable", "haspopup"}  # left off a collapsed select; they tell nothing
 DATE_ROLES = {"Date", "DateTime", "InputTime"}  # a date, datetime-local, month, week or time input: one line in a view
+# Names agents give keys that chrome-devtools-mcp refuses, each meaning one key on any keyboard, and its name for it.
+KEY_NAMES = {"Up": "ArrowUp", "Down": "ArrowDown", "Left": "ArrowLeft", "Right": "ArrowRight", "Esc": "Escape",
+             "Del": "Delete", "Return": "Enter", "PgUp": "PageUp", "PgDn": "PageDown", "Ctrl": "Control",
+             "Cmd": "Meta", "Command": "Meta", "Option": "Alt"}
 
 
 class StepError(Exception):
@@ -175,6 +179,9 @@ def load(arguments, base):
         if "pageId" in step:
             raise StepError("step %d gives a pageId; the tab argument chooses the page" % number)
         _bare_uids(step)
+        if step.get("uid") == "" and "name" in step:
+            del step["uid"]  # an empty uid beside name, as an agent sent, means none
+        _key_names(step)
         _command_key(step)
     return steps
 
@@ -197,6 +204,15 @@ def _bare_uids(step):
     for element in step.get("elements", []) if isinstance(step.get("elements"), list) else []:
         if isinstance(element, dict) and "uid" in element:
             element["uid"] = _bare(element["uid"])
+
+
+def _key_names(step):
+    """Give press_key's key and type_text's submitKey chrome-devtools-mcp's names for KEY_NAMES' keys: Shift+Down is
+    Shift+ArrowDown."""
+    argument = {"press_key": "key", "type_text": "submitKey"}.get(step["tool"])
+    key = step.get(argument) if argument else None
+    if isinstance(key, str):
+        step[argument] = "+".join(KEY_NAMES.get(part, part) for part in key.split("+"))
 
 
 def _command_key(step):
@@ -749,8 +765,8 @@ def _downloaded(download):
 
 def _step(devtools, page_id, step, left, answerer, target, connect, read=None):
     """(content, failed) for one step: a checked step, a pointer step, a screenshot of the viewport, a dialog the
-    answerer answered, a refused fill, or the tool's own; a step given name runs on the uid _named finds, its line
-    first. read is a fill's read taken earlier, by _Fills."""
+    answerer answered, a refused fill, a type_text with tabs (_tabbed), or the tool's own; a step given name runs on
+    the uid _named finds, its line first. read is a fill's read taken earlier, by _Fills."""
     if "name" in step:
         began = time.monotonic()
         try:
@@ -778,6 +794,8 @@ def _step(devtools, page_id, step, left, answerer, target, connect, read=None):
         refused = checked.fill_refused(devtools, page_id, step, read)
         if refused:
             return [{"type": "text", "text": refused}], True
+    if step["tool"] == "type_text" and "\t" in step["text"]:
+        return _tabbed(devtools, page_id, step, left)
     arguments = {key: value for key, value in step.items()
                  if key != "tool" and not (step["tool"] == "take_snapshot" and key in VIEW_OPTIONS)}
     arguments["pageId"] = page_id
@@ -791,14 +809,44 @@ def _step(devtools, page_id, step, left, answerer, target, connect, read=None):
         return [{"type": "text", "text": str(exc)}], True
 
 
+def _tabbed(devtools, page_id, step, left):
+    """(content, failed) for a type_text whose text holds tabs, each pressed as the Tab key: chrome-devtools-mcp
+    presses a key only for a character puppeteer's keyboard layout names, "\\n" (Enter) but not "\\t", which it inserts
+    as text, moving no focus. Each part between tabs is typed by a type_text of its own whose submitKey is Tab, so the
+    Tab follows the part's keys at once; the last part gets the step's own submitKey. No part starts once left seconds
+    have passed."""
+    parts, said, began = step["text"].split("\t"), [], time.monotonic()
+    for at, part in enumerate(parts):
+        if time.monotonic() - began >= left:
+            why = "the queue has run %gs; type the rest in a new queue" % QUEUE_MOST
+            break
+        arguments = dict({key: value for key, value in step.items() if key != "tool"}, pageId=page_id, text=part)
+        if at < len(parts) - 1:
+            arguments["submitKey"] = "Tab"
+        try:
+            content, failed = devtools.call("type_text", arguments)
+        except cdp.CdpError as exc:
+            content, failed = [{"type": "text", "text": str(exc)}], True
+        said.append(_text(content))
+        if failed:
+            why = "the next failed"
+            break
+    else:
+        return [{"type": "text", "text": "\n".join(said)}], False
+    said.append("(typed the first %d of the text's %d parts between tabs, each followed by Tab; %s)"
+                % (at, len(parts), why))
+    return [{"type": "text", "text": "\n".join(said)}], True
+
+
 def _named(devtools, page_id, name, wait):
     """(its line, uid) for the control (CONTROLS) whose name fits a step's name best, as hit.fit ranks them: the one
     whose name is those words, or else begins with them, or else carries them further in. Only the controls inside an
     open popup (POPUPS) are ranked when any of them fits, since the step before most likely opened it; the page's
     otherwise. Snapshots are taken until the controls ranked hold one whose name is or begins with them, or wait
     seconds pass, so a control already on the page that carries them further in does not win over the one the step
-    before is still opening. (why not, None) when none fits, or several fit equally well, so a step never acts on a
-    guess."""
+    before is still opening. Of controls that fit equally well, a combobox gives way to a text box inside it, as Slides'
+    combobox "Font size" does to its textbox "Font size". (why not, None) when none fits, or several still fit equally
+    well, so a step never acts on a guess."""
     took, fits, controls = 0.0, [], []
     for took, snapshot in checked.snapshots(devtools, page_id, wait):
         fits = []
@@ -817,6 +865,9 @@ def _named(devtools, page_id, name, wait):
                 "the names" % (name, took, others)), None
     least = min(rank for rank, _, _, _ in controls)
     best = [(node, said) for rank, node, said, _ in controls if rank == least]
+    boxes = {node["uid"] for node, _ in best if node["role"] in ("textbox", "searchbox")}
+    best = [(node, said) for node, said in best
+            if not (node["role"] == "combobox" and any(below["uid"] in boxes for below in _below(node)))]
     if best[1:]:
         return ('%d controls fit name "%s" equally well: %s. Give its uid, or more of its name\'s words'
                 % (len(best), name, ", ".join(_named_line(node, said) for node, said in best[:NAMES_SHOWN]))), None

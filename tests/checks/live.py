@@ -403,6 +403,27 @@ def names_live(served, open_tab):
           and returned(text.split("--- 4")[-1]) == "clicked Table b > 9", text)
 
 
+# A row of boxes, as a sheet's cells, that Tab moves between.
+ROW = "<title>keys scratch</title>" + "".join("<input aria-label='Cell %s1'>" % column for column in "ABCD")
+
+
+def keys_live(served, open_tab):
+    """Keys where only Chrome can say: a type_text whose text holds tabs fills a row of boxes, and press_key takes the
+    key names chrome-devtools-mcp refuses."""
+    queue, tab = served.queue, open_tab(ROW)
+    values = {"tool": "evaluate_script", "function": "() => [...document.querySelectorAll('input')].map(i => i.value)"
+                                                     ".concat(document.activeElement.getAttribute('aria-label'))"}
+    text, is_error = queue(tab, {"tool": "click", "name": "Cell A1"}, {"tool": "type_text", "text": "Q1\t100\t\t300"},
+                           values)
+    check("a type_text whose text holds tabs fills a row of boxes in one step, each tab moving to the next",
+          not is_error and "--- 2 type_text ok" in text and returned(text.split("--- 3")[-1]) == [
+              "Q1", "100", "", "300", "Cell D1"], text)
+    text, is_error = queue(tab, {"tool": "press_key", "key": "Shift+Left"}, {"tool": "press_key", "key": "Del"},
+                           values)
+    check("press_key takes Shift+Left and Del for Shift+ArrowLeft and Delete",
+          not is_error and returned(text.split("--- 3")[-1]) == ["Q1", "100", "", "30", "Cell D1"], text)
+
+
 def windows_live(profile, state):
     """The checks of windows and the focus, which need a Chrome with windows (the checks' --headed): put on screen
     and taken back, each for under a tenth of a second, while the user's focus moves and comes back."""
@@ -442,7 +463,7 @@ def windows_live(profile, state):
 def queue_live(profile, state):
     """The queue in blocks that run at once (harness.parallel), each on tabs of its own, each tab with its own
     chrome-devtools-mcp: a and b on the same form page, a page the pointer steps press on, the checked steps' page,
-    a confirm's, and a menu that steps given name open and act on."""
+    a confirm's, a menu that steps given name open and act on, and a row of boxes keys go into."""
     if not os.path.exists(PACKAGE):
         skipped.append("queue")
         print("skipped the live queue checks: chrome-devtools-mcp is not installed; run npm ci")
@@ -471,7 +492,8 @@ def queue_live(profile, state):
                     server.NAME)
     try:
         served = Queuing(profile, state, httpd, tabs, workers, folder, root)
-        parallel(*(served.block(run) for run in (forms_live, pointer_live, checked_live, confirm_live, names_live)))
+        parallel(*(served.block(run) for run in (forms_live, pointer_live, checked_live, confirm_live, names_live,
+                                                 keys_live)))
 
         numbered, total = True, 0
         for tab in os.listdir(served.home):

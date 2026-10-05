@@ -325,8 +325,9 @@ take_snapshot, and use its uids in the next queue.
 Which to use. fill for a text box, for a native select (an option's exact text, which take_snapshot under the select's
 uid lists), and for a date or time field, on its own line, in its own form: a Date line as 1957-08-01, an InputTime
 line as 14:30, a DateTime line as 1957-08-01T14:30 (a month's as 1957-08, a week's as 1957-W31). press_key acts where
-the focus is, so press_key Enter after a one-line text box's fill submits that box. type instead of fill for text of
-100 characters or more. pick for a dropdown you type into (react-select, an autocomplete). paste for text an editor
+the focus is, so press_key Enter after a one-line text box's fill submits that box. type_text presses Tab for each tab
+in its text and Enter for each line break, as when filling a sheet's cells. type instead of fill for text of 100
+characters or more. pick for a dropdown you type into (react-select, an autocomplete). paste for text an editor
 changes as it is typed (Slides curls quotes, a code editor closes brackets): click into the editor and select what it
 replaces (__KEY__+A) first, or give a text box's uid; never set an editor's text with evaluate_script. fill, click and the
 other steps report success once they act, not once the page takes it: use expect after one whose result matters (pick,
@@ -339,8 +340,8 @@ Names: click, fill, hover and upload_file take name instead of uid, a few words 
 screenshot shows it (name: "Table", name: "Width"). The step acts on a control whose name carries them, preferring
 one in a menu or dialog opened after the page loaded, waiting up to 5s for one whose name is or begins with them, so it
 can follow the step that opens it in one queue: a menu, then its item; a dialog, then its fields. A name that is those
-words fits best, then one that begins with them; when none fits, or several fit equally well, the step fails, listing
-what it found with their uids. Its line gives the uid it acted on.
+words fits best, then one that begins with them; when none fits, or several fit equally well (a combobox gives way to
+the text box inside it), the step fails, listing what it found with their uids. Its line gives the uid it acted on.
 
 Pixels: a take_screenshot of the viewport comes back as an image, one pixel per CSS pixel unless its line gives a
 factor to multiply by. move_at moves the pointer to a point in it, and click_down and click_up press and let go of a

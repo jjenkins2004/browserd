@@ -11,6 +11,7 @@ import tempfile
 import time
 from unittest import mock
 
+from browser import system
 from browser.chrome import cdp
 from browser.dashboard import page
 from browser.steps import checked, dialogs, hit, pointer, screenshot, steps
@@ -49,7 +50,8 @@ class Blocked:
 @mock.patch.object(steps, "GAP", 0)  # a stand-in page has nothing to react to between steps
 def queue_offline():
     """The queue's own work against a stand-in chrome-devtools-mcp: what steps.load and steps.check refuse and rewrite,
-    the steps' description, views, the report and its stops, fills, dialogs a step meets, and Workers."""
+    the steps' description, views, the report and its stops, fills, a type_text's tabs, dialogs a step meets, and
+    Workers."""
     workdir = tempfile.mkdtemp(prefix="browser-steps-")
     try:
         def load(**arguments):
@@ -73,6 +75,16 @@ def queue_offline():
         check("a uid copied with its uid= from a view line is taken without it, wherever a step names one",
               [bare[0]["uid"], bare[1]["under"], bare[2]["args"], bare[3]["elements"][0]["uid"]] == ["1_2", "1_3", ["1_4"], "1_5"],
               repr(bare))
+        keyed = steps.load({"steps": [{"tool": "press_key", "key": key} for key in (
+            "Shift+Down", "Esc", "Ctrl+a", "Cmd+Shift+Left", "Control++", "Home", "Up")]
+            + [{"tool": "type_text", "text": "x", "submitKey": "Return"}, {"tool": "fill", "uid": "1_1", "value": "Down"}]},
+            workdir)
+        command = system.COMMAND_KEY
+        check("a key name chrome-devtools-mcp refuses that means one key is given its name for it, in press_key's key "
+              "and type_text's submitKey, Cmd then held with this OS's command key; every other key and argument stays",
+              [step.get("key", step.get("submitKey", step.get("value"))) for step in keyed] == [
+                  "Shift+ArrowDown", "Escape", "Control+a", command + "+Shift+ArrowLeft", "Control++", "Home", "ArrowUp",
+                  "Enter", "Down"], repr(keyed))
         path = os.path.join(workdir, "good.json")
         with open(path, "w") as handle:
             json.dump([{"tool": "take_snapshot"}], handle)
@@ -297,6 +309,38 @@ def queue_offline():
               "Page navigated to %s." % navigations[0] in report and "Page navigated to ?s=b#s=b (scheme, host and path as "
               "before)." in report and "Page navigated to %s." % navigations[2] in report
               and "Page navigated to %s." % navigations[4] in report, report)
+
+        typed = lambda said: ([{"type": "text", "text": 'Typed text "%s"' % said}], False)
+        fake = FakeDevtools([typed("a + Tab"), typed(" + Tab"), typed("b\nc + Tab"), typed("d + Enter")])
+        report = text_of(steps.run(fake, 7, [{"tool": "type_text", "text": "a\t\tb\nc\td", "submitKey": "Enter"}],
+                                   called)["content"])
+        check("a type_text whose text holds tabs is one step, each part between them typed by a type_text whose "
+              "submitKey is Tab, the last part given the step's own",
+              fake.calls == [("type_text", {"pageId": 7, "text": part, "submitKey": key})
+                             for part, key in (("a", "Tab"), ("", "Tab"), ("b\nc", "Tab"), ("d", "Enter"))]
+              and report.startswith('--- 1 type_text ok') and report.endswith(
+                  'Typed text "a + Tab"\nTyped text " + Tab"\nTyped text "b\nc + Tab"\nTyped text "d + Enter"'),
+              repr(fake.calls) + report)
+        fake = FakeDevtools([typed("a + Tab"), ([{"type": "text", "text": "Error: no page"}], True)])
+        report = text_of(steps.run(fake, 7, [{"tool": "type_text", "text": "a\tb\tc"}], called)["content"])
+        check("a part that fails stops the step there, saying how many parts went in",
+              report.startswith(steps.STOPPED) and "--- 1 type_text FAILED" in report and "Error: no page\n(typed the "
+              "first 1 of the text's 3 parts between tabs, each followed by Tab; the next failed)" in report
+              and [tool for tool, _ in fake.calls] == ["type_text", "type_text", "take_snapshot"], report)
+        clock = Clock()
+
+        class Slow(FakeDevtools):
+            def call(self, tool, arguments, wait=None):
+                clock.sleep(20)
+                return super().call(tool, arguments, wait)
+
+        fake = Slow([typed("x + Tab")] * 4)
+        with mock.patch.object(steps, "time", clock):
+            report = text_of(steps.run(fake, 7, [{"tool": "type_text", "text": "a\tb\tc\td\te"}], called)["content"])
+        check("and no part starts once the queue has run QUEUE_MOST, the step failing with how many went in",
+              [tool for tool, _ in fake.calls].count("type_text") == 3 and "(typed the first 3 of the text's 5 parts "
+              "between tabs, each followed by Tab; the queue has run %gs" % steps.QUEUE_MOST in report, report)
+
         report = text_of(steps.run(FakeDevtools([]), 7, [{"tool": "paste", "text": "x"}], called)["content"])
         check("a paste in a queue not given the tab's target fails before it presses a key",
               "--- 1 paste FAILED" in report and "not given" in report, report)
@@ -1452,6 +1496,10 @@ def names_offline():
              "it takes uid, includeSnapshot, name")):
         said = refusal(lambda: steps.check([step], schemas), steps.StepError)
         check("a step with %s is refused before any step runs" % label, words in said, said)
+    loaded = steps.load({"steps": [{"tool": "click", "uid": "", "name": "Font size"}]}, "")
+    check("an empty uid beside name counts as none, so the step is not refused for giving both",
+          loaded == [{"tool": "click", "name": "Font size"}]
+          and not refusal(lambda: steps.check(loaded, schemas), steps.StepError), repr(loaded))
 
     check("a name is ranked by where its words sit: all of the name, its start, or further in",
           [hit.fit("Format", "format"), hit.fit("Table b ►", "Table"), hit.fit("Insert Image", "Image"),
@@ -1491,6 +1539,28 @@ def names_offline():
                   report.startswith(steps.STOPPED) and not [call for call in fake.calls if call[0] == "click"]
                   and '2 controls fit name "New slide" equally well: uid=2_6 button "New slide (Ctrl+M)", '
                       'uid=2_7 menuitem "New slide n Ctrl+M". Give its uid' in report, report)
+            # Slides' toolbar: a combobox wrapping a textbox of the same name.
+            nested = ('uid=1_0 RootWebArea "Deck"\n  uid=1_1 toolbar\n    uid=1_2 combobox "Font size" expandable '
+                      'haspopup="listbox"\n      uid=1_3 textbox "Font size" value="18"')
+            fake, report = run([{"tool": "click", "name": "Font size"}], [nested])
+            check("of a combobox and the text box inside it that fit equally well, the text box is acted on",
+                  ("click", {"uid": "1_3", "pageId": 7}) in fake.calls and "--- 1 click ok" in report, report)
+            fake, report = run([{"tool": "click", "name": "Font size"}], [nested + '\n  uid=1_4 button "Font size"'])
+            check("but with a third beside them that fits as well, the step fails, listing the text box and the third",
+                  "--- 1 click FAILED" in report and '2 controls fit name "Font size" equally well: uid=1_3 textbox '
+                                                    '"Font size", uid=1_4 button "Font size"' in report, report)
+            for label, snapshot, listed in (
+                    ("a native select and its placeholder option of the same name", 'uid=1_0 RootWebArea "Signup"\n'
+                     '  uid=1_1 combobox "Month" expandable haspopup="menu" value="Month"\n'
+                     '    uid=1_2 option "Month" selectable selected value="Month"\n'
+                     '    uid=1_3 option "January" selectable value="January"', ("1_1", "1_2")),
+                    ("a treeitem and one of the same name inside it", 'uid=1_0 RootWebArea "Repo"\n'
+                     '  uid=1_1 tree "Files"\n    uid=1_2 treeitem "Month" expandable expanded\n      uid=1_3 group\n'
+                     '        uid=1_4 treeitem "Month" expandable', ("1_2", "1_4"))):
+                fake, report = run([{"tool": "click", "name": "Month"}], [snapshot])
+                check("controls that fit equally well, nested any other way, still fail as a tie: %s" % label,
+                      "--- 1 click FAILED" in report and '2 controls fit name "Month" equally '
+                      'well: uid=%s ' % listed[0] in report and ', uid=%s ' % listed[1] in report, report)
             fake, report = run([{"tool": "click", "name": "Copy"}], [DIALOG])
             check("and neither are two in an open dialog, though a page control's name is the name",
                   "--- 1 click FAILED" in report and '2 controls fit name "Copy" equally well: uid=3_2 button "Copy link", '
