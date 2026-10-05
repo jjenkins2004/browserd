@@ -2,7 +2,8 @@
 scout saw through browserd on a fresh profile, so click_down's on meets what it is for (a popup over the page), and
 where it can go wrong:
 - a button inside a frame from another site (BBC's consent), which browserd cannot read, so it refuses any named on;
-- a dialog hidden from the accessibility tree (CNN's, under aria-hidden), which it reads as nothing named;
+- a dialog hidden from the accessibility tree (CNN's, under aria-hidden), where the tree names nothing, so a named on
+  rests on the DOM's own words (hit.DOM_WORDS);
 - buttons whose names share their words (Forbes' "Accept/Reject Optional Technologies", Sephora's two "Sign Up Now"),
   where a named on passes on the wrong one.
 
@@ -58,7 +59,7 @@ TASKS = {
         "ask": "Agree to the legal terms prompt so the page can be read.",
         "seen": r"Legal Terms|Agree",
         "expect": r'"Agree"',
-        # Its dialog sits under aria-hidden, so a press on Agree may read as nothing named: the page state decides.
+        # Its dialog sits under aria-hidden (the docstring's second case), so the page state decides.
         "state": "() => { const d = document.querySelector('[role=dialog]'); return !!(d && d.offsetParent) }",
         "state_ok": lambda state: state is False,
     },

@@ -1,4 +1,4 @@
-"""WebGames' 50 base challenges (convergence-ai/webgames, the Hugging Face test split), served locally.
+"""WebGames' base challenges (convergence-ai/webgames, the Hugging Face test split), served locally.
 
 Each challenge shows a password once solved; a run passes when its final message holds that password, as
 WebGames' own Inspect scorer checks. The site must be up first:

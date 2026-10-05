@@ -44,10 +44,10 @@ answer key and graded in code; trip is written as a person would ask it, and an 
   follows the profile's first session started after it.
 - **The working tab** is the one whose record folder (`.run/calls/<profile>/<session>-<label>/<tab>/`) changed last:
   each queue writes there. `record.py` finds the session by its label in `state.db` (or, with `--transcript`, by the id
-  session_start returned in a stream-json transcript), maps the tab to its DevTools target (`tabs.target`) and captures
-  it on a connection of its own, so browserd never knows and the tab need not be in front. For a Chrome browserd does
-  not drive, `--cdp <port> --folder <dir>` captures its visible tab instead (of several windows', the one whose URL
-  changed last).
+  session_start returned in a stream-json transcript), reads the tab's DevTools target from its row in `state.db` and
+  captures it on a connection of its own, so browserd never knows and the tab need not be in front. For a Chrome
+  browserd does not drive, `--cdp <port> --folder <dir>` captures its visible tab instead (of several windows', the one
+  whose URL changed last).
 - **capex's grade** is `grade.py capex <deck URL> <sheet URL>`: the deck's `.pptx` export and the Sheet's `.xlsx`,
   fetched with the profile's cookies from a background tab of its own on docs.google.com (closed after), read with
   `zipfile` and ElementTree, then one ok/BAD line per check and a score. Text is compared through `norm`.

@@ -3,8 +3,9 @@
 ## Module TL;DR
 
 Everything that measures browserd rather than being it: nothing here ships (`.gitattributes` leaves `/experiments` out
-of release archives), and nothing in `browser/` imports from here. Each folder holds its own code and README; the data
-its runs make (transcripts, scores, recordings) lives outside the repo, since it holds the user's own browsing.
+of release archives), and nothing in `browser/` imports from here. Each folder but `findings/` (the write-ups) holds its
+own code and README; the data their runs make (transcripts, scores, recordings) lives outside the repo, since it holds
+the user's own browsing.
 
 ## Directory Layout
 
@@ -15,11 +16,15 @@ its runs make (transcripts, scores, recordings) lives outside the repo, since it
 
 ## Core Abstractions & Shared Pieces
 
-- Code here reaches browserd's own modules through the checkout root, two folders up (`bench/paths.py`'s `ROOT`).
-- Write-ups in `findings/` link the code they measured by relative path (`../bench/`).
+- Code here that imports browserd's own modules puts the checkout root on the import path itself (long-tasks'
+  scripts, `bench/probes/served.py`; `nextserver.py` takes a worktree's); `bench/paths.py`'s `ROOT` is that root for the
+  bench's own use.
+- Write-ups in `findings/` name the code they measured by path, from the repo root or relative to `findings/`.
 
 ## Agent Gotchas & Invariants (⚠️)
 
 - A path to the repo root from a file here is one level deeper than it looks: `experiments/<folder>/` sits two below
   the root.
 - Never commit run data (transcripts, records, screenshots, videos): it holds the user's accounts and browsing.
+- Every window and tab the code here opens in a profile's Chrome comes from `opens.window` or `opens.tab`
+  (`../browser/chrome/README.md`); in `long-tasks/compare.py` the other arms' own servers open theirs.

@@ -23,8 +23,8 @@ The suites, each `--suite` of `run.py`:
 | `slides` | edits to a new, blank Google Slides deck per run, on the `experiments` arm's profile signed in to Google | 6 | the deck's own pptx export, read in the run's tab after the run |
 | `traps` | clicks an agent never meant: a fake editor whose timed traps go up over its next target | 12 seeds | the page's own log of every trusted click and key |
 
-The last run (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`. `miniwob` (drills) and `botwall`
-have not been run in full.
+The last run of the other servers' arms (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`.
+`miniwob` (drills) and `botwall` have not been run in full.
 
     python experiments/bench/setup.py                      fill the data folder once
     python experiments/bench/sites.py start                the local sites the suites need (WebGames, FormFactory, MiniWoB++, ...)
@@ -106,7 +106,7 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
     takes ports of its own (`--port`, and `--from` for its profile's Chrome).
   - `playwright`: `npx @playwright/mcp@0.0.82 --headless --isolated`, MCP-Universe's own config, pinned so a release
     mid-batch cannot change the arm.
-  - `devtools`: this checkout's chrome-devtools-mcp (`../node_modules`), stock, `--headless --isolated`: browserd's
+  - `devtools`: this checkout's chrome-devtools-mcp (`../../node_modules`), stock, `--headless --isolated`: browserd's
     engine without browserd's layer.
   - `agentbrowser`: Vercel's agent-browser (0.38.1), `agent-browser mcp`, headless. Its browser lives in a daemon
     outside the run's process tree, so each run gets a session of its own (`AGENT_BROWSER_SESSION`, the run's
@@ -121,11 +121,11 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   - `trap-on`, `trap-none`, `trap-guard`: the text-check experiment's arms (`../findings/text-check.md`), worktrees of
     their own served by `nextserver.py` on 9250, 9260 and 9270.
   - `browserd` (the main server on 9230, profile research), `cap` and `nocap` are earlier experiments' arms.
-- **A run** is `run.run_one`: `claude -p` with the arm's servers only (`--strict-mcp-config`), the model
-  (`claude-sonnet-5`), the suite's max turns, and its transcript streamed to `results/<exp>/<arm>/<task>-r<n>.part`,
-  renamed `.jsonl` once its collect and cleanup are done. Arms interleave task by task, so each sees a live site at
-  about the same time. A run whose `.jsonl` ends in a result is done, so running an experiment again runs only what is
-  missing, a run cut off before its cleanup included.
+- **A run** is `run.run_one`: `claude -p` with the arm's servers only (`--strict-mcp-config`), the model (`--model`,
+  default `claude-sonnet-5`), the suite's max turns, and its transcript streamed to
+  `results/<exp>/<arm>/<task>-r<n>.part`, renamed `.jsonl` once its collect and cleanup are done. Arms interleave task
+  by task, so each sees a live site at about the same time. A run whose `.jsonl` ends in a result is done, so running an
+  experiment again runs only what is missing, a run cut off before its cleanup included.
 - **Scoring** is `report.py`, through each suite's `score`. For MCP-Universe it gives the benchmark's own strict score
   and `tasks.lenient`, which forgives formatting alone:
   - the JSON is taken from any text around it, unless the text holds several JSON values that differ;
@@ -183,9 +183,9 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
 - **On MCP-Universe every arm gets one line of the bench's own,** "Find every answer with the browser, not from
   memory", after MCP-Universe's instruction; without it an arm can pass from memory. `report.py`'s `noBrowse`
   counts runs with no tool call.
-- **Deviations from MCP-Universe:** only its 24 tasks scored by `playwright.is_dict_equal` run (7 Google Maps tasks
-  need an API key, 4 booking tasks re-scrape booking.com when scored); the `date` server is left out; the agent is
-  Claude Code, not its ReAct agent, with 30 turns, not 20; the user's CLAUDE.md loads for every arm alike.
+- **Deviations from MCP-Universe:** only its 24 tasks scored by `playwright.is_dict_equal` run (7 Google Maps tasks need
+  an API key, 4 booking tasks re-scrape booking.com when scored); the `date` server is left out; the agent is Claude
+  Code, not its ReAct agent, with 30 turns, not 20.
 - **WebGames** passwords sit in its site's bundle, so its system line forbids reading the source, scripts or network
   responses; `tools/cheats.py` checks transcripts for it. **MiniWoB++** episodes start with the page (no START cover)
   and last 30 minutes, not 10 to 30 seconds; only the first counts. **botwall** answers are not checked against the
