@@ -14,7 +14,8 @@ def tool(name, args):
     body = json.dumps({"jsonrpc": "2.0", "id": next(ids), "method": "tools/call", "params": {"name": name, "arguments": args}})
     req = urllib.request.Request(MCP, data=body.encode(), headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"})
     r = json.loads(urllib.request.urlopen(req, timeout=90).read())["result"]
-    return "\n".join(c.get("text", "") for c in r["content"] if c["type"] == "text"), r.get("isError", False)
+    text = "\n".join(c.get("text", "") for c in r["content"] if c["type"] == "text")
+    return text, r.get("isError", False) or "\n--- stopped " in "\n" + text  # a stopped queue is not an error
 
 def close(session):
     page = urllib.request.urlopen(PAGE + "/", timeout=10).read().decode()

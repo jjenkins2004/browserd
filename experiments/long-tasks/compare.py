@@ -31,6 +31,7 @@ import grade  # noqa: E402
 import judge  # noqa: E402
 from browser.chrome import cdp, opens  # noqa: E402
 from browser.records.state import State  # noqa: E402
+from browser.steps.steps import STOPPED  # noqa: E402
 
 ROOT = HERE.parents[1]
 DATA = Path(os.environ.get("BROWSERD_LONG_TASKS_DATA", ROOT.parent / "browserd-long-tasks"))
@@ -165,7 +166,7 @@ def measure(run):
         for item in content if isinstance(content, list) else []:
             if isinstance(item, dict):
                 calls += item.get("type") == "tool_use"
-                errors += item.get("type") == "tool_result" and bool(item.get("is_error"))
+                errors += item.get("type") == "tool_result" and (bool(item.get("is_error")) or _stopped(item))
         if event.get("type") == "result":
             result = event
     usage = result.get("usage") or {}
@@ -173,6 +174,14 @@ def measure(run):
             "cost": result.get("total_cost_usd"), "output_tokens": usage.get("output_tokens"),
             "cache_read_tokens": usage.get("cache_read_input_tokens"), "tool_calls": calls, "tool_errors": errors,
             "final": result.get("result") or ""}
+
+
+def _stopped(result):
+    """Whether a tool result is browserd's report of a stopped queue, which is not an error result."""
+    inner = result.get("content")
+    text = inner if isinstance(inner, str) else "\n".join(
+        part.get("text", "") for part in inner or [] if isinstance(part, dict))
+    return any(line.startswith(STOPPED) for line in text.splitlines())
 
 
 def pictures(run, deck):

@@ -12,6 +12,7 @@ import sys
 
 import paths
 import run
+import transcripts
 
 
 def read_run(path):
@@ -27,7 +28,7 @@ def read_run(path):
             for block in content:
                 if block.get("type") == "tool_use":
                     run["tool_calls"] += 1
-                elif block.get("type") == "tool_result" and block.get("is_error"):
+                elif block.get("type") == "tool_result" and transcripts.failed(block):
                     run["tool_errors"] += 1
         if event.get("type") == "result":
             usage = event.get("usage") or {}

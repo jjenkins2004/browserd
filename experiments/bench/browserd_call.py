@@ -8,13 +8,15 @@ import json
 import re
 import urllib.request
 
+import transcripts
+
 RETURNED = re.compile(r"```json\s*(.*?)\s*```", re.S)
 SESSION = re.compile(r"session (\w{6}), on the ")  # session_start's reply
 
 
 def call(endpoint, tool, arguments):
-    """(text, failed): the tool's reply as text, and whether it was an error. endpoint is browserd's MCP endpoint, like
-    http://127.0.0.1:9230/mcp."""
+    """(text, failed): the tool's reply as text, and whether it failed: an error, or a queue that stopped. endpoint is
+    browserd's MCP endpoint, like http://127.0.0.1:9230/mcp."""
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                        "params": {"name": tool, "arguments": arguments}}).encode()
     request = urllib.request.Request(endpoint, data=body, method="POST", headers={"Content-Type": "application/json"})
@@ -26,7 +28,7 @@ def call(endpoint, tool, arguments):
         return answer["error"].get("message", str(answer["error"])), True
     result = answer["result"]
     text = "\n".join(item.get("text", "") for item in result.get("content", []) if item.get("type") == "text")
-    return text, bool(result.get("isError"))
+    return text, bool(result.get("isError")) or transcripts.STOPPED.search(text) is not None
 
 
 def returned_all(text):

@@ -9,8 +9,9 @@ import statistics
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # experiments/bench/, for paths
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # experiments/bench/, for paths and transcripts
 import paths  # noqa: E402
+import transcripts  # noqa: E402
 
 
 def runs(exp):
@@ -32,7 +33,7 @@ def runs(exp):
                             x.get("text", "") for x in (c or []) if isinstance(x, dict))
                         images = 0 if isinstance(c, str) else sum(
                             1 for x in (c or []) if isinstance(x, dict) and x.get("type") == "image")
-                        results.append((b.get("tool_use_id"), bool(b.get("is_error")), text, images))
+                        results.append((b.get("tool_use_id"), transcripts.failed(b), text, images))
             if e.get("type") == "result":
                 api_ms, total_ms = e.get("duration_api_ms"), e.get("duration_ms")
         yield path.parent.name, path.stem, calls, results, api_ms, total_ms

@@ -22,7 +22,8 @@ bind this folder too: read it first.
 - **A queue** is `load` (the steps, or a file of them) → `check` (every step, before any runs) → `place_screenshots`
   → `run`, which hands each step to `_step` and passes its reply through `view` and `_capped`, one report section per
   step. A queue stops at the first failed step, or before a step once it has run `QUEUE_MOST`; its report then names
-  the steps not run and holds a view of the page now. `run`'s docstring says how a stopped queue is marked.
+  the steps not run and ends with where the page now is saved, and after a refused press within `SHOT_BEFORE` a
+  screenshot of it (`_after_stop` says why). `run`'s docstring says how a stopped queue is marked.
 - **browserd's own steps.** `checked.py` and `pointer.py` each give `STEPS`, `KEYS` (the arguments each step takes),
   `problem` (what `check` refuses), `describe` (their lines of the `steps` argument's description) and `run`; `check`
   and `_step` look a step up in `STEPS`. A new step needs all five.
@@ -38,9 +39,9 @@ bind this folder too: read it first.
 - **Claude Code drops a tool's reply after about 60s** (measured: a 55s queue came back, a 65s one did not, though the
   server ran it to the end). So a queue starts no step after `QUEUE_MOST` (50s); a step's `timeout`, and a `wait`'s or
   `pick`'s wait, is cut to the time left; and a timeout over `checked.WAIT_MOST` is refused.
-- **Claude Code cuts an error result over about 10,000 characters out of its middle** (seen in a trace; a success of
-  17,593 came whole). So a stopped queue's view of the page now is cut to keep its report under `ERROR_MOST`, but to no
-  fewer than `PAGE_NOW_LEAST`.
+- **Claude Code drops an error result's images, and cuts one over about 10,000 characters out of its middle** (seen in
+  a trace; a success of 17,593 came whole). So a stopped queue is not an error result; only a call refused before its
+  steps run is one.
 - **A dialog blocks the page.** A `handle_dialog` step right after the step that opens one answers it as it opens
   (`dialogs.Answerer`), or up to `dialogs.LATE` after, unless that step is in `OWN_DIALOGS` and answers its own;
   puppeteer marks a dialog closed by another connection handled, so chrome-devtools-mcp goes on. A chrome-devtools-mcp

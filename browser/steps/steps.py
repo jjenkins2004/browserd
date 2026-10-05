@@ -30,9 +30,11 @@ NAVIGATE_TIMEOUT = 30000
 QUEUE_MOST = 50.0  # seconds a queue starts steps for; README.md, "Agent Gotchas & Invariants", says why
 DOWNLOAD_WAIT = 5.0  # seconds a step waits for a download it began to end; README.md, "Agent Gotchas & Invariants"
 REPLY_MOST = 40000  # characters of one step's reply a report holds; the whole reply is saved when longer
-ERROR_MOST = 9000  # characters a failed queue's report keeps under, its view of the page now cut to fit; README.md
-PAGE_NOW_LEAST = 2000  # characters of the view of the page now a failed report keeps, however much its steps took
-POINTER = 300  # characters left for the line _capped adds, naming where the whole reply is saved
+STOPPED = "--- stopped "  # how a stopped queue's report begins
+SHOT_SCALE = 0.5  # the screenshot a refused press's stop ends with; _after_stop says why
+# Seconds into a queue after which a stop takes no screenshot: a capture the page does not answer can take 25s, and
+# Claude Code drops a reply after about 60s.
+SHOT_BEFORE = 30.0
 WORD_RUN_LEAST = 3  # one-word lines a run needs before a view joins it; two neighbours are often two labels
 # chrome-devtools-mcp's reply sections: a dialog a step left open, its refusal when one was open before the step,
 # and the list of every page in Chrome, which names other tabs and is no use inside one tab's queue.
@@ -536,8 +538,7 @@ def _after(lines, uid, whole):
 def _cut(lines, asked):
     """lines, or those within VIEW_MOST characters and a note giving the take_snapshot call that reads on, asked's
     options kept, and the headings below the cut, whose uids read on as after (under a heading gives the heading alone).
-    The first line, a page's RootWebArea with its url, always shows and is not counted. A view cut again to fit a
-    stopped queue's report, under ERROR_MOST, loses this note."""
+    The first line, a page's RootWebArea with its url, always shows and is not counted."""
     if sum(len(line) + 1 for line in lines[1:]) <= VIEW_MOST:
         return lines
     size, shown = 0, 1
@@ -597,14 +598,14 @@ def _short_navigations(text, last):
     return NAVIGATED.sub(cut, head) + snapshot + rest, last
 
 
-def _capped(text, path, most=REPLY_MOST):
-    """text, or its whole lines within `most` characters once the whole of it is saved to path."""
-    if len(text) <= most:
+def _capped(text, path):
+    """text, or its whole lines within REPLY_MOST characters once the whole of it is saved to path."""
+    if len(text) <= REPLY_MOST:
         return text
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(text + "\n")
-    cut = text.rfind("\n", most // 2, most)  # a long one-line JSON result is cut mid-line, not dropped
-    cut = cut if cut > 0 else most
+    cut = text.rfind("\n", REPLY_MOST // 2, REPLY_MOST)  # a long one-line JSON result is cut mid-line, not dropped
+    cut = cut if cut > 0 else REPLY_MOST
     return "%s\n--- (%d characters more; the whole reply is saved to %s)" % (text[:cut], len(text) - cut, path)
 
 
@@ -613,10 +614,12 @@ def _text(content):
 
 
 def run(devtools, page_id, steps, path, restarted=False, target=None, connect=None, began=None, watcher=None):
-    """Run the steps in order and return an MCP result: one text report, then any images the steps returned.
+    """Run the steps in order and return an MCP result: one text report, then any images the steps returned and,
+    after a refused press within SHOT_BEFORE of the queue's start, a screenshot of the page now.
 
-    The result is an error when a step failed, or the queue stopped at QUEUE_MOST, so the agent cannot mistake a
-    stopped queue for a finished one.
+    A queue stops at a failed step, or before a step once it has run QUEUE_MOST. The report's first line then starts
+    with STOPPED, so the agent cannot mistake a stopped queue for a finished one. The result is not an error;
+    README.md, "Agent Gotchas & Invariants", says why.
 
     Args:
         devtools (Devtools): the tab's own process, already paired.
@@ -633,7 +636,7 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
         watcher (Watcher | None): the tab's downloads.Watcher, so each step's report says what it downloaded; None
             reports none.
     """
-    report, images, failed = [], [], False
+    report, images = [], []
     if restarted:
         report.append(RESTARTED)
     started, answerer, navigated = began or time.monotonic(), None, None
@@ -644,10 +647,10 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
             for number, step in enumerate(steps, 1):
                 left = QUEUE_MOST - (time.monotonic() - started)
                 if left <= 0:
-                    report.append("--- stopped before step %d: the queue has run %.0fs, and Claude Code drops a reply "
-                                  "after about 60s; run the rest in a new queue" % (number, QUEUE_MOST - left))
-                    report.extend(_after_stop(devtools, page_id, steps, number - 1, path, len("\n".join(report))))
-                    failed = True
+                    report.insert(0, _stopped(steps, number - 1, "before step %d: the queue has run %.0fs, and Claude "
+                                              "Code drops a reply after about 60s; run the rest in a new queue"
+                                              % (number, QUEUE_MOST - left)))
+                    report.append(_after_stop(devtools, page_id, path))
                     break
                 began = time.monotonic()
                 following = steps[number] if number < len(steps) else None
@@ -676,13 +679,17 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
                 text, missing = view(text, path("step%d-snapshot.txt" % number), **view_options)
                 failed = failed or missing
                 report.append("--- %d %s %s %.1fs" % (number, step["tool"], "FAILED" if failed else "ok", took))
-                # A failed step's own reply is cut to half a failed report, so the view of the page now still fits.
-                report.append(_capped(text, path("step%d-reply.txt" % number),
-                                      ERROR_MOST // 2 if failed else REPLY_MOST))
+                report.append(_capped(text, path("step%d-reply.txt" % number)))
                 report.extend(_downloaded(download) for download in got)
                 images.extend(item for item in content if item.get("type") == "image")
                 if failed:
-                    report.extend(_after_stop(devtools, page_id, steps, number, path, len("\n".join(report))))
+                    report.insert(0, _stopped(steps, number, "at step %d (%s FAILED)" % (number, step["tool"])))
+                    report.append(_after_stop(devtools, page_id, path))
+                    if text.startswith(pointer.REFUSED) and time.monotonic() - started < SHOT_BEFORE:
+                        shot, _ = screenshot.viewport({"tool": "take_screenshot", "filePath": path("page-now.jpeg"),
+                                                       "scale": SHOT_SCALE}, target, connect)
+                        report.append(_text(shot))
+                        images.extend(item for item in shot if item.get("type") == "image")
                     break
                 # No GAP between two fills; GAP says why.
                 if number < len(steps) and (step["tool"], steps[number]["tool"]) != ("fill", "fill"):
@@ -693,7 +700,7 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
                 answered = answerer.answered(0)
                 if answered is not None:
                     report.append("--- %s, though its handle_dialog step did not run" % answered)
-    return {"content": [{"type": "text", "text": "\n".join(report)}] + images, "isError": failed}
+    return {"content": [{"type": "text", "text": "\n".join(report)}] + images}
 
 
 def _downloaded(download):
@@ -772,15 +779,20 @@ class _Fills:
         return self.reads.pop(number, None)
 
 
-def _after_stop(devtools, page_id, steps, done, path, used):
-    """The report's closing lines once a queue stops after step `done`: the steps not run, and a view of the page
-    now, cut so the report, `used` characters so far, stays under ERROR_MOST, but to no fewer than PAGE_NOW_LEAST."""
+def _stopped(steps, done, why):
+    """The report's first line once a queue stops after step `done`: why, and the steps not run."""
     left = ["%d %s" % (later, steps[later - 1]["tool"]) for later in range(done + 1, len(steps) + 1)]
-    lines = ["--- not run: %s" % (", ".join(left) or "nothing, this was the last step"), "--- the page now"]
+    return "%s%s; not run: %s" % (STOPPED, why, ", ".join(left) or "nothing, this was the last step")
+
+
+def _after_stop(devtools, page_id, path):
+    """The report's line once a queue stops: where the page now is saved whole, not a view of it; run adds a screenshot
+    at SHOT_SCALE after a refused press. Against a view of up to 9,000 characters, the line saved $0.03 to $0.06 a stop,
+    and after a refused press the screenshot $0.05, sparing the agent a look (modelled at 189k tokens of context and 60
+    turns left; ../../experiments/findings/page-now.md)."""
     try:
-        now = devtools.text("take_snapshot", {"pageId": page_id})
-        lines.append(_capped(view(now, path("page-now-snapshot.txt"))[0], path("page-now-reply.txt"),
-                             max(ERROR_MOST - used - sum(len(line) + 1 for line in lines) - POINTER, PAGE_NOW_LEAST)))
+        view(devtools.text("take_snapshot", {"pageId": page_id}), path("page-now-snapshot.txt"))
     except cdp.CdpError as exc:
-        lines.append("(no snapshot: %s)" % exc)
-    return lines
+        return "--- the page now: no snapshot (%s)" % exc
+    return ("--- the page now is saved whole to %s; a take_snapshot or take_screenshot step shows it"
+            % path("page-now-snapshot.txt"))

@@ -20,6 +20,7 @@ KEYS = {"move_at": {"tool", "x", "y"}, "click_down": {"tool", "on", "button", "c
         "click_up": {"tool", "button", "count"}}
 STEPS = tuple(KEYS)
 EVENTS = {"move_at": "mouseMoved", "click_down": "mousePressed", "click_up": "mouseReleased"}
+REFUSED = "Not pressed: "  # how a refused press's reply begins: Missed's message
 
 
 class Missed(cdp.CdpError):
@@ -158,11 +159,11 @@ def _landed(browser, session, x, y, on):
         what = hit.read(browser, session, x, y)
     except cdp.CdpError as exc:
         if on:
-            raise Missed('Not pressed: browserd could not read what is at %g,%g (%s), so not whether it is "%s"; give '
+            raise Missed(REFUSED + 'browserd could not read what is at %g,%g (%s), so not whether it is "%s"; give '
                          'on as "" to press there anyway' % (x, y, exc, on))
         return "(browserd could not read what is there: %s)" % exc
     if on and not hit.carries(what, on):
-        raise Missed('Not pressed: at %g,%g is %s, not "%s". The page may have changed since your screenshot: take '
+        raise Missed(REFUSED + 'at %g,%g is %s, not "%s". The page may have changed since your screenshot: take '
                      'one, or give on as "" to press there anyway' % (x, y, hit.described(what), on))
     return "on " + hit.described(what)
 

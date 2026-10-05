@@ -309,9 +309,9 @@ is saved in. take_snapshot also takes under, a uid, for only that element and wh
 options); find, a regex, for only the lines it matches; and full: true, for its lines as chrome-devtools-mcp wrote
 them.
 
-The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A failure makes the result an error, names
-the steps not run, and ends with a view of the page now. A step's reply over %d characters is cut and saved whole in
-the tab's record folder, %s, which keeps every call and screenshot. A screenshot of
+The report has one section per step, "--- <n> <tool> ok|FAILED <seconds>s". A failure stops the queue: the report says
+so first, names the steps not run, and ends with the page now. A step's reply over %d characters is cut and
+saved whole in the tab's record folder, %s, which keeps every call and screenshot. A screenshot of
 the viewport also comes back to you as an image. A step's file paths (filePath, filePaths) must be absolute and inside
 %s. After %gs a queue starts no more steps, and names the steps not run.
 """
@@ -432,10 +432,14 @@ def queue_steps(state, tabs, workers, allowed, calls=CALLS):
                 devtools, page_id, restarted = worker.ensure()
                 result = steps.run(devtools, page_id, planned, call.path, restarted, worker.target_id, worker.connect,
                                    began, worker.watcher)
-                if result["isError"] and "No page found" in result["content"][0]["text"]:
-                    # It renumbered its pages after reconnecting; the next queue pairs a new process and notes the
-                    # restart.
-                    devtools.close()
+                report = result["content"][0]["text"]
+                if report.startswith(steps.STOPPED):
+                    # The result is not an error, so the server's line for the call says ok; this one says it stopped.
+                    mcp.log("queue on tab %s stopped %s" % (tab, report.splitlines()[0][len(steps.STOPPED):]))
+                    if "No page found" in report:
+                        # It renumbered its pages after reconnecting; the next queue pairs a new process and notes the
+                        # restart.
+                        devtools.close()
                 return result
 
         return _recorded(call, run)

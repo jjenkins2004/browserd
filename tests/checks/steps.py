@@ -191,7 +191,9 @@ def queue_offline():
         result = steps.run(fake, 7, planned, called)
         content = result["content"]
         report = text_of(content)
-        check("a queue that stopped at a failure is an error result", result["isError"] is True)
+        check("a queue that stopped at a failure says so in its first line, and is not an error result, so its "
+              "images reach Claude Code's agent", report.startswith("--- stopped at step 3 (click FAILED); ")
+              and "isError" not in result, report)
         check("every step is sent with the tab's page id", all(args.get("pageId") == 7 for _, args in fake.calls))
         check("a fill reads its element before it runs", fake.calls[0][0] == "evaluate_script"
               and fake.calls[0][1]["args"] == ["1_2"], repr(fake.calls[0]))
@@ -200,8 +202,10 @@ def queue_offline():
             "evaluate_script", "fill", "take_screenshot", "click", "take_snapshot"], repr(fake.calls))
         check("the report heads each step with its number, tool and outcome",
               "--- 1 fill ok" in report and "--- 3 click FAILED" in report, report)
-        check("the report names the steps not run", "--- not run: 4 fill" in report, report)
-        check("the report ends with the page as it is now, as a view", report.rstrip().endswith('uid=1_0 RootWebArea "Form"'), report)
+        check("its first line names the steps not run", report.splitlines()[0].endswith("; not run: 4 fill"), report)
+        check("the report ends with where the page now is saved, not a view of it",
+              report.endswith("--- the page now is saved whole to %s; a take_snapshot or take_screenshot step shows it"
+                              % called("page-now-snapshot.txt")) and "RootWebArea" not in report, report)
         check("and saves that snapshot whole", open(called("page-now-snapshot.txt"), encoding="utf-8").read().endswith("  uid=1_1 generic\n"))
         check("an image a step returned comes back as an image", content[1:] == [image])
 
@@ -237,13 +241,13 @@ def queue_offline():
         report = text_of(result["content"])
         check("a fill the one read refuses is read again at its own step, and fails when its own read refuses too",
               [tool for tool, _ in fake.calls] == ["evaluate_script", "fill", "evaluate_script", "take_snapshot"]
-              and fake.calls[2][1]["args"] == ["1_3"] and result["isError"] and "--- 2 fill FAILED" in report
-              and "element 1_3 is disabled" in report and "--- not run: 3 fill" in report, repr(fake.calls) + report)
+              and fake.calls[2][1]["args"] == ["1_3"] and report.startswith(steps.STOPPED) and "--- 2 fill FAILED" in report
+              and "element 1_3 is disabled" in report and "; not run: 3 fill" in report, repr(fake.calls) + report)
         fake = Form([ok, ok, ok], {"1_3": [{"kind": "box", "disabled": True}, {"kind": "box"}]})
         result = steps.run(fake, 7, run, lambda name: os.path.join(workdir, "013-" + name))
         check("and is filled when its own read, after the fills before it, passes",
               [tool for tool, _ in fake.calls] == ["evaluate_script", "fill", "evaluate_script", "fill", "fill"]
-              and not result["isError"], repr(fake.calls))
+              and not text_of(result["content"]).startswith(steps.STOPPED), repr(fake.calls))
         fake = Form([ok, ok, ok], {"1_3": [{"kind": "select", "options": ["b"]}]})
         steps.run(fake, 7, run, lambda name: os.path.join(workdir, "014-" + name))
         check("a fill that is not a text box, and each after it, reads its own element, as filling it may change the rest",
@@ -265,7 +269,7 @@ def queue_offline():
         result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "handle_dialog", "action": "accept"}], called)
         report = text_of(result["content"])
         check("a click that opened a dialog counts as done, so the handle_dialog after it runs",
-              not result["isError"] and "--- 1 click ok" in report and "--- 2 handle_dialog ok" in report, report)
+              not report.startswith(steps.STOPPED) and "--- 1 click ok" in report and "--- 2 handle_dialog ok" in report, report)
         check("and chrome-devtools-mcp's list of every page, and its note on which it selected, are left out of a report",
               "Other tab" not in report and "previously selected" not in report, report)
         fake = FakeDevtools([([{"type": "text", "text": "Error: A dialog is open (alert: Heads up.).\n" + dialog}], True)])
@@ -277,7 +281,7 @@ def queue_offline():
         fake = FakeDevtools([cdp.CdpError("chrome-devtools-mcp exited during tools/call; see x.log")])
         report = text_of(steps.run(fake, 1, [{"tool": "click", "uid": "1_1"}], called, restarted=True)["content"])
         check("a process that dies mid-step is a failed step, not a crash", "--- 1 click FAILED" in report and "exited" in report, report)
-        check("a queue on a restarted process says old uids are gone", report.startswith("note:") and "uids" in report, report)
+        check("a queue on a restarted process says old uids are gone", steps.RESTARTED in report, report)
         navigations = ["https://docs.example/d/1/edit?s=a#s=a", "https://docs.example/d/1/edit?s=b#s=b",
                        "https://docs.example/d/1/edit#only", "https://other.example/", "https://docs.example/d/1/edit?s=c"]
         fake = FakeDevtools([([{"type": "text", "text": "Pressed.\nPage navigated to %s." % url}], False) for url in navigations[:3]]
@@ -458,7 +462,7 @@ def views(workdir):
     report = text_of(steps.run(fake, 3, [{"tool": "take_snapshot", "under": "9_9"}, {"tool": "click", "uid": "1_9"}],
                                lambda name: os.path.join(workdir, "003-" + name))["content"])
     check("a take_snapshot under a uid it does not find fails the queue", "--- 1 take_snapshot FAILED" in report
-          and "--- not run: 2 click" in report, report)
+          and "; not run: 2 click" in report, report)
     long = "x" * (steps.REPLY_MOST + 10)
     report = text_of(steps.run(FakeDevtools([([{"type": "text", "text": long}], False)]), 3, [{"tool": "evaluate_script"}],
                                lambda name: os.path.join(workdir, "005-" + name))["content"])
@@ -503,8 +507,9 @@ def views(workdir):
 
     report = text_of(steps.run(LongPage([([{"type": "text", "text": "Error: Element uid 9_9 not found"}], True)]), 3,
                                [{"tool": "click", "uid": "9_9"}], lambda name: os.path.join(workdir, "008-" + name))["content"])
-    check("a failed queue's report stays under ERROR_MOST, its view of the page now cut and saved whole",
-          len(report) <= steps.ERROR_MOST and "008-page-now-reply.txt)" in report, "%d: %s" % (len(report), report[-200:]))
+    check("a stopped queue's report holds none of a long page now, only where it is saved",
+          "Button 1999" not in report and "008-page-now-snapshot.txt" in report and len(report) < 500,
+          "%d: %s" % (len(report), report[-200:]))
     report = text_of(steps.run(FakeDevtools([([{"type": "text", "text": "Timed out after waiting 5000ms"}], True)]), 3,
                                [{"tool": "wait_for", "text": ["Slideshow"]}], lambda name: os.path.join(workdir, "009-" + name))["content"])
     check("a failed wait_for says what it matches", "accessible name is exactly one" in report, report)
@@ -678,7 +683,7 @@ def dialogs_offline():
         report = text_of(result["content"])
         check("a dialog that opens after its click is done is still answered by the handle_dialog step after it, "
               "dismissed as it asks",
-              not result["isError"] and "--- 2 handle_dialog ok" in report
+              not report.startswith(steps.STOPPED) and "--- 2 handle_dialog ok" in report
               and 'the prompt "Your name?" was dismissed as it opened' in report
               and [tool for tool, _ in fake.calls] == ["click"]
               and ("Page.handleJavaScriptDialog", {"accept": False}) in later.calls, report)
@@ -688,7 +693,7 @@ def dialogs_offline():
                            called, target="T1")
         report = text_of(result["content"])
         check("the dialog a handle_dialog step waits on is answered by the queue's own answerer, not chrome-devtools-mcp",
-              not result["isError"] and "--- 2 handle_dialog ok" in report and "was accepted as it opened" in report
+              not report.startswith(steps.STOPPED) and "--- 2 handle_dialog ok" in report and "was accepted as it opened" in report
               and [tool for tool, _ in fake.calls] == ["click"], report)
         dialogs.Answerer = lambda target, handle, connect: saved(target, handle, lambda: FakeDialogs())
         saved_late, dialogs.LATE = dialogs.LATE, 0.02
@@ -698,7 +703,7 @@ def dialogs_offline():
                            called, target="T1")
         dialogs.LATE = saved_late
         check("when no dialog opens, the handle_dialog step goes to chrome-devtools-mcp and fails as it says",
-              result["isError"] and "No open dialog found" in text_of(result["content"])
+              text_of(result["content"]).startswith(steps.STOPPED) and "No open dialog found" in text_of(result["content"])
               and [tool for tool, _ in fake.calls][:2] == ["click", "handle_dialog"], text_of(result["content"]))
         made = []
         dialogs.Answerer = lambda target, handle, connect: made.append(handle) or saved(target, handle, lambda: FakeDialogs())
@@ -707,7 +712,7 @@ def dialogs_offline():
         result = steps.run(fake, 7, [{"tool": "evaluate_script", "function": "() => confirm('x')"},
                                      {"tool": "handle_dialog", "action": "accept"}], called, target="T1")
         check("no answerer races a tool that answers its own dialogs",
-              made == [] and not result["isError"] and [tool for tool, _ in fake.calls] == ["evaluate_script", "handle_dialog"],
+              made == [] and not text_of(result["content"]).startswith(steps.STOPPED) and [tool for tool, _ in fake.calls] == ["evaluate_script", "handle_dialog"],
               text_of(result["content"]))
     finally:
         dialogs.Answerer = saved
@@ -937,9 +942,9 @@ def checked_offline():
                        {"tool": "expect", "uid": "1_3", "value": "true"})
         report = text_of(result["content"])
         check("a pick with no exact option fails the queue and says what typing showed",
-              result["isError"] and 'no option is exactly "Los Angeles, Chile"' in report
+              report.startswith(steps.STOPPED) and 'no option is exactly "Los Angeles, Chile"' in report
               and 'typing "Los Angeles" showed %s' % ", ".join(json.dumps(text) for text in near) in report, report)
-        check("and the steps after it do not run", "--- not run: 2 expect" in report, report)
+        check("and the steps after it do not run", "; not run: 2 expect" in report, report)
         check("a failed pick leaves no typed text behind to pass for an answer, and closes the list",
               widget.typed == "" and not widget.listed() and "the text box was emptied" in report, report)
         widget = Widget(["Python"], takes=False)
@@ -1017,7 +1022,7 @@ def checked_offline():
                                                                   {"uid": "1_5", "value": "Atlantis"}]})
         report = text_of(result["content"])
         check("fill_form refuses a select given text none of its options has, before filling any element",
-              result["isError"] and 'no option of the select 1_5 is exactly "Atlantis"' in report
+              report.startswith(steps.STOPPED) and 'no option of the select 1_5 is exactly "Atlantis"' in report
               and "fill_form" not in tools(widget), report)
     finally:
         checked.time = saved
@@ -1122,7 +1127,7 @@ def screenshot_offline():
         result = steps.run(fake, 7, [{"tool": "take_screenshot", "filePath": path}], lambda name: os.path.join(workdir, name),
                            target="T1", connect=lambda: shots)
         check("a queue's viewport screenshot never reaches chrome-devtools-mcp, and its image comes back",
-              fake.calls == [] and not result["isError"] and result["content"][1]["type"] == "image", repr(result))
+              fake.calls == [] and not text_of(result["content"]).startswith(steps.STOPPED) and result["content"][1]["type"] == "image", repr(result))
         check("a queue has Chrome draw its tab while it runs, on a connection of its own, so a click waits out no 3s",
               shots.calls[:2] == [("Target.attachToTarget", {"targetId": "T1", "flatten": True}),
                                   ("Page.startScreencast", screenshot.DRAWN)], repr(shots.calls[:2]))
@@ -1261,8 +1266,29 @@ def pointer_offline():
     check("the steps argument's description lists them", all("  %s(" % name in steps.describe({}) for name in pointer.STEPS))
     fake = FakeDevtools([])
     result = steps.run(fake, 7, [{"tool": "move_at", "x": 5, "y": 6}], lambda name: name, target="P4", connect=lambda: Hand())
-    check("a queue's pointer step never reaches chrome-devtools-mcp", fake.calls == [] and not result["isError"],
+    check("a queue's pointer step never reaches chrome-devtools-mcp", fake.calls == [] and not text_of(result["content"]).startswith(steps.STOPPED),
           repr(result))
+    shots = []
+    image = {"type": "image", "data": "AAAA", "mimeType": "image/jpeg"}
+
+    def viewport(step, target, connect):
+        shots.append(step)
+        return [{"type": "text", "text": "Took a screenshot"}, image], False
+
+    workdir = tempfile.mkdtemp(prefix="browser-pointer-")
+    try:
+        called = lambda name: os.path.join(workdir, "002-" + name)
+        with mock.patch.object(screenshot, "viewport", viewport):
+            result = steps.run(FakeDevtools([]), 7, [{"tool": "move_at", "x": 5, "y": 6}, {"tool": "click_down", "on": "Buy"}],
+                               called, target="P6", connect=lambda: Hand())
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+    report = text_of(result["content"])
+    check("a queue stopped by a refused press ends with a screenshot of the page now at SHOT_SCALE, after the line "
+          "naming where it is saved",
+          shots == [{"tool": "take_screenshot", "filePath": called("page-now.jpeg"), "scale": steps.SHOT_SCALE}]
+          and report.endswith("take_snapshot or take_screenshot step shows it\nTook a screenshot")
+          and result["content"][1:] == [image], report)
 
 
 def hit_offline():
@@ -1383,8 +1409,8 @@ def limits_offline():
         result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "click", "uid": "1_2"},
                                      {"tool": "click", "uid": "1_3"}], called)
         report = text_of(result["content"])
-        check("a queue past QUEUE_MOST starts no more steps, names them, and is an error",
-              result["isError"] and "--- stopped before step 2" in report and "--- not run: 2 click, 3 click" in report
+        check("a queue past QUEUE_MOST starts no more steps, and says so first, naming them",
+              report.startswith("--- stopped before step 2") and "; not run: 2 click, 3 click" in report
               and [tool for tool, _ in fake.calls] == ["click", "take_snapshot"], report)
         steps.QUEUE_MOST = saved
 

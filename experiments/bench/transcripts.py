@@ -12,6 +12,9 @@ LANDED = re.compile(r"pressed the \w+ button at [\d.]+,[\d.]+ on (.*?)(?:, as cl
 # ("step 2: click_down needs on: ...").
 SAID = re.compile(r"^(?:pressed the \w+ button at .*|Not pressed: .*|.*\bclick_down needs on.*)$", re.M)
 CLICK_RAN = re.compile(r"^--- (\d+) click ok ", re.M)  # a queue's report of a click by uid that ran
+# The line browserd's report of a stopped queue begins with (its steps.STOPPED), after tab_open's tab line if any;
+# such a report is not an error result.
+STOPPED = re.compile(r"^--- stopped ", re.M)
 
 
 def blocks(transcript):
@@ -30,6 +33,11 @@ def text(block):
     inner = block.get("content")
     return inner if isinstance(inner, str) else "\n".join(
         part.get("text", "") for part in inner or [] if isinstance(part, dict))
+
+
+def failed(block):
+    """Whether a tool_result block failed: an error result, or a browserd queue that stopped."""
+    return bool(block.get("is_error")) or STOPPED.search(text(block)) is not None
 
 
 def presses(transcript):

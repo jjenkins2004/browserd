@@ -113,7 +113,7 @@ class Server(Exclusive):
         began, refused = time.monotonic(), None
         try:
             returned = tool["run"](arguments)
-            # A dict is a whole result, for a tool that reports failure with more than text.
+            # A dict is a whole result, for a tool that returns images or sets isError itself.
             result = returned if isinstance(returned, dict) else {"content": _content(returned)}
         except ToolError as exc:
             result, refused = {"content": _content(str(exc)), "isError": True}, str(exc)

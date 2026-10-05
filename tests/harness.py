@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from browser.chrome import cdp
 from browser.protocol import mcp
+from browser.steps import steps
 from browser.tabs import sessions
 from browser.chrome.profiles import Profile
 from browser.records.state import Session, State
@@ -177,10 +178,12 @@ def rpc(httpd, method, params=None, message_id=1):
 
 
 def call(httpd, tool, **arguments):
-    """(text, isError) of one tools/call."""
+    """(text, failed) of one tools/call: failed when it is an error result, or a queue (tab_open's steps too) that
+    stopped short, which is not one."""
     status, answer = rpc(httpd, "tools/call", {"name": tool, "arguments": arguments})
     result = (answer or {}).get("result", {})
-    return "\n".join(item.get("text", "") for item in result.get("content", [])), bool(result.get("isError"))
+    text = "\n".join(item.get("text", "") for item in result.get("content", []))
+    return text, bool(result.get("isError")) or any(line.startswith(steps.STOPPED) for line in text.splitlines())
 
 
 class FakeChrome:
