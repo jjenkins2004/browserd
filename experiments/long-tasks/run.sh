@@ -4,19 +4,19 @@
 # needs) and claude-sonnet-5-5 its model. The task's prompt is sent as the session's first message, and record.py
 # captures the tab the agent works in until Claude Code exits.
 #
-#     experiments/long-tasks/run.sh capex|trip <name>
+#     experiments/long-tasks/run.sh capex|parks|trip <name>
 #
 # The run's folder, <data>/<name>/, is where Claude Code runs, and holds the recording (frames/, frames.tsv, video.mp4)
 # and record.log, and for trip flights-before.json, Google Flights as the run starts, for judge.py's --before. <data> is
 # ../browserd-long-tasks beside the repo, or $BROWSERD_LONG_TASKS_DATA. The last line names the session's transcript,
-# which judge.py reads. A prompt without a "with the label" line (trip's) has record.py follow the profile's first new
-# session, whatever its label.
+# which judge.py reads. A prompt without a "with the label" line (trip's, parks') has record.py follow the profile's
+# first new session, whatever its label.
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 task=$1
 name=$2
 if [ ! -f "$HERE/$task/prompt.md" ] || [ -z "$name" ]; then
-    echo "usage: $0 capex|trip <name>" >&2
+    echo "usage: $0 capex|parks|trip <name>" >&2
     exit 2
 fi
 DATA=${BROWSERD_LONG_TASKS_DATA:-$HERE/../../../browserd-long-tasks}

@@ -1,6 +1,6 @@
-"""Grade a trip run with an agent: claude-opus-5-5 on browserd reads the deck against trip/rubric.md.
+"""Grade a trip run with an agent: claude-opus-5-5 on browserd reads the deck and its Sheet against trip/rubric.md.
 
-    python3 experiments/long-tasks/judge.py <deck URL> <transcript> <folder> [--before <flights.json>]
+    python3 experiments/long-tasks/judge.py <deck URL> <sheet URL> <transcript> <folder> [--before <flights.json>]
 
 <folder> is the judge's own, named so nothing in it says which run or browser server made the deck. It gets
 flights-before.json (from --before, which `grade.py flights` saved as the run began), flights-after.json (Google
@@ -24,14 +24,15 @@ import grade  # noqa: E402
 MODEL = "claude-opus-5-5"
 PROFILE = os.environ.get("BROWSERD_LONG_TASKS_PROFILE", "personal")  # browserd's profile, signed in to Google
 CLAUDE = os.environ.get("BROWSERD_LONG_TASKS_CLAUDE", "claude")  # the Claude Code to run: a pinned binary, or PATH's
-TIMEOUT = 1800  # seconds the judge may take
+TIMEOUT = 3600  # seconds the judge may take
 BROWSERD = {"browserd": {"type": "http", "url": "http://127.0.0.1:9230/mcp"}}
 PAGE = "http://127.0.0.1:9231"  # browserd's page, whose Close session close_sessions uses
 SESSION_STARTED = re.compile(r"session (\w{6}), on the ")  # session_start's reply
-ITEMS = {  # trip/rubric.md's items, by group
-    "correct": ["slides", "seattle_flights", "denver_flights", "chicago_flights", "seattle_hotel", "denver_hotel",
-                "chicago_hotel", "seattle_weather", "denver_weather", "chicago_weather", "comparison", "pick",
-                "recommendation"],
+CITIES = [city["city"].lower() for city in grade.trip_key()]
+ITEMS = {  # trip/rubric.md's items, by group: its <city>_ items once for each city in trip/key.json
+    "correct": ["slides"] + ["%s_%s" % (city, item) for item in ["flights", "hotel", "weather", "restaurant"]
+                             for city in CITIES] + ["sheet", "chart", "comparison", "pick", "recommendation",
+                                                    "itinerary"],
     "polish": ["photos", "headers", "highlight", "layout", "consistent"],
 }
 
@@ -53,7 +54,7 @@ def env():
 
 
 def events(transcript):
-    for line in Path(transcript).read_text(errors="replace").splitlines():
+    for line in Path(transcript).read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             yield json.loads(line)
         except ValueError:
@@ -93,7 +94,7 @@ def close_sessions(transcript):
 
 def request():
     """trip/prompt.md without its browserd sentence, which would say what made the deck."""
-    return re.sub(r" ?Use browserd[^.]*\.", "", (HERE / "trip" / "prompt.md").read_text())
+    return re.sub(r" ?Use browserd[^.]*\.", "", (HERE / "trip" / "prompt.md").read_text(encoding="utf-8"))
 
 
 def verdict_of(text):
@@ -106,27 +107,38 @@ def verdict_of(text):
     return verdict if isinstance(verdict, dict) else None
 
 
+def passed(verdict, group, item):
+    """Whether the verdict passes an item: only [true, note] does, so one it leaves out or gives in another shape
+    fails."""
+    found = verdict[group].get(item) if isinstance(verdict.get(group), dict) else None
+    return isinstance(found, list) and bool(found) and found[0] is True
+
+
 def score(verdict):
-    """{group: [items passed, items]} and looks; an item the verdict leaves out fails."""
-    scores = {group: [sum(bool((verdict.get(group) or {}).get(item, [False])[0]) for item in items), len(items)]
-              for group, items in ITEMS.items()}
+    """{group: [items passed, items]} and looks, each item by passed."""
+    scores = {group: [sum(passed(verdict, group, item) for item in items), len(items)] for group, items in ITEMS.items()}
     return dict(scores, looks=verdict.get("looks"))
 
 
-def judge(deck, transcript, folder, before):
-    """Run the judge on deck in folder; returns its verdict (None if it gave none) and its cost in USD."""
+def judge(deck, sheet, transcript, folder, before):
+    """Run the judge on deck and sheet in folder; returns its verdict (None if it gave none) and its cost in USD."""
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "flights-before.json").write_text(json.dumps(before) + "\n")
     (folder / "flights-after.json").write_text(json.dumps(grade.reference(PROFILE)) + "\n")
-    (folder / "seen.txt").write_text("\n\n".join(tool_results(transcript)))
-    prompt = ((HERE / "trip" / "rubric.md").read_text().replace("{request}", request().strip()).replace("{deck}", deck)
-              .replace("{profile}", PROFILE))
+    (folder / "seen.txt").write_text("\n\n".join(tool_results(transcript)), encoding="utf-8")
+    cities = grade.trip_key()
+    normals = ", ".join("%s %s°F" % (city["city"], city["nov_high_f"]) for city in cities)
+    prompt = ((HERE / "trip" / "rubric.md").read_text(encoding="utf-8").replace("{request}", request().strip())
+              .replace("{deck}", deck).replace("{sheet}", sheet).replace("{profile}", PROFILE)
+              .replace("{airports}", ", ".join(city["airport"] for city in cities)).replace("{normals}", normals)
+              .replace("{items}", ", ".join(ITEMS["correct"] + ITEMS["polish"])))
     cmd = command([CLAUDE, "-p", "--model", MODEL, "--output-format", "stream-json", "--verbose", "--setting-sources", "",
                    "--tools", "Read,Grep", "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": BROWSERD}),
                    "--no-session-persistence", "--allowedTools", "mcp__browserd", "Read", "Grep",
                    "--disallowedTools", "mcp__browserd__profile_new", "mcp__browserd__profile_delete"])
     with (folder / "judge.jsonl").open("w") as out, (folder / "judge-stderr.txt").open("w") as err:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=out, stderr=err, cwd=folder, env=env(), text=True)
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=out, stderr=err, cwd=folder, env=env(),
+                                text=True, encoding="utf-8")
         try:
             proc.communicate(prompt, timeout=TIMEOUT)
         except subprocess.TimeoutExpired:
@@ -144,18 +156,19 @@ def judge(deck, transcript, folder, before):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("deck")
+    parser.add_argument("sheet")
     parser.add_argument("transcript")
     parser.add_argument("folder")
     parser.add_argument("--before", help="Google Flights as the run began, from `grade.py flights`")
     args = parser.parse_args()
-    verdict, cost = judge(args.deck, args.transcript, Path(args.folder),
+    verdict, cost = judge(args.deck, args.sheet, args.transcript, Path(args.folder),
                           json.loads(Path(args.before).read_text()) if args.before else {})
     if verdict is None:
         raise SystemExit("the judge gave no verdict: see %s" % Path(args.folder, "judge.jsonl"))
     for group, items in ITEMS.items():
         for item in items:
-            good, note = ((verdict.get(group) or {}).get(item) or [False, "not graded"])[:2]
-            print("%s  %s %s: %s" % ("ok " if good else "BAD", group, item, note))
+            _, note = ((verdict.get(group) or {}).get(item) or [False, "not graded"])[:2]
+            print("%s  %s %s: %s" % ("ok " if passed(verdict, group, item) else "BAD", group, item, note))
     scores = score(verdict)
     print("correct %d/%d, polish %d/%d, looks %s, judge $%s" % (*scores["correct"], *scores["polish"], scores["looks"],
                                                               cost))

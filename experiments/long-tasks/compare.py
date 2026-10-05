@@ -1,14 +1,16 @@
-"""A long task (trip, or capex) on each browser MCP server in turn, k times, each run a clean headless Claude Code on
-claude-sonnet-5-5, graded as it ends; or a summary and slide gallery of an experiment's runs.
+"""A long task (trip, capex or parks) on each browser MCP server in turn, k times, each run a clean headless Claude Code
+on claude-sonnet-5-5, graded as it ends; or a summary and slide gallery of an experiment's runs.
 
-    python3 experiments/long-tasks/compare.py run <exp> [--task trip|capex] [--arms browserd,playwright,devtools,agentbrowser] [--k 2] [--jobs 1]
+    python3 experiments/long-tasks/compare.py run <exp> [--task trip|capex|parks]
+        [--arms browserd,playwright,devtools,agentbrowser] [--k 2] [--jobs 1]
     python3 experiments/long-tasks/compare.py report <exp>
 
 Each run is <data>/<exp>/<arm>-r<n>/: prompt.md, transcript.jsonl (stream-json), stderr.txt, flights-before.json (trip
-only), the recording (frames/, frames.tsv, video.mp4, record.log), deck.pdf, slides/ and result.json. trip's judge works
-in <data>/<exp>/judging/<random id>/; capex is graded by grade.py's checks. Every arm drives browserd's Chrome of the
-profile judge.PROFILE names, so runs go one at a time unless --jobs says otherwise. A run with a result.json is done, so
-running an experiment again runs only what is missing. report writes gallery.html and gallery-blind.html.
+only), the recording (frames/, frames.tsv, video.mp4, record.log), deck.pdf and slides/ (a task with a deck) and
+result.json. trip's judge works in <data>/<exp>/judging/<random id>/; capex and parks are graded by grade.py's checks.
+Every arm drives browserd's Chrome of the profile judge.PROFILE names, so runs go one at a time unless --jobs says
+otherwise. A run with a result.json is done, so running an experiment again runs only what is missing. report writes
+gallery.html and gallery-blind.html.
 """
 import argparse
 import concurrent.futures
@@ -37,29 +39,25 @@ ROOT = HERE.parents[1]
 DATA = Path(os.environ.get("BROWSERD_LONG_TASKS_DATA", ROOT.parent / "browserd-long-tasks"))
 MODEL = "claude-sonnet-5-5"
 PROFILE = judge.PROFILE
-TIMEOUT = 3600  # seconds a run may take before it is stopped
+TIMEOUT = 7200  # seconds a run may take before it is stopped
 ARMS = ["browserd", "playwright", "devtools", "agentbrowser"]
-# Each task's browserd-only text in prompt.md, and the other arms' for it: the same request, minus browserd's name,
-# profile, session and tools. browserd's own keeps it, with PROFILE for personal.
-SWAPS = {
-    "trip": {"Use browserd with my personal profile, where I'm signed in to Google.":
-             "Use the browser, where I'm signed in to Google."},
-    "capex": {'Use browserd on the profile "personal": call session_start once, with the label "hyperscaler capex".':
-              "Use the browser.",
-              "call tab_needs_input on that tab, then stop": "stop",
-              "Close your session's tabs in one tab_close, except the deck's.": "Close your tabs, except the deck's."},
-}
-DECK_URL = re.compile(r"https://docs\.google\.com/presentation/d/[\w-]+")
-SHEET_URL = re.compile(r"https://docs\.google\.com/spreadsheets/d/[\w-]+")
+# Each prompt's one browserd sentence, and the other arms' for it: the same request, minus browserd's name, profile and
+# session label. browserd's own keeps it, with PROFILE for personal.
+BROWSERD_SENTENCE = re.compile(r"Use browserd with my personal profile[^.]*\.")
+NEUTRAL = "Use the browser, where I'm signed in to Google."
+# The files each task's final message links, in the order its grader takes them, and their URLs' shapes.
+FILES = {"trip": ["deck", "sheet"], "capex": ["deck", "sheet"], "parks": ["map"]}
+LINKS = {"deck": re.compile(r"https://docs\.google\.com/presentation/d/[\w-]+"),
+         "sheet": re.compile(r"https://docs\.google\.com/spreadsheets/d/[\w-]+"),
+         "map": re.compile(r"https://(?:www|mymaps)\.google\.com/maps/d/\S*?mid=[\w-]+")}
 
 
 def prompt(task, arm):
-    text = (HERE / task / "prompt.md").read_text()
-    for old, new in SWAPS[task].items():
-        if text.count(old) != 1:
-            raise SystemExit("%s/prompt.md does not hold %r once" % (task, old))
-        text = text.replace(old, old.replace("personal", PROFILE) if arm == "browserd" else new)
-    return text
+    text = (HERE / task / "prompt.md").read_text(encoding="utf-8")
+    if len(BROWSERD_SENTENCE.findall(text)) != 1:
+        raise SystemExit("%s/prompt.md does not hold one browserd sentence" % task)
+    return BROWSERD_SENTENCE.sub(
+        lambda found: found.group(0).replace("personal", PROFILE) if arm == "browserd" else NEUTRAL, text)
 
 
 def servers(arm, run, port, session):
@@ -157,10 +155,10 @@ def claude(arm, run, servers):
         # Out of the terminal's Ctrl-C, as on macOS: there a session of its own, which stop_tree's killpg also uses
         # to reach the MCP servers claude starts; on Windows a process group of its own, which Ctrl-C skips.
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=run, env=judge.env(),
-                                text=True, start_new_session=True,
+                                text=True, encoding="utf-8", start_new_session=True,
                                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0)
         try:
-            proc.communicate((run / "prompt.md").read_text(), timeout=TIMEOUT)
+            proc.communicate((run / "prompt.md").read_text(encoding="utf-8"), timeout=TIMEOUT)
             return False
         except subprocess.TimeoutExpired:
             return True
@@ -204,11 +202,11 @@ def pictures(run, deck):
     subprocess.run(["pdftoppm", "-png", "-r", "60", str(run / "deck.pdf"), str(run / "slides" / "slide")], check=True)
 
 
-def judged(out, run, deck, before):
-    """trip's judge on the deck: why the run has no scores (None when it has), and result.json's fields from the
-    verdict."""
+def judged(out, run, deck, sheet, before):
+    """trip's judge on the deck and Sheet: why the run has no scores (None when it has), and result.json's fields from
+    the verdict."""
     folder = out / "judging" / secrets.token_hex(4)  # a name that says nothing of the arm
-    verdict, judge_cost = judge.judge(deck, run / "transcript.jsonl", folder, before)
+    verdict, judge_cost = judge.judge(deck, sheet, run / "transcript.jsonl", folder, before)
     if verdict is None:
         return "the judge gave no verdict", dict(judged=folder.name, judge_cost=judge_cost)
     scores = judge.score(verdict)
@@ -217,12 +215,12 @@ def judged(out, run, deck, before):
                       summary=verdict.get("summary"))
 
 
-def graded(deck, sheet):
-    """grade.py's capex checks on the deck and Sheet: why the run has no score (None when it has), and result.json's
-    fields from the checks. A file that cannot be fetched or read leaves no score, only the checks made before it."""
+def graded(task, urls):
+    """grade.py's checks of the task's files: why the run has no score (None when it has), and result.json's fields
+    from the checks. A file that cannot be fetched or read leaves no score, only the checks made before it."""
     report = grade.Report()
     try:
-        grade.grade_capex(report, PROFILE, deck, sheet)
+        grade.GRADERS[task](report, PROFILE, *urls)
     except (Exception, SystemExit) as exc:
         return "not graded: %s" % exc, dict(checks=report.lines)
     return None, dict(score=[report.passed, report.total], passed=report.passed == report.total, checks=report.lines)
@@ -233,7 +231,7 @@ def run_one(out, task, arm, rep, stopped):
     if (run / "result.json").exists() or stopped.is_set():
         return
     run.mkdir(parents=True, exist_ok=True)
-    (run / "prompt.md").write_text(prompt(task, arm))
+    (run / "prompt.md").write_text(prompt(task, arm), encoding="utf-8")
     before = None
     if task == "trip":
         before = grade.reference(PROFILE)
@@ -271,29 +269,32 @@ def run_one(out, task, arm, rep, stopped):
               flush=True)
         return
     final = measured.pop("final")
-    deck, sheet = [found.group(0) if found else None for found in (DECK_URL.search(final), SHEET_URL.search(final))]
+    # A map's link in one form, whatever page of it the message gives (edit, viewer, u/0), so an earlier run's map is
+    # known again; a deck's or Sheet's link is one form already.
+    links = {name: re.sub(r"^\S*?mid=", "https://www.google.com/maps/d/edit?mid=", found.group(0))
+             for name, shape in LINKS.items() if (found := shape.search(final))}
+    missing = [name for name in FILES[task] if name not in links]
     earlier = [json.loads(path.read_text()) for path in out.glob("*/result.json")]
+    reused = [name for name in FILES[task] if name not in missing and links[name] in [r.get(name) for r in earlier]]
     note, grades = None, {}
-    if not deck:
-        note = "no deck URL in the final message"
-    elif task == "capex" and not sheet:
-        note = "no Sheet URL in the final message"
-    elif deck in [r.get("deck") for r in earlier]:
-        note = "an earlier run's deck"
-    elif sheet and sheet in [r.get("sheet") for r in earlier]:
-        note = "an earlier run's Sheet"
+    if missing:
+        note = "no %s URL in the final message" % " or ".join(missing)
+    elif reused:
+        note = "an earlier run's %s" % " and ".join(reused)
     else:
-        try:
-            pictures(run, deck)
-        except (Exception, SystemExit) as exc:  # a deck that cannot be exported still gets graded
-            note = "no pictures: %s" % exc
-        failed, grades = judged(out, run, deck, before) if task == "trip" else graded(deck, sheet)
+        if "deck" in FILES[task]:
+            try:
+                pictures(run, links["deck"])
+            except (Exception, SystemExit) as exc:  # a deck that cannot be exported still gets graded
+                note = "no pictures: %s" % exc
+        failed, grades = (judged(out, run, links["deck"], links["sheet"], before) if task == "trip" else
+                          graded(task, [links[name] for name in FILES[task]]))
         note = failed or note
     # The task's fields, as a run that gets no grade leaves them.
     ungraded = (dict(judged=None, correct=None, polish=None, looks=None, passed=False, judge_cost=None, summary=None)
                 if task == "trip" else dict(score=None, passed=False, checks=None))
-    result = dict(task=task, arm=arm, rep=rep, wall=wall, timed_out=timed_out, deck=deck, sheet=sheet, note=note,
-                  **{**ungraded, **grades}, **measured)
+    result = dict(task=task, arm=arm, rep=rep, wall=wall, timed_out=timed_out, note=note,
+                  **{name: links.get(name) for name in LINKS}, **{**ungraded, **grades}, **measured)
     (run / "result.json").write_text(json.dumps(result, indent=1) + "\n")
     print("%s r%d: %s in %ds, $%s%s" % (arm, rep, scores(result) or note, wall, result["cost"],
                                         ", TIMED OUT" if timed_out else ""), flush=True)
@@ -301,7 +302,7 @@ def run_one(out, task, arm, rep, stopped):
 
 def scores(r):
     """A run's result.json scores in words, or None when it has none."""
-    if r["task"] == "capex":
+    if r["task"] != "trip":
         return r["score"] and "checks %d/%d" % tuple(r["score"])
     return r["correct"] and "correct %d/%d, polish %d/%d, looks %s" % (*r["correct"], *r["polish"], r["looks"])
 
@@ -335,7 +336,7 @@ def gallery(out, results, blind):
 h2{font-size:16px;margin:0 0 4px}p{margin:0 0 8px;color:#555}.slides{display:flex;gap:8px;overflow-x:auto}
 img{height:150px;border:1px solid #ccc}</style>
 <h1>%s</h1>%s""" % (html.escape(out.name), html.escape(out.name + (" (blind)" if blind else "")), "\n".join(body))
-    (out / ("gallery-blind.html" if blind else "gallery.html")).write_text(page)
+    (out / ("gallery-blind.html" if blind else "gallery.html")).write_text(page, encoding="utf-8")
 
 
 def trip_table(results):
@@ -362,7 +363,7 @@ def trip_table(results):
                   mean([r["tool_errors"] for r in mine])))
 
 
-def capex_table(results):
+def checks_table(results):
     print("%-14s %-4s %-7s %-7s %-6s %-6s %-6s %-6s %s" % (
         "arm", "rep", "checks", "passed", "min", "cost", "turns", "calls", "errors"))
     for r in results:
@@ -389,7 +390,7 @@ def report(out):
     for r in results:
         r.setdefault("task", "trip")  # trip's older result.json names no task
     for task in dict.fromkeys(r["task"] for r in results):
-        (trip_table if task == "trip" else capex_table)([r for r in results if r["task"] == task])
+        (trip_table if task == "trip" else checks_table)([r for r in results if r["task"] == task])
     gallery(out, results, blind=False)
     gallery(out, results, blind=True)
     print("\n%s\n%s" % (out / "gallery.html", out / "gallery-blind.html"))
@@ -399,7 +400,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=["run", "report"])
     parser.add_argument("exp")
-    parser.add_argument("--task", choices=["trip", "capex"], default="trip", help="the task each run does")
+    parser.add_argument("--task", choices=list(FILES), default="trip", help="the task each run does")
     parser.add_argument("--arms", default=",".join(ARMS))
     parser.add_argument("--k", type=int, default=2)
     parser.add_argument("--jobs", type=int, default=1, help="runs at once; they share one Chrome, so 1 unless sure")

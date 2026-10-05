@@ -1,112 +1,555 @@
 {
   "companies": [
     {
+      "ticker": "AAPL",
+      "names": [
+        "Apple"
+      ],
+      "filing": "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/aapl-20250927.htm",
+      "revenue": [
+        383285,
+        391035,
+        416161
+      ],
+      "fy": [
+        2023,
+        2024,
+        2025
+      ],
+      "operating_cash_flow": [
+        110543,
+        118254,
+        111482
+      ],
+      "capex": [
+        10959,
+        9447,
+        12715
+      ],
+      "free_cash_flow": [
+        99584,
+        108807,
+        98767
+      ],
+      "capex_share": [
+        0.028592,
+        0.024159,
+        0.030553
+      ],
+      "title": "AAPL — FY2025",
+      "table": {
+        "revenue": [
+          "383.3",
+          "391.0",
+          "416.2"
+        ],
+        "capex": [
+          "11.0",
+          "9.4",
+          "12.7"
+        ],
+        "free_cash_flow": [
+          "99.6",
+          "108.8",
+          "98.8"
+        ]
+      }
+    },
+    {
       "ticker": "MSFT",
+      "names": [
+        "Microsoft"
+      ],
       "filing": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm",
       "revenue": [
+        245122,
         281724,
         331839
       ],
       "fy": [
+        2024,
         2025,
         2026
       ],
-      "net_income": [
-        101832,
-        133749
+      "operating_cash_flow": [
+        118548,
+        136162,
+        182935
       ],
       "capex": [
+        44477,
         64551,
         115948
       ],
-      "growth": 0.796223,
+      "free_cash_flow": [
+        74071,
+        71611,
+        66987
+      ],
+      "capex_share": [
+        0.181448,
+        0.229129,
+        0.34941
+      ],
       "title": "MSFT — FY2026",
-      "lines": [
-        "Revenue: $331.8B (prior $281.7B)",
-        "Net income: $133.7B (prior $101.8B)",
-        "Capex: $115.9B (prior $64.6B)"
-      ]
+      "table": {
+        "revenue": [
+          "245.1",
+          "281.7",
+          "331.8"
+        ],
+        "capex": [
+          "44.5",
+          "64.6",
+          "115.9"
+        ],
+        "free_cash_flow": [
+          "74.1",
+          "71.6",
+          "67.0"
+        ]
+      }
     },
     {
       "ticker": "GOOGL",
+      "names": [
+        "Alphabet",
+        "Google"
+      ],
       "filing": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
       "revenue": [
+        307394,
         350018,
         402836
       ],
       "fy": [
+        2023,
         2024,
         2025
       ],
-      "net_income": [
-        100118,
-        132170
+      "operating_cash_flow": [
+        101746,
+        125299,
+        164713
       ],
       "capex": [
+        32251,
         52535,
         91447
       ],
-      "growth": 0.740687,
+      "free_cash_flow": [
+        69495,
+        72764,
+        73266
+      ],
+      "capex_share": [
+        0.104917,
+        0.150092,
+        0.227008
+      ],
       "title": "GOOGL — FY2025",
-      "lines": [
-        "Revenue: $402.8B (prior $350.0B)",
-        "Net income: $132.2B (prior $100.1B)",
-        "Capex: $91.4B (prior $52.5B)"
-      ]
+      "table": {
+        "revenue": [
+          "307.4",
+          "350.0",
+          "402.8"
+        ],
+        "capex": [
+          "32.3",
+          "52.5",
+          "91.4"
+        ],
+        "free_cash_flow": [
+          "69.5",
+          "72.8",
+          "73.3"
+        ]
+      }
     },
     {
       "ticker": "AMZN",
+      "names": [
+        "Amazon"
+      ],
       "filing": "https://www.sec.gov/Archives/edgar/data/1018724/000101872426000004/amzn-20251231.htm",
       "revenue": [
+        574785,
         637959,
         716924
       ],
       "fy": [
+        2023,
         2024,
         2025
       ],
-      "net_income": [
-        59248,
-        77670
+      "operating_cash_flow": [
+        84946,
+        115877,
+        139514
       ],
       "capex": [
+        52729,
         82999,
         131819
       ],
-      "growth": 0.5882,
+      "free_cash_flow": [
+        32217,
+        32878,
+        7695
+      ],
+      "capex_share": [
+        0.091737,
+        0.130101,
+        0.183867
+      ],
       "title": "AMZN — FY2025",
-      "lines": [
-        "Revenue: $716.9B (prior $638.0B)",
-        "Net income: $77.7B (prior $59.2B)",
-        "Capex: $131.8B (prior $83.0B)"
-      ]
+      "table": {
+        "revenue": [
+          "574.8",
+          "638.0",
+          "716.9"
+        ],
+        "capex": [
+          "52.7",
+          "83.0",
+          "131.8"
+        ],
+        "free_cash_flow": [
+          "32.2",
+          "32.9",
+          "7.7"
+        ]
+      }
     },
     {
       "ticker": "META",
+      "names": [
+        "Meta"
+      ],
       "filing": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
       "revenue": [
+        134902,
         164501,
         200966
       ],
       "fy": [
+        2023,
         2024,
         2025
       ],
-      "net_income": [
-        62360,
-        60458
+      "operating_cash_flow": [
+        71113,
+        91328,
+        115800
       ],
       "capex": [
+        27045,
         37256,
         69691
       ],
-      "growth": 0.870598,
+      "free_cash_flow": [
+        44068,
+        54072,
+        46109
+      ],
+      "capex_share": [
+        0.200479,
+        0.226479,
+        0.34678
+      ],
       "title": "META — FY2025",
-      "lines": [
-        "Revenue: $201.0B (prior $164.5B)",
-        "Net income: $60.5B (prior $62.4B)",
-        "Capex: $69.7B (prior $37.3B)"
-      ]
+      "table": {
+        "revenue": [
+          "134.9",
+          "164.5",
+          "201.0"
+        ],
+        "capex": [
+          "27.0",
+          "37.3",
+          "69.7"
+        ],
+        "free_cash_flow": [
+          "44.1",
+          "54.1",
+          "46.1"
+        ]
+      }
+    },
+    {
+      "ticker": "NVDA",
+      "names": [
+        "NVIDIA"
+      ],
+      "filing": "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000021/nvda-20260125.htm",
+      "revenue": [
+        60922,
+        130497,
+        215938
+      ],
+      "fy": [
+        2024,
+        2025,
+        2026
+      ],
+      "operating_cash_flow": [
+        28090,
+        64089,
+        102718
+      ],
+      "capex": [
+        1069,
+        3236,
+        6042
+      ],
+      "free_cash_flow": [
+        27021,
+        60853,
+        96676
+      ],
+      "capex_share": [
+        0.017547,
+        0.024798,
+        0.02798
+      ],
+      "title": "NVDA — FY2026",
+      "table": {
+        "revenue": [
+          "60.9",
+          "130.5",
+          "215.9"
+        ],
+        "capex": [
+          "1.1",
+          "3.2",
+          "6.0"
+        ],
+        "free_cash_flow": [
+          "27.0",
+          "60.9",
+          "96.7"
+        ]
+      }
+    },
+    {
+      "ticker": "TSLA",
+      "names": [
+        "Tesla"
+      ],
+      "filing": "https://www.sec.gov/Archives/edgar/data/1318605/000162828026003952/tsla-20251231.htm",
+      "revenue": [
+        96773,
+        97690,
+        94827
+      ],
+      "fy": [
+        2023,
+        2024,
+        2025
+      ],
+      "operating_cash_flow": [
+        13256,
+        14923,
+        14747
+      ],
+      "capex": [
+        8899,
+        11342,
+        8527
+      ],
+      "free_cash_flow": [
+        4357,
+        3581,
+        6220
+      ],
+      "capex_share": [
+        0.091957,
+        0.116102,
+        0.089922
+      ],
+      "title": "TSLA — FY2025",
+      "table": {
+        "revenue": [
+          "96.8",
+          "97.7",
+          "94.8"
+        ],
+        "capex": [
+          "8.9",
+          "11.3",
+          "8.5"
+        ],
+        "free_cash_flow": [
+          "4.4",
+          "3.6",
+          "6.2"
+        ]
+      }
+    },
+    {
+      "ticker": "ORCL",
+      "names": [
+        "Oracle"
+      ],
+      "filing": "https://www.sec.gov/Archives/edgar/data/1341439/000119312526277521/orcl-20260531.htm",
+      "revenue": [
+        52961,
+        57399,
+        67357
+      ],
+      "fy": [
+        2024,
+        2025,
+        2026
+      ],
+      "operating_cash_flow": [
+        18673,
+        20821,
+        31977
+      ],
+      "capex": [
+        6866,
+        21215,
+        55663
+      ],
+      "free_cash_flow": [
+        11807,
+        -394,
+        -23686
+      ],
+      "capex_share": [
+        0.129643,
+        0.369606,
+        0.826388
+      ],
+      "title": "ORCL — FY2026",
+      "table": {
+        "revenue": [
+          "53.0",
+          "57.4",
+          "67.4"
+        ],
+        "capex": [
+          "6.9",
+          "21.2",
+          "55.7"
+        ],
+        "free_cash_flow": [
+          "11.8",
+          "-0.4",
+          "-23.7"
+        ]
+      }
+    },
+    {
+      "ticker": "AVGO",
+      "names": [
+        "Broadcom"
+      ],
+      "filing": "https://www.sec.gov/Archives/edgar/data/1730168/000173016825000121/avgo-20251102.htm",
+      "revenue": [
+        35819,
+        51574,
+        63887
+      ],
+      "fy": [
+        2023,
+        2024,
+        2025
+      ],
+      "operating_cash_flow": [
+        18085,
+        19962,
+        27537
+      ],
+      "capex": [
+        452,
+        548,
+        623
+      ],
+      "free_cash_flow": [
+        17633,
+        19414,
+        26914
+      ],
+      "capex_share": [
+        0.012619,
+        0.010626,
+        0.009752
+      ],
+      "title": "AVGO — FY2025",
+      "table": {
+        "revenue": [
+          "35.8",
+          "51.6",
+          "63.9"
+        ],
+        "capex": [
+          "0.5",
+          "0.5",
+          "0.6"
+        ],
+        "free_cash_flow": [
+          "17.6",
+          "19.4",
+          "26.9"
+        ]
+      }
+    },
+    {
+      "ticker": "CRWV",
+      "names": [
+        "CoreWeave"
+      ],
+      "filing": "https://www.sec.gov/Archives/edgar/data/1769628/000176962826000104/crwv-20251231.htm",
+      "revenue": [
+        229,
+        1915,
+        5131
+      ],
+      "fy": [
+        2023,
+        2024,
+        2025
+      ],
+      "operating_cash_flow": [
+        1833,
+        2749,
+        3058
+      ],
+      "capex": [
+        2943,
+        8702,
+        10309
+      ],
+      "free_cash_flow": [
+        -1110,
+        -5953,
+        -7251
+      ],
+      "capex_share": [
+        12.851528,
+        4.544125,
+        2.00916
+      ],
+      "title": "CRWV — FY2025",
+      "table": {
+        "revenue": [
+          "0.2",
+          "1.9",
+          "5.1"
+        ],
+        "capex": [
+          "2.9",
+          "8.7",
+          "10.3"
+        ],
+        "free_cash_flow": [
+          "-1.1",
+          "-6.0",
+          "-7.3"
+        ]
+      }
     }
   ]
 }

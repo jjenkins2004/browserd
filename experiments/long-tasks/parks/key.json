@@ -1,0 +1,299 @@
+{
+  "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1378075927",
+  "states": [
+    "California",
+    "Oregon",
+    "Washington",
+    "Nevada",
+    "Arizona",
+    "Utah",
+    "Colorado",
+    "New Mexico"
+  ],
+  "parks": [
+    {
+      "name": "Arches",
+      "established": "November 12, 1971",
+      "acres": "76,678.98",
+      "visitors": "1,511,740",
+      "lat": 38.68,
+      "lon": -109.57,
+      "layer": "Utah"
+    },
+    {
+      "name": "Black Canyon of the Gunnison",
+      "established": "October 21, 1999",
+      "acres": "30,779.83",
+      "visitors": "250,086",
+      "lat": 38.57,
+      "lon": -107.72,
+      "layer": "Colorado"
+    },
+    {
+      "name": "Bryce Canyon",
+      "established": "February 25, 1928",
+      "acres": "35,835.08",
+      "visitors": "1,967,367",
+      "lat": 37.57,
+      "lon": -112.18,
+      "layer": "Utah"
+    },
+    {
+      "name": "Canyonlands",
+      "established": "September 12, 1964",
+      "acres": "337,597.83",
+      "visitors": "796,057",
+      "lat": 38.2,
+      "lon": -109.93,
+      "layer": "Utah"
+    },
+    {
+      "name": "Capitol Reef",
+      "established": "December 18, 1971",
+      "acres": "241,904.50",
+      "visitors": "1,388,476",
+      "lat": 38.2,
+      "lon": -111.17,
+      "layer": "Utah"
+    },
+    {
+      "name": "Carlsbad Caverns",
+      "established": "May 14, 1930",
+      "acres": "46,766.45",
+      "visitors": "410,778",
+      "lat": 32.17,
+      "lon": -104.44,
+      "layer": "New Mexico"
+    },
+    {
+      "name": "Channel Islands",
+      "established": "March 5, 1980",
+      "acres": "249,561.00",
+      "visitors": "227,186",
+      "lat": 34.01,
+      "lon": -119.42,
+      "layer": "California"
+    },
+    {
+      "name": "Crater Lake",
+      "established": "May 22, 1902",
+      "acres": "183,224.05",
+      "visitors": "632,242",
+      "lat": 42.94,
+      "lon": -122.1,
+      "layer": "Oregon"
+    },
+    {
+      "name": "Death Valley",
+      "established": "October 31, 1994",
+      "acres": "3,408,395.63",
+      "visitors": "1,320,134",
+      "lat": 36.24,
+      "lon": -116.82,
+      "layer": "California"
+    },
+    {
+      "name": "Grand Canyon",
+      "established": "February 26, 1919",
+      "acres": "1,201,647.03",
+      "visitors": "4,430,653",
+      "lat": 36.06,
+      "lon": -112.14,
+      "layer": "Arizona"
+    },
+    {
+      "name": "Great Basin",
+      "established": "October 27, 1986",
+      "acres": "77,180.00",
+      "visitors": "161,210",
+      "lat": 38.98,
+      "lon": -114.3,
+      "layer": "Nevada"
+    },
+    {
+      "name": "Great Sand Dunes",
+      "established": "September 24, 2004",
+      "acres": "107,345.73",
+      "visitors": "432,498",
+      "lat": 37.73,
+      "lon": -105.51,
+      "layer": "Colorado"
+    },
+    {
+      "name": "Joshua Tree",
+      "established": "October 31, 1994",
+      "acres": "795,155.85",
+      "visitors": "2,932,644",
+      "lat": 33.79,
+      "lon": -115.9,
+      "layer": "California"
+    },
+    {
+      "name": "Kings Canyon",
+      "established": "March 4, 1940",
+      "acres": "461,901.20",
+      "visitors": "779,791",
+      "lat": 36.8,
+      "lon": -118.55,
+      "layer": "California"
+    },
+    {
+      "name": "Lassen Volcanic",
+      "established": "August 9, 1916",
+      "acres": "106,589.02",
+      "visitors": "504,777",
+      "lat": 40.49,
+      "lon": -121.51,
+      "layer": "California"
+    },
+    {
+      "name": "Mesa Verde",
+      "established": "June 29, 1906",
+      "acres": "52,485.17",
+      "visitors": "463,130",
+      "lat": 37.18,
+      "lon": -108.49,
+      "layer": "Colorado"
+    },
+    {
+      "name": "Mount Rainier",
+      "established": "March 2, 1899",
+      "acres": "236,381.64",
+      "visitors": "1,635,342",
+      "lat": 46.85,
+      "lon": -121.75,
+      "layer": "Washington"
+    },
+    {
+      "name": "North Cascades",
+      "established": "October 2, 1968",
+      "acres": "504,780.94",
+      "visitors": "46,925",
+      "lat": 48.7,
+      "lon": -121.2,
+      "layer": "Washington"
+    },
+    {
+      "name": "Olympic",
+      "established": "June 29, 1938",
+      "acres": "922,649.41",
+      "visitors": "3,584,187",
+      "lat": 47.97,
+      "lon": -123.5,
+      "layer": "Washington"
+    },
+    {
+      "name": "Petrified Forest",
+      "established": "December 9, 1962",
+      "acres": "221,390.21",
+      "visitors": "315,951",
+      "lat": 35.07,
+      "lon": -109.78,
+      "layer": "Arizona"
+    },
+    {
+      "name": "Pinnacles",
+      "established": "January 10, 2013",
+      "acres": "26,685.73",
+      "visitors": "343,208",
+      "lat": 36.48,
+      "lon": -121.16,
+      "layer": "California"
+    },
+    {
+      "name": "Redwood",
+      "established": "October 2, 1968",
+      "acres": "138,999.37",
+      "visitors": "1,202,480",
+      "lat": 41.3,
+      "lon": -124.0,
+      "layer": "California"
+    },
+    {
+      "name": "Rocky Mountain",
+      "established": "January 26, 1915",
+      "acres": "265,847.74",
+      "visitors": "4,171,431",
+      "lat": 40.4,
+      "lon": -105.58,
+      "layer": "Colorado"
+    },
+    {
+      "name": "Saguaro",
+      "established": "October 14, 1994",
+      "acres": "92,876.75",
+      "visitors": "847,749",
+      "lat": 32.25,
+      "lon": -110.5,
+      "layer": "Arizona"
+    },
+    {
+      "name": "Sequoia",
+      "established": "September 25, 1890",
+      "acres": "404,062.63",
+      "visitors": "1,378,337",
+      "lat": 36.43,
+      "lon": -118.68,
+      "layer": "California"
+    },
+    {
+      "name": "White Sands",
+      "established": "December 20, 2019",
+      "acres": "146,344.31",
+      "visitors": "659,742",
+      "lat": 32.78,
+      "lon": -106.17,
+      "layer": "New Mexico"
+    },
+    {
+      "name": "Yosemite",
+      "established": "October 1, 1890",
+      "acres": "761,747.50",
+      "visitors": "4,278,413",
+      "lat": 37.83,
+      "lon": -119.5,
+      "layer": "California"
+    },
+    {
+      "name": "Zion",
+      "established": "November 19, 1919",
+      "acres": "147,242.66",
+      "visitors": "4,984,525",
+      "lat": 37.3,
+      "lon": -113.05,
+      "layer": "Utah"
+    }
+  ],
+  "route": [
+    {
+      "stop": "Las Vegas",
+      "lat": 36.1716,
+      "lon": -115.1391
+    },
+    {
+      "stop": "Springdale",
+      "lat": 37.1889,
+      "lon": -112.9986
+    },
+    {
+      "stop": "Bryce Canyon City",
+      "lat": 37.6744,
+      "lon": -112.1574
+    },
+    {
+      "stop": "Torrey",
+      "lat": 38.2994,
+      "lon": -111.4199
+    },
+    {
+      "stop": "Moab",
+      "lat": 38.5733,
+      "lon": -109.5498
+    },
+    {
+      "stop": "Las Vegas",
+      "lat": 36.1716,
+      "lon": -115.1391
+    }
+  ]
+}

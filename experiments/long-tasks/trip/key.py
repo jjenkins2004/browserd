@@ -1,7 +1,6 @@
 """Build key.json, the trip task's answer key: each city's November "Mean daily maximum °F" from a pinned Wikipedia
-revision, which rubric.md states for the judge (the prompt names no source, so the judge allows 3°F). Fares and hotels
-are live, so the key has none: judge.py checks them against Google Flights as grade.py reads it and against the run's
-transcript.
+revision, which judge.py gives the judge (rubric.md allows 2°F). Fares, hotels and restaurants are live, so the key has
+none: judge.py checks them against Google Flights as grade.py reads it and against the run's transcript.
 
     python3 experiments/long-tasks/trip/key.py
 """
@@ -14,8 +13,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CITIES = [  # city, airport, Wikipedia revision id
     ("Seattle", "SEA", 1377723485),
+    ("Portland", "PDX", 1376118667),
     ("Denver", "DEN", 1377063237),
     ("Chicago", "ORD", 1377352940),
+    ("Austin", "AUS", 1377668706),
+    ("Nashville", "BNA", 1378078983),
+    ("Atlanta", "ATL", 1378615022),
+    ("Boston", "BOS", 1378587368),
 ]
 
 

@@ -7,6 +7,12 @@
       "nov_high_f": "52.1"
     },
     {
+      "city": "Portland",
+      "airport": "PDX",
+      "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1376118667",
+      "nov_high_f": "53.5"
+    },
+    {
       "city": "Denver",
       "airport": "DEN",
       "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1377063237",
@@ -17,6 +23,30 @@
       "airport": "ORD",
       "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1377352940",
       "nov_high_f": "49.6"
+    },
+    {
+      "city": "Austin",
+      "airport": "AUS",
+      "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1377668706",
+      "nov_high_f": "71.5"
+    },
+    {
+      "city": "Nashville",
+      "airport": "BNA",
+      "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1378078983",
+      "nov_high_f": "61.4"
+    },
+    {
+      "city": "Atlanta",
+      "airport": "ATL",
+      "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1378615022",
+      "nov_high_f": "64.1"
+    },
+    {
+      "city": "Boston",
+      "airport": "BOS",
+      "wikipedia": "https://en.wikipedia.org/w/index.php?oldid=1378587368",
+      "nov_high_f": "51.6"
     }
   ]
 }

@@ -21,7 +21,7 @@ browserd's own records of the run are under `.run/calls/personal/2xy9uk-*/`.
 
 ## What was run
 
-- **Task:** `../long-tasks/trip/prompt.md`, asked as a person would.
+- **Task:** `../long-tasks/trip/prompt.md` as of 48bee1f (later versions ask for more), asked as a person would.
   - Research flights (3 cheapest non-ad nonstops from LAX per city on Google Flights), the cheapest 4-star 4.0+ hotel
     (Google Hotels), and the November high, for Seattle, Denver and Chicago.
   - Then build a 6-slide Google Slides deck by hand in the editor, with no Apps Script, and finish without asking.
@@ -30,8 +30,8 @@ browserd's own records of the run are under `.run/calls/personal/2xy9uk-*/`.
 - **Arms:** browserd; Playwright MCP 0.0.82 (`--cdp-endpoint`); chrome-devtools-mcp (`--browserUrl`); agent-browser
   (`agent-browser mcp`).
 - **Browser:** all four drive browserd's `personal` Chrome, one run at a time, each from one fresh tab (`clean_start`).
-- **Grading:** claude-opus-5-5 judges the deck through browserd against `../long-tasks/trip/rubric.md`: 13 correct
-  items, 5 polish items, and looks scored 1–10.
+- **Grading:** claude-opus-5-5 judges the deck through browserd against `../long-tasks/trip/rubric.md` as of 48bee1f:
+  13 correct items, 5 polish items, and looks scored 1–10.
 
 ## Results
 
@@ -50,7 +50,8 @@ browserd's own records of the run are under `.run/calls/personal/2xy9uk-*/`.
 - **Prices:** every run's `total_cost_usd` fits exactly at $0.20/M cache read, $4/M one-hour cache write and $10/M
   output.
 - **Weather:** most runs wrote Denver's November high as 57°F, the number on Google's weather card. That fails the
-  rubric's ±3°F of 52.9°F. Whether to loosen this is still open.
+  rubric's ±3°F of 52.9°F. Later versions name Wikipedia for the weather in the prompt, and the rubric takes ±2°F of
+  its mean daily maximum.
 
 ## Where the gap is
 
