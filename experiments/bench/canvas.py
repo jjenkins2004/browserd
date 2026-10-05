@@ -103,51 +103,28 @@ def prepare(task, mcp_url, profile):
     if "clear" not in task:
         return ""
     session = browserd_call.start(mcp_url, profile, "bench prepare")
-    text, failed = browserd_call.call(mcp_url, "tab_open", session=session, url=task["url"],
-                                      steps=[{"tool": "evaluate_script", "function": task["clear"]}])
+    text, failed = browserd_call.call(mcp_url, "tab_open", {
+        "session": session, "url": task["url"], "steps": [{"tool": "evaluate_script", "function": task["clear"]}]})
     tab = text.split()[0] if text else None
     if tab:
-        browserd_call.call(mcp_url, "tab_close", session=session, tabs=[tab])
+        browserd_call.call(mcp_url, "tab_close", {"session": session, "tabs": [tab]})
     if failed:
         raise RuntimeError("could not clear %s: %s" % (task["url"], text[:300]))
     return "session %s, on the " % session
 
 
-def presses(transcript):
-    """What a run's click_down steps did: each one's on, as sent, and each reply about a press."""
-    sent, said = [], []
-    for line in transcript.splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        content = (event.get("message") or {}).get("content")
-        for block in content if isinstance(content, list) else []:
-            if block.get("type") == "tool_use" and block.get("name", "").endswith(("__queue", "__tab_open")):
-                steps = (block.get("input") or {}).get("steps") or []
-                sent += [step.get("on") for step in steps if isinstance(step, dict) and step.get("tool") == "click_down"]
-            elif block.get("type") == "tool_result":
-                inner = block.get("content")
-                text = inner if isinstance(inner, str) else "\n".join(
-                    part.get("text", "") for part in inner or [] if isinstance(part, dict))
-                said += re.findall(r"^(?:pressed the \w+ button at .*|Not pressed: .*|click_down needs on.*)$", text, re.M)
-    return {"sent": len(sent), "named": sum(1 for on in sent if on), "empty": sum(1 for on in sent if on == ""),
-            "pressed": sum(1 for line in said if line.startswith("pressed")),
-            "refused": [line for line in said if not line.startswith("pressed")]}
-
-
 def collect(task, token, transcript, mcp_url):
     """Read the task's page state off the run's own tab, and its presses off its transcript, into STATE."""
-    record = {"presses": presses(transcript), "state": None}
+    record = {"presses": browserd_call.presses(transcript), "state": None}
     started = browserd_call.SESSION.findall(transcript)
     if started:
         session = started[0]
-        listed, _ = browserd_call.call(mcp_url, "tab_list", session=session)
+        listed, _ = browserd_call.call(mcp_url, "tab_list", {"session": session})
         tabs = [line.split()[0] for line in listed.splitlines()
                 if line.strip() and _host(line.split()[-1]) == _host(_url(task, token))]
         if tabs:
-            text, failed = browserd_call.call(mcp_url, "queue", session=session, tab=tabs[-1],
-                                              steps=[{"tool": "evaluate_script", "function": task["state"]}])
+            text, failed = browserd_call.call(mcp_url, "queue", {
+                "session": session, "tab": tabs[-1], "steps": [{"tool": "evaluate_script", "function": task["state"]}]})
             record["state"] = None if failed else browserd_call.returned(text)
     STATE.mkdir(parents=True, exist_ok=True)
     (STATE / ("%s.json" % token)).write_text(json.dumps(record, indent=2), encoding="utf-8")

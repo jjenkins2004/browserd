@@ -34,11 +34,13 @@ import procs
 import canvas
 import clicks
 import miniwob
+import popups
 import tasks
 import webgames
 
 SUITES = {"mcpuniverse": tasks, "webgames": webgames, "formfactory": formfactory, "botwall": botwall, "miniwob": miniwob,
-          "clicks": clicks, "haystack": haystack, "canvas": canvas}
+          "clicks": clicks, "haystack": haystack, "canvas": canvas,
+          "popups": popups}
 
 ARMS = {
     "browserd": {
@@ -262,7 +264,7 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
     if hasattr(suite, "prepare") and "profile" in arm:
         try:
             close_sessions(suite.prepare(task, arm["mcp"]["browserd"]["url"], arm["profile"]), arm["page"])
-        except (OSError, ValueError, RuntimeError, AttributeError) as exc:
+        except Exception as exc:  # a suite's own code: whatever it raises, this run is not run and the batch goes on
             return "%s %s r%d: not run: could not prepare its page (%s)" % (arm_name, task_name, rep, exc)
     with path.open("w", encoding="utf-8") as stdout, path.with_suffix(".err").open("w", encoding="utf-8") as stderr:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr,
@@ -283,7 +285,7 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
     if hasattr(suite, "collect") and "page" in arm:
         try:
             suite.collect(task, run_token, transcript, arm["mcp"]["browserd"]["url"])
-        except (OSError, ValueError, RuntimeError, KeyError) as exc:
+        except Exception as exc:  # a suite's own code, as for prepare
             notes.append("could not collect what it left on its tabs (%s)" % exc)
     if "close" in arm:
         try:
@@ -324,6 +326,7 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # a run's line may name a page in any language
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp", required=True)
     parser.add_argument("--suite", default="mcpuniverse", choices=SUITES)
