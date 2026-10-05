@@ -59,12 +59,14 @@ FLIGHT = re.compile(r"from ([\d,]+) us dollars round trip total\. nonstop flight
 class Report:
     def __init__(self):
         self.passed = self.total = 0
+        self.lines = []  # each check's line as printed, which compare.py keeps in result.json
 
     def check(self, name, good, expected=None, found=None):
         self.total += 1
         self.passed += bool(good)
         detail = "" if good or expected is None else ": expected %r, found %r" % (expected, found)
-        print("%s  %s%s" % ("ok " if good else "BAD", name, detail))
+        self.lines.append("%s  %s%s" % ("ok " if good else "BAD", name, detail))
+        print(self.lines[-1])
         return good
 
 

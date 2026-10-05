@@ -7,7 +7,8 @@ logged-in Chrome (the `personal` profile), ending in Google files, with the tab 
 Each task names its entities, its sources (pinned where they can be), its fields and the files and slides it ends in, so
 a longer run means the harness struggled, not that the model chose to dig deeper. capex is written as a spec with an
 answer key and graded in code; trip is written as a person would ask it, and an agent grades the deck against a rubric.
-`compare.py` runs trip on browserd and on other browser MCP servers, each given the same logged-in Chrome, to compare them.
+`compare.py` runs trip or capex on browserd and on other browser MCP servers, each given the same logged-in Chrome, to
+compare them.
 
 ## Directory Layout
 
@@ -25,16 +26,18 @@ answer key and graded in code; trip is written as a person would ask it, and an 
       record.py     the timelapse of the tab an agent works in, captured over DevTools, into frames/ and video.mp4
       grade.py      capex's checks against its key; `flights`, Google Flights' nonstops now, for trip's judge
       judge.py      grades a trip deck: claude-opus-5-5 on browserd with rubric.md and the run's evidence
-      compare.py    trip on each arm (browserd, playwright, devtools, agentbrowser) k times, one at a time in
-                    browserd's Chrome, each recorded and judged; gallery
+      compare.py    trip or capex on each arm (browserd, playwright, devtools, agentbrowser) k times, one at a time
+                    in browserd's Chrome, each recorded and graded; gallery
 
 ## Core Abstractions & Shared Pieces
 
 - **A task** is a folder with `prompt.md`, which holds everything the agent is told. capex's holds rules (browserd's
   profile and the session label, only the named sources, "n/a" over another source, exactly the slides listed,
   `tab_needs_input` on a login or captcha, nothing submitted or sent, stop at the end state), then the spec. trip's says
-  the outcome, not the steps or the links; its one browserd sentence ("Use browserd with my ...") is what `compare.py`
-  swaps for the other arms' (in browserd's own it names `judge.PROFILE`) and `judge.py` leaves out.
+  the outcome, not the steps or the links; its one browserd sentence ("Use browserd with my ...") is what `judge.py`
+  leaves out. `compare.py`'s `SWAPS` holds each task's browserd-only phrases (browserd's name, profile, session and
+  tools) and the neutral words the other arms get for them; browserd's own keeps them, naming `judge.PROFILE` for
+  personal. Each phrase must be in `prompt.md` exactly once, or `compare.py run` stops: change the two together.
 - **A key** is `key.json`, written by the task's `key.py`, never by hand: the values a correct run ends with.
 - **A run** is `run.sh <task> <name>`: Claude Code, interactive so its turns can be filmed, started in the run's own
   folder, `<data>/<name>/` (`../browserd-long-tasks` beside the repo, or `$BROWSERD_LONG_TASKS_DATA`), with
@@ -59,11 +62,16 @@ answer key and graded in code; trip is written as a person would ask it, and an 
   Cheapest tab; `seen.txt`, every tool result of the run. Its last message is a JSON verdict, saved as `verdict.json`;
   `score` counts the items each group passed, a missing item failing. It then closes the browserd session it opened
   (`close_sessions`, the browserd page's Close session).
-- **A comparison** is `compare.py run <exp>`: per run, `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p` (the
-  judge's Claude Code) with run.sh's flags, the arm's server alone, `TIMEOUT` (1 hour), and `record.py` beside it
-  (browserd's by `--transcript`, the others' by `--cdp`); then the deck's PDF and one PNG per slide (`pdftoppm`),
-  then the judge, in `<data>/<exp>/judging/<random id>/`, so neither its folder nor its request names the arm;
-  `result.json` has the run's numbers and scores. `compare.py report <exp>` sums them and writes `gallery.html` (each
+- **A comparison** is `compare.py run <exp> [--task trip|capex]` (trip by default): per run, `<data>/<exp>/<arm>-r<n>/`,
+  a headless `claude -p` (the judge's Claude Code) with run.sh's flags, the arm's server alone, `TIMEOUT` (1 hour), and
+  `record.py` beside it (browserd's by `--transcript`, the others' by `--cdp`); then the deck's PDF and one PNG per
+  slide (`pdftoppm`), then the grade. trip's is the judge, in `<data>/<exp>/judging/<random id>/`, so neither its folder
+  nor its request names the arm; capex's is `grade.grade_capex` on `judge.PROFILE`, given the deck's and the Sheet's
+  URLs from the final message (where trip's deck URL comes from too), and no judge. `result.json` has the task, the
+  deck's and Sheet's URLs (`deck`, `sheet`), the run's numbers and scores: trip's `correct`, `polish` and `looks`;
+  capex's `score` (checks passed, checks made) and `checks` (each check's ok/BAD line); `passed` when every correct
+  item or check passed. A `result.json` of `{"skipped": why}`, written by hand, keeps a run from starting.
+  `compare.py report <exp>` sums the runs in a table per task, leaving out skipped ones, and writes `gallery.html` (each
   run's slides in a row) and `gallery-blind.html` (rows shuffled and lettered, the key in `gallery-key.json`). browserd
   runs on the main server's profile `judge.PROFILE` names, and every other arm attaches over DevTools to that same
   Chrome (its profile's port), so all arms drive one browser signed in to the same account. Each run begins with
@@ -110,6 +118,8 @@ answer key and graded in code; trip is written as a person would ask it, and an 
   runs never go two at once. A tab of an open browserd session (the user at work) makes a run wait, never closed.
 - agent-browser's `close`, Playwright's `browser_close` and chrome-devtools-mcp leave the Chrome running: each closes
   its own tab at most (checked on a throwaway Chrome).
-- Every run shares the account's Drive and Google Flights' recent searches. A run that reports a deck an earlier run
-  made is not graded ("an earlier run's deck").
+- Every run shares the account's Drive and Google Flights' recent searches. A run that reports a deck (or, in capex, a
+  Sheet) an earlier run made is not graded ("an earlier run's deck", or "... Sheet").
+- An experiment holds one task: a run's folder is `<arm>-r<n>` whatever the task, and one with a `result.json` is done,
+  so `--task capex` on an experiment with trip's runs skips those arms' reps. Give each task its own `<exp>`.
 - Run `compare.py run` detached (`nohup`): a batch started under a Claude Code session dies with its window.
