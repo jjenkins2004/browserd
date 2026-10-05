@@ -31,11 +31,16 @@ HOLDERS = {"menu", "menubar", "listbox", "toolbar", "tablist", "tree", "treegrid
 What = collections.namedtuple("What", "role name words control disabled frame")
 NOTHING = What(None, "", [], False, False, None)
 SHORT = 80  # characters of an element's text the DOM's words keep; a longer text is a holder's, like a menu's
+PREFIX = 4  # letters from which an on's word may begin a longer word of the name: "Close" passes on "Closer"
 # The DOM's own words for an element the tree gives none for (a tile drawn as plain divs, a dialog under aria-hidden):
 # its label, title, alt, placeholder or tooltip, and its text if short, then the same of each element around it, up to
 # the first one a click acts on that has words (GeoGebra's tile is an img, focusable but wordless, in a button that holds
 # its name), or one whose text is too long to be a single control's.
 DOM_WORDS = r"""function () {
+  // An SVG element has no innerText, and Slides draws each word as a text node of its own, placed by x with no space
+  // between: joined with spaces, so "Probe Title" is two words, not "ProbeTitle".
+  const spaced = (n) => { const parts = [], walk = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+    while (walk.nextNode()) parts.push(walk.currentNode.data); return parts.join(' ').replace(/\s+/g, ' '); };
   const out = [];
   let e = this.nodeType === 1 ? this : this.parentElement;
   for (let depth = 0; e && e !== document.body && depth < 4; depth++) {
@@ -43,7 +48,7 @@ DOM_WORDS = r"""function () {
       const value = (e.getAttribute && e.getAttribute(key) || '').trim();
       if (value) out.push(value);
     }
-    const text = ((e.innerText !== undefined ? e.innerText : e.textContent) || '').trim();
+    const text = (e.innerText !== undefined ? e.innerText : spaced(e)).trim();
     if (text.length > %d) break;
     if (text) out.push(text);
     if (out.length && e.matches && e.matches('a, button, input, select, textarea, label, summary, [role], [onclick], [tabindex]')) break;
@@ -107,13 +112,15 @@ def read(browser, session, x, y):
 
 
 def carries(what, on):
-    """Whether what a press lands on carries the words on names: all of them, whole, in order and next to each other,
-    in one of its names or its text, case aside (`Bold` in "Bold (Ctrl+B)", but not `1` in "Clicks so far: 12"). An on
-    with no words, a symbol like +, need only be in one."""
+    """Whether what a press lands on carries the words on names: all of them, in order and next to each other, in one
+    of its names or its text, case aside; each whole, but for one of PREFIX letters or more, which may begin a longer
+    word (`Bold` in "Bold (Ctrl+B)", `Close` in "Closer", but not `1` in "Clicks so far: 12"). An on with no words, a
+    symbol like +, need only be in one."""
     need = _words(on)
     for said in what.words:
         have = _words(said)
-        if need and any(have[at:at + len(need)] == need for at in range(len(have) - len(need) + 1)):
+        if need and any(all(_word(have[at + i], want) for i, want in enumerate(need))
+                        for at in range(len(have) - len(need) + 1)):
             return True
         if not need and _plain(on) in _plain(said):
             return True
@@ -131,6 +138,11 @@ def described(what):
         role = what.role if what.role not in ("generic", "none") else "a part of the page"
         return "%s, which has no words%s" % (role, " (disabled)" if what.disabled else "")
     return '%s "%s"%s' % (what.role if what.control else "text", name, " (disabled)" if what.disabled else "")
+
+
+def _word(have, want):
+    """Whether a name's word is on's word: the same, or one of PREFIX letters or more that it begins with."""
+    return have == want or (len(want) >= PREFIX and have.startswith(want))
 
 
 def _plain(text):

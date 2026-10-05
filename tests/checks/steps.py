@@ -1335,6 +1335,9 @@ def hit_offline():
           not carries("Clicks so far: 12", "1") and not carries("Clicks so far: 12", "far so")
           and not carries("Insert link", "Ins"))
     check("an on of no words, a symbol, is carried by a name holding it", carries("+ New", "+") and not carries("Close", "x"))
+    check("an on's word of 4 letters or more may begin a longer word of the name, a shorter one may not",
+          carries("Closer", "Close") and carries("Accept all cookies", "Accept all") and not carries("Insert", "Ins")
+          and not carries("12 items", "1"))
 
 
 def on_offline():

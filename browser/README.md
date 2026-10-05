@@ -536,8 +536,9 @@ same tabs under the same ids. A crash leaves the same.
   or less on Windows). A `click_down` names what it presses in `on`, a few words as the screenshot shows them, and a
   queue with one of count 1 that has none is refused before any step runs; `hit.carries` checks them against what
   the read found, and a press there that does not carry them is not sent: the step fails, saying what is there, and
-  the queue stops. Words match whole and in order, case aside, in a name or the text found (`on: "Bold"` passes on
-  `button "Bold (Ctrl+B)"`, `on: "1"` fails on `text "Clicks so far: 12"`), so a popup, a layer or a reload under the
+  the queue stops. Words match in order, case aside, in a name or the text found, each whole but for one of
+  `hit.PREFIX` (4) letters or more, which may begin a longer word (`on: "Bold"` passes on `button "Bold (Ctrl+B)"`,
+  `on: "Close"` on `button "Closer"`, but `on: "1"` fails on `text "Clicks so far: 12"`), so a popup, a layer or a reload under the
   point stops the press when it does not carry them, and so does a layer already there that the screenshot did not
   show (one at opacity 0). `on: ""` presses what has no words (a canvas, a map, a drag's handle) and checks nothing.
   A frame from another site, or a point browserd could not read, fails any `on` but `""`. Only the first press of a
