@@ -326,7 +326,8 @@ Which to use. fill for a text box, for a native select (an option's exact text, 
 uid lists), and for a date or time field, on its own line, in its own form: a Date line as 1957-08-01, an InputTime
 line as 14:30, a DateTime line as 1957-08-01T14:30 (a month's as 1957-08, a week's as 1957-W31). press_key acts where
 the focus is, so press_key Enter after a one-line text box's fill submits that box. type_text presses Tab for each tab
-in its text and Enter for each line break, as when filling a sheet's cells. type instead of fill for text of 100
+in its text, moving to the next field or cell, and may add to text already there: use it only on empty ones. paste for
+a sheet's rows, tab-separated, one per line: click the cell they start at first. type instead of fill for text of 100
 characters or more. pick for a dropdown you type into (react-select, an autocomplete). paste for text an editor
 changes as it is typed (Slides curls quotes, a code editor closes brackets): click into the editor and select what it
 replaces (__KEY__+A) first, or give a text box's uid; never set an editor's text with evaluate_script. fill, click and the
@@ -338,11 +339,11 @@ leaving (unsaved changes); give it handleBeforeUnload "dismiss" to stay.
 
 Names: click, fill, hover and upload_file take name instead of uid, a few words of the element's name as a view or the
 screenshot shows it (name: "Table", name: "Width"). The step acts on a control whose name carries them, or else a
-text box whose value is or begins with them, preferring one in a menu or dialog open over the page, waiting up to 5s
-for one whose name is or begins with them, so it can follow the step that opens it in one queue: a menu, then its
-item; a dialog, then its fields. A name that is those words fits best, then one that begins with them; when none fits,
-or several fit equally well (a combobox gives way to the text box inside it), the step fails, listing what it found
-with their uids. Its line gives the uid it acted on.
+text box whose value is or begins with them, preferring one in a menu or dialog open over the page, waiting up to 5s,
+or until the page has been still 1s, for one whose name is or begins with them, so it can follow the step that opens it
+in one queue: a menu, then its item; a dialog, then its fields. A name that is those words fits best, then one that
+begins with them; when none fits, or several fit equally well (a combobox gives way to the text box inside it), the
+step fails, listing what it found with their uids. Its line gives the uid it acted on.
 
 Pixels: a take_screenshot of the viewport comes back as an image, one pixel per CSS pixel unless its line gives a
 factor to multiply by. move_at moves the pointer to a point in it, and click_down and click_up press and let go of a

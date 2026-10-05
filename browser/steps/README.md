@@ -68,6 +68,7 @@ bind this folder too: read it first.
   nothing failed WebGames' combination lock hunting for the file): `run` waits up to `DOWNLOAD_WAIT` after each step
   while a download the tab's `downloads.Watcher` heard is still in progress (`../chrome/`).
 - **Text agents read repeats some of these numbers and lines.** `../tools.py`'s `QUEUE_HELP` and `STEPS_HELP` say
-  10,000 characters (`VIEW_MOST`), 5s (`dialogs.LATE`, `NAME_WAIT`) and 100 characters (where chrome-devtools-mcp's `fill` sets a
-  value by script), and describe the report's lines; `../../tests/checks/steps.py` matches those lines word for word,
-  and `queue_steps` acts on chrome-devtools-mcp's "No page found". Change them together.
+  10,000 characters (`VIEW_MOST`), 5s (`dialogs.LATE`, `NAME_WAIT`), 1s (`NAME_STILL`) and 100 characters (where
+  chrome-devtools-mcp's `fill` sets a value by script), and describe the report's lines; `../../tests/checks/steps.py`
+  matches those lines word for word, and `queue_steps` acts on chrome-devtools-mcp's "No page found". Change them
+  together.

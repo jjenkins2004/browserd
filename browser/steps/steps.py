@@ -852,13 +852,13 @@ def _named(devtools, page_id, name, wait, enabled):
     the step before most likely opened it; the page's otherwise. Of controls that fit equally well, a combobox gives way
     to a textbox or searchbox inside it, as Slides' combobox "Font size" does to its textbox "Font size".
 
-    Snapshots are taken until the best fit, the controls ranked first, is usable and its name is or begins with them, or
-    wait seconds pass, so a control already on the page that carries them further in does not win over the one the step
-    before is still opening; or until the page has stayed unchanged NAME_STILL seconds while the best fit is not usable,
-    since a page that has stopped changing is unlikely to show or enable one. Usable means a control whose name fits,
-    not its value, and an enabled one when enabled says the step needs that, as every step but a hover does:
-    chrome-devtools-mcp's click and fill wait 5s for a control to be enabled, then fail, while a hover may be for a
-    disabled control's tooltip.
+    Snapshots are taken until the best fit, the controls ranked first, is usable and its name is or begins with them,
+    so a control already on the page that carries them further in does not win over the one the step before is still
+    opening; or until the page has stayed unchanged NAME_STILL seconds, since a page that has stopped changing is
+    unlikely to show a better fit or enable the best; or until wait seconds pass. The last snapshot decides. Usable
+    means a control whose name fits, not its value, and an enabled one when enabled says the step needs that, as every
+    step but a hover does: chrome-devtools-mcp's click and fill wait 5s for a control to be enabled, then fail, while a
+    hover may be for a disabled control's tooltip.
 
     (why not, None) when none fits, when several still fit equally well, so a step never acts on a guess, or when the
     one that fits is not usable; the first two name the popups open over the page (_popups_note), unless the controls
@@ -883,7 +883,7 @@ def _named(devtools, page_id, name, wait, enabled):
                      for rank, node, _, _ in controls)
         if snapshot != last:
             last, changed = snapshot, took
-        if (usable and least is not None and least < 2) or (not usable and took - changed >= NAME_STILL):
+        if (usable and least is not None and least < 2) or took - changed >= NAME_STILL:
             break
     if not controls:
         others = "; lines that carry them but are not controls: %s" % ", ".join(

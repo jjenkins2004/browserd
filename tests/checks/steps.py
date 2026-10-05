@@ -1590,6 +1590,17 @@ def names_offline():
                                                                      MENU])
             check("a control that only carries a name's words further in does not win while the one that begins with "
                   "them is still opening", ("click", {"uid": "2_3", "pageId": 7}) in fake.calls, repr(fake.calls))
+            layout = 'uid=1_0 RootWebArea "Deck"\n  uid=1_1 button "Apply layout"'
+            began = clock.now
+            fake, report = run([{"tool": "click", "name": "Layout"}], [layout])
+            check("but on a page that has stayed unchanged NAME_STILL, well before NAME_WAIT, it is clicked",
+                  ("click", {"uid": "1_1", "pageId": 7}) in fake.calls
+                  and steps.NAME_STILL <= clock.now - began < steps.NAME_STILL + 1, report)
+            fake, report = run([{"tool": "click", "name": "Layout"}],
+                               [layout, layout, layout + '\n  uid=2_0 menu\n    uid=2_1 menuitem "Layout"'])
+            check("unless a menu holding a better fit opens after a pause shorter than NAME_STILL",
+                  [call for call in fake.calls if call[0] == "click"] == [("click", {"uid": "2_1", "pageId": 7})],
+                  repr(fake.calls))
             began = clock.now
             fake, report = run([{"tool": "click", "name": "Tables"}], [MENU])
             check("a name only a line that is no control carries fails once the page has stayed unchanged NAME_STILL, "
