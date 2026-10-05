@@ -8,7 +8,6 @@ square counts as hit when a click lands inside it. The page must be up first:
 import json
 import urllib.request
 import clickserver
-import paths
 
 BASE = "http://127.0.0.1:%d" % clickserver.PORT
 SEEDS = (1, 2, 3)
@@ -22,6 +21,7 @@ TASK_PROMPT = ("Go to {url}. The canvas there shows 12 small blue squares, numbe
                "Click each square exactly once, at its center, in number order from 1 to 12. They are drawn on a "
                "canvas, so work from screenshots. {how} When you have clicked all 12, reply DONE.")
 SYSTEM = "You are an agent for Browser automation."
+RECORDS = clickserver.HITS
 MAX_TURNS = 40
 
 
@@ -36,7 +36,7 @@ def prompt(task, token=None):
 
 def hits(token):
     """(targets, clicks) the page saved for a run: [{n, size, x, y}] and [(x, y)]."""
-    path = paths.RESULTS / "click-hits" / ("%s.jsonl" % token)
+    path = RECORDS / ("%s.jsonl" % token)
     targets, clicks = [], []
     for line in path.read_text().splitlines() if path.exists() else []:
         event = json.loads(line)

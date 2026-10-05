@@ -25,7 +25,7 @@ import transcripts
 SYSTEM = ("You are an agent for browser automation. Google Slides draws each slide on a canvas, so work from viewport "
           "screenshots and click with move_at, click_down and click_up.")
 MAX_TURNS = 40
-STATE = paths.RESULTS / "slides-state"  # <token>.json: what collect read for a run; <token>.pptx, the export itself
+STATE = RECORDS = paths.RESULTS / "slides-state"  # <token>.json: what collect read; <token>.pptx, the export itself
 DECKS = paths.RESULTS / "slides-decks.jsonl"  # one line per deck prepare made: token, id, url, title, made
 CREATE = "https://docs.google.com/presentation/create?title="  # ?title= names the new deck
 DECK_ID = re.compile(r"/presentation/(?:u/\d+/)?d/([\w-]+)")

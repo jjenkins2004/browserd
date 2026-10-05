@@ -89,7 +89,8 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
 ## Core Abstractions & Shared Pieces
 
 - **A suite** is a module giving `SYSTEM`, `MAX_TURNS`, `load()` ({task name: task}), `prompt(task, token)` and
-  `score(task, answer, token)`, and optionally `check()`, which refuses to start while its site is down. On an arm with
+  `score(task, answer, token)`, and optionally `check()`, which refuses to start while its site is down, and
+  `RECORDS`, the folder where each run leaves `<token>.*` files its score reads. On an arm with
   a `profile`, a suite may also give `prepare(task, mcp_url, session, token)`, which sets its page up before the run in
   a browserd session of the runner's own, and `collect(task, token, transcript, mcp_url)`, which reads what the run
   left on its tabs before the runner closes its sessions, both through `browserd_call.py`. `token` (`run.token`) names
@@ -165,10 +166,9 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   count as done and runs again. It stops too at a run whose sessions could not be closed, which does count as done. It
   also stops after `run.DEAD_AFTER` (2) runs in a row of one arm that reached no browser (its server did not connect,
   or every call needing a Chrome failed): those count as done, so move their `.jsonl` and `.err` to
-  `results/_invalid/<exp>-<why>/<arm>/` to rerun them. A rerun keeps the run's token (`run.token`), so for
-  formfactory, miniwob and clicks also move its record, `results/{formfactory-submissions,miniwob-rewards,click-hits}/
-  <token>.jsonl` (and canvas', popups' and slides' `results/<suite>-state/<token>.json`), or the set-aside run's record
-  is scored with the rerun's; traps' prepare moves an earlier attempt's log to `results/_invalid/trap-logs/` itself. A wifi outage looks the same: set aside the runs of every arm in the outage's
+  `results/_invalid/<exp>-<why>/<arm>/` to rerun them. A rerun keeps the run's token (`run.token`), so before it
+  starts the runner moves what an earlier attempt left in the suite's `RECORDS` to the folder of the same name in
+  `results/_invalid/`. A wifi outage looks the same: set aside the runs of every arm in the outage's
   window, not just the flagged ones, and resume. A run the plan's session limit cuts off part way counts as done, and only the
   next run stops the batch: set aside each run whose transcript says "session limit", as well as the flagged ones.
 - **Cleanup is the runner's.** After each run it stops the run's process tree (`procs.stop_tree`), closes the

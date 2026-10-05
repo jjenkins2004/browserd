@@ -63,12 +63,10 @@ otherwise. `python` is Python 3: `python3` where `python` is not on PATH.
 - `stopped (try 1)` in `chain.log` resumes by itself 2 minutes later: leave it. A halt (`chain <name> halts`): read the
   suite's log for the line with "the batch stops", fix the cause, and run the same chain again; done runs are skipped.
 - When it stopped on runs that reached no browser ("no browser call succeeded"), set those aside first, as
-  `experiments/bench/README.md`, "The stops", says (with their formfactory, miniwob, clicks or traps records): they
-  count as done.
+  `experiments/bench/README.md`, "The stops", says: they count as done. Their records the runner sets aside itself.
 - An outage (wifi, a site down): set aside the runs of every arm in its window, not only the flagged ones, then resume.
 - The plan's session limit ("You've hit your session limit"): the run it cut off part way counts as done. Set aside
-  every run whose transcript says "session limit", with its record, then resume after the reset or under another
-  account.
+  every run whose transcript says "session limit", then resume after the reset or under another account.
 - The machine short on memory: stop the batch (stop the chain, its `run.py`, and each `claude -p` run's process tree
   with `procs.stop_tree`), close the cut-off runs' browserd sessions with
   `run.close_sessions(browserd_call.SESSION.findall(<transcript>), <page>)` and their agent-browser sessions with

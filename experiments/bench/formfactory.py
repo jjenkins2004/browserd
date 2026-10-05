@@ -15,7 +15,7 @@ from html.parser import HTMLParser
 import paths
 
 FF = paths.DATA / "formfactory"
-SUBMISSIONS = paths.RESULTS / "formfactory-submissions"
+SUBMISSIONS = RECORDS = paths.RESULTS / "formfactory-submissions"
 BASE = "http://127.0.0.1:5055"
 # the file a form run uploads, copied here by setup.py: Playwright MCP and chrome-devtools-mcp upload only files
 # under the data folder, where runs start

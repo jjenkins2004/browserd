@@ -21,7 +21,7 @@ import transcripts
 SYSTEM = ("You are an agent for browser automation. Work from viewport screenshots and click with move_at, click_down "
           "and click_up.")
 MAX_TURNS = 30
-STATE = paths.RESULTS / "popups-state"  # <token>.json: what collect read for a run
+STATE = RECORDS = paths.RESULTS / "popups-state"  # <token>.json: what collect read for a run
 # Clears what a site keeps that a script can reach: its storage and every cookie not HttpOnly, on each domain above it.
 CLEAR = ("() => { localStorage.clear(); sessionStorage.clear(); const parts = location.hostname.split('.'); "
          "const domains = parts.slice(0, -1).map((_, i) => parts.slice(i).join('.')); "

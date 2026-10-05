@@ -19,7 +19,7 @@ import transcripts
 SYSTEM = ("You are an agent for browser automation. These apps draw on a canvas, so work from viewport screenshots and "
           "click with move_at, click_down and click_up.")
 MAX_TURNS = 40
-STATE = paths.RESULTS / "canvas-state"  # <token>.json: what collect read for a run
+STATE = RECORDS = paths.RESULTS / "canvas-state"  # <token>.json: what collect read for a run
 
 
 def _latex(text):
