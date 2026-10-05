@@ -58,9 +58,8 @@ def describe():
         "  move_at(x: number, y: number) - Move the pointer to a point's CSS coordinates in a viewport screenshot, "
         "over what is there (a hover); with a button down, a drag",
         "  click_down(on: string, button?: string, count?: integer) - Press a button (left, right or middle; default "
-        "left) where the pointer is, and hold it; on is a few words of what it presses, as the screenshot shows them, "
-        "and it is not pressed when what is there does not carry them (\"\" for what has none: a canvas, a map); count "
-        "is which click of a double or triple click this is (default 1), and only the first takes on",
+        "left) where the pointer is, and hold it; on names what it presses (Pixels, above); count is which click of a "
+        "double or triple click this is (default 1), and only the first takes on",
         "  click_up(button?: string, count?: integer) - Let go of a button click_down holds, where the pointer is; "
         "give it the same count as that click_down (default 1)",
     ])
@@ -98,8 +97,7 @@ def run(step, target, connect):
     else:
         event.update(button=button, clickCount=step.get("count", 1))
     try:
-        dialog, landed = _send(event, target, connect, tool == "click_down",
-                               step.get("on") if step.get("count", 1) == 1 else None)
+        dialog, landed = _send(event, target, connect, tool == "click_down", step.get("on"))
     except Missed as exc:
         return _said(str(exc)), True
     except Busy as exc:
@@ -122,10 +120,9 @@ def run(step, target, connect):
     return _said(text), False
 
 
-def _send(event, target, connect, press=False, on=None):
+def _send(event, target, connect, press, on):
     """Send one mouse event to the tab; (the dialog ({type, message}) it opened when that kept the page from taking it
-    in time, or None; for a press, what it lands on, read just before it goes out, as its report says it). A press
-    whose on is not "" or None is not sent, raising Missed, when what is there does not carry its words."""
+    in time, or None; for a press, what it lands on, as its report says it, from _landed)."""
     browser = connect()
     try:
         session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
@@ -134,21 +131,7 @@ def _send(event, target, connect, press=False, on=None):
         except cdp.Late:  # a dialog open already holds it, and would drop the input unseen
             raise cdp.CdpError("the page did not answer in %gs, as when a dialog is open on it: answer it with a "
                                "handle_dialog step first" % DIALOG_WAIT)
-        landed = None
-        if press:
-            try:
-                what = hit.read(browser, session, event["x"], event["y"])
-            except cdp.CdpError as exc:
-                if on:
-                    raise Missed('Not pressed: browserd could not read what is at %g,%g (%s), so not whether it is "%s"; '
-                                 'give on as "" to press there anyway' % (event["x"], event["y"], exc, on))
-                landed = "(browserd could not read what is there: %s)" % exc
-            else:
-                if on and not hit.carries(what, on):
-                    raise Missed('Not pressed: at %g,%g is %s, not "%s". The page may have changed since your '
-                                 'screenshot: take one, or give on as "" to press there anyway'
-                                 % (event["x"], event["y"], hit.described(what), on))
-                landed = "on " + hit.described(what)
+        landed = _landed(browser, session, event["x"], event["y"], on) if press else None
         try:
             browser.call("Input.dispatchMouseEvent", session, DIALOG_WAIT, **event)
         except cdp.Late:
@@ -159,6 +142,22 @@ def _send(event, target, connect, press=False, on=None):
         return None, landed
     finally:
         browser.close()
+
+
+def _landed(browser, session, x, y, on):
+    """What a press at (x, y) lands on, read just before it goes out, for its report. Raises Missed, so nothing is sent,
+    when on is not "" or None and what is there does not carry its words, or could not be read."""
+    try:
+        what = hit.read(browser, session, x, y)
+    except cdp.CdpError as exc:
+        if on:
+            raise Missed('Not pressed: browserd could not read what is at %g,%g (%s), so not whether it is "%s"; give '
+                         'on as "" to press there anyway' % (x, y, exc, on))
+        return "(browserd could not read what is there: %s)" % exc
+    if on and not hit.carries(what, on):
+        raise Missed('Not pressed: at %g,%g is %s, not "%s". The page may have changed since your screenshot: take '
+                     'one, or give on as "" to press there anyway' % (x, y, hit.described(what), on))
+    return "on " + hit.described(what)
 
 
 def _nth(count):

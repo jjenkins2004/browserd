@@ -698,6 +698,26 @@ def pointer_live(served, open_tab):
           not is_error and returned(text) == [[True, 10, 25]], text)
     check("and the press says it landed on a canvas", "at 310,225 on canvas, which has no words" in text, text)
 
+    # Where the tree gives no words, the page's DOM does: a wordless icon in a toolbar and a gap between a menu's items
+    # take none of their neighbours', and a wordless image in a labelled button the tree leaves out takes its label.
+    queue(pad, {"tool": "evaluate_script", "function": """() => { document.body.insertAdjacentHTML('beforeend',
+        "<div style='position:fixed;left:20px;top:300px'><button style='width:60px;height:30px'>Bold</button>" +
+        "<button style='width:40px;height:30px'></button><button style='width:60px;height:30px'>Italic</button>" +
+        "</div><div role=menu style='position:fixed;left:20px;top:350px;width:160px;padding:20px'><div " +
+        "role=menuitem>Table</div><div role=menuitem>Image</div></div><div aria-hidden=true style='position:fixed;" +
+        "left:20px;top:460px'><button aria-label=Segment><img tabindex=-1 style='width:40px;height:30px;" +
+        "display:block'></button></div>"); return true }"""})
+    for x, y, on, said in ((105, 315, "Bold", 'is button, which has no words, not "Bold"'),
+                           (30, 360, "Table", 'is menu, which has no words, not "Table"')):
+        text, is_error = queue(pad, {"tool": "move_at", "x": x, "y": y}, {"tool": "click_down", "on": on},
+                               {"tool": "click_up"})
+        check("a press the tree gives no words is not sent on its neighbours': %s" % said, is_error and said in text,
+              text)
+    text, is_error = queue(pad, {"tool": "move_at", "x": 40, "y": 475}, {"tool": "click_down", "on": "Segment"},
+                           {"tool": "click_up"})
+    check("but a wordless image in a labelled button the tree leaves out is named by that label",
+          not is_error and 'on text "Segment"' in text, text)
+
 
 def remove_strays(*prefixes):
     """Remove this run's files a failing download check left where Chrome's own settings save: the user's Downloads."""

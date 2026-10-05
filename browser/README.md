@@ -59,7 +59,7 @@ parts.
         steps.py     the queue: load, check, run, report; snapshot views
         checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused, read_fills
         pointer.py   the queue's pointer steps: move_at, click_down, click_up
-        hit.py       what a press lands on, read off the accessibility tree just before it goes out
+        hit.py       what a press lands on, off the accessibility tree or the page's DOM, and whether it carries the press's on
         screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image; keeps a queue's tab drawn
         dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       dashboard/     the browserd page
@@ -527,19 +527,15 @@ same tabs under the same ids. A crash leaves the same.
   controls (`hit.HOLDERS`: a menu, a toolbar, a list, a dialog, the page), so a press in a menu between its items
   names the menu, with no words of its items'. With no control, it names the text drawn right in the element hit (a
   paragraph's, a clickable div's, an SVG text's), else its role (a canvas). Where the tree gives no words at all, the
-  read asks the page's own DOM (`hit.DOM_WORDS`, by `DOM.resolveNode` and `Runtime.callFunctionOn`): the element's
-  label, title, alt, placeholder or tooltip, and its text if under `hit.SHORT` (80) characters, then the same of each
-  element around it up to the first one a click acts on. GeoGebra draws its tool tiles as plain divs the tree leaves
-  out, and CNN puts its consent dialog under `aria-hidden`, so both read as nothing named until then (seen on
+  read asks the page's own DOM (`hit.DOM_WORDS`, by `DOM.resolveNode` and `Runtime.callFunctionOn`) for the words
+  its comment lists, from the element hit and those above it. GeoGebra's tool tiles are wordless images in buttons
+  under `aria-hidden`, and CNN puts its consent dialog there too, so both read as nothing named until then (seen on
   2026-10-04 through browserd: `on: "Segment"` refused on GeoGebra's tile). A frame from another site, which Chrome
-  keeps in another process, is named only by where it is from. The read takes about 2 ms (measured: each call 1 ms
-  or less on Windows). A `click_down` names what it presses in `on`, a few words as the screenshot shows them, and a
+  keeps in another process, is named only by where it is from. The tree's three calls take about 2 ms (measured: each
+  1 ms or less on Windows). A `click_down` names what it presses in `on`, a few words as the screenshot shows them, and a
   queue with one of count 1 that has none is refused before any step runs; `hit.carries` checks them against what
   the read found, and a press there that does not carry them is not sent: the step fails, saying what is there, and
-  the queue stops. Words match in order, case aside, in a name or the text found, each whole but for one of
-  `hit.PREFIX` (4) letters or more, which may begin a longer word (`on: "Bold"` passes on `button "Bold (Ctrl+B)"`,
-  `on: "Close"` on `button "Closer"`, but `on: "1"` fails on `text "Clicks so far: 12"`), so a popup, a layer or a reload under the
-  point stops the press when it does not carry them, and so does a layer already there that the screenshot did not
+  the queue stops. Words match as `hit.carries` says, so a popup, a layer or a reload under the point stops the press when it does not carry them, and so does a layer already there that the screenshot did not
   show (one at opacity 0). `on: ""` presses what has no words (a canvas, a map, a drag's handle) and checks nothing.
   A frame from another site, or a point browserd could not read, fails any `on` but `""`. Only the first press of a
   double or triple click takes `on`. Keys are not checked. chrome-devtools-mcp's own `click_at` (behind `--experimental-vision`, which browserd does

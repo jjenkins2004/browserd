@@ -1296,9 +1296,6 @@ def hit_offline():
     check("a press on the page itself names no control or words of the page's",
           landed([ax("RootWebArea", "page", 1), ax("generic", "", 2, 1, backend=7), ax("button", "Go", 3, 2)])
           == "a part of the page, which has no words")
-    check("a disabled control says so",
-          landed([ax("RootWebArea", "page", 1), ax("button", "Send", 2, 1, backend=7, properties=[
-              {"name": "disabled", "value": {"type": "boolean", "value": True}}])]) == 'button "Send" (disabled)')
     long = "word " * 30
     check("a long name is cut", landed([ax("RootWebArea", "page", 1), ax("link", long, 2, 1, backend=7)])
           == 'link "%s…"' % long[:hit.SHOWN - 1].rstrip())
@@ -1328,7 +1325,7 @@ def hit_offline():
           repr(hand.asked))
 
     def carries(said, on):
-        return hit.carries(hit.What("text", said, [said], False, False, None), on)
+        return hit.carries(hit.What("text", said, [said], False, None), on)
 
     check("on is carried by a name holding its words, whole, in order, case aside",
           carries("Bold (Ctrl+B)", "bold") and carries("Clicks so far: 12", "so far") and carries("CAFÉ", "café"))
@@ -1338,7 +1335,7 @@ def hit_offline():
     check("an on of no words, a symbol, is carried by a name holding it", carries("+ New", "+") and not carries("Close", "x"))
     check("an on's word of 4 letters or more may begin a longer word of the name, a shorter one may not",
           carries("Closer", "Close") and carries("Accept all cookies", "Accept all") and not carries("Insert", "Ins")
-          and not carries("12 items", "1"))
+          and not carries("12 items", "1") and not carries("Room 10245", "1024"))
 
 
 def on_offline():
