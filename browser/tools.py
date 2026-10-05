@@ -335,6 +335,13 @@ after an upload: uid and value for a field it fills (passing at once if the fiel
 status text; never a setTimeout in evaluate_script. navigate_page leaves a page even when the page asks to confirm
 leaving (unsaved changes); give it handleBeforeUnload "dismiss" to stay.
 
+Names: click, fill, hover and upload_file take name instead of uid, a few words of the element's name as a view or the
+screenshot shows it (name: "Table", name: "Width"). The step acts on a control whose name carries them, waiting up to
+5s for one whose name is or begins with them, so it can follow the step that opens it in one queue: a menu, then its
+item; a dialog, then its fields. A name that is those words fits best, then one that begins with them; when none
+fits, or several fit equally well, the step fails, listing what it found with their uids. Its line gives the uid it
+acted on.
+
 Pixels: a take_screenshot of the viewport comes back as an image, one pixel per CSS pixel unless its line gives a
 factor to multiply by. move_at moves the pointer to a point in it, and click_down and click_up press and let go of a
 button where the pointer is: a click is move_at, click_down, click_up; a drag, move_at, click_down, move_at, click_up;

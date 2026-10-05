@@ -1,6 +1,7 @@
 """The queue's checked steps, pick, expect, type, paste and wait: they read the page, not a tool's "Successfully"
-(all but a paste without a uid); and fill_refused, which judges each element by a read of it before a fill, and
-read_fills, which reads a run of fills' elements in one call.
+(all but a paste without a uid); fill_refused, which judges each element by a read of it before a fill; read_fills,
+which reads a run of fills' elements in one call; and snapshots, one after another, which wait reads and a step given
+name searches.
 
 tools.STEPS_HELP says when to use which.
 """
@@ -638,7 +639,7 @@ def wait(devtools, page_id, step):
     return _still(devtools, page_id, step["still"], timeout)
 
 
-def _snapshots(devtools, page_id, seconds):
+def snapshots(devtools, page_id, seconds):
     """(seconds since the start, snapshot text), one snapshot after another, until `seconds` have passed."""
     began = time.monotonic()
     while True:
@@ -652,7 +653,7 @@ def _snapshots(devtools, page_id, seconds):
 
 def _gone(devtools, page_id, text, timeout):
     seen = False
-    for took, snapshot in _snapshots(devtools, page_id, timeout / 1000):
+    for took, snapshot in snapshots(devtools, page_id, timeout / 1000):
         if text in NOT_TEXT.sub("", snapshot):
             seen = True
         elif seen:
@@ -666,7 +667,7 @@ def _gone(devtools, page_id, text, timeout):
 
 def _still(devtools, page_id, still, timeout):
     last, changed = None, 0.0
-    for took, snapshot in _snapshots(devtools, page_id, timeout / 1000):
+    for took, snapshot in snapshots(devtools, page_id, timeout / 1000):
         if snapshot != last:
             last, changed = snapshot, took
         elif took - changed >= still / 1000:

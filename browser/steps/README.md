@@ -13,7 +13,8 @@ bind this folder too: read it first.
       steps.py       a queue: load, check, place_screenshots, run; view, a snapshot cut to what an agent reads
       checked.py     the checked steps; fill_refused and read_fills, which judge a fill before it runs
       pointer.py     move_at, click_down, click_up: mouse input over browserd's own connection
-      hit.py         what a press lands on, and whether it carries the words the step's on names
+      hit.py         what a press lands on, and whether it carries the words the step's on names; fit, which a step's
+                     name is matched by too
       screenshot.py  a viewport take_screenshot in CSS pixels; keeps a queue's tab drawn
       dialogs.py     answers a dialog the moment it opens, for a handle_dialog step
 
@@ -57,12 +58,15 @@ bind this folder too: read it first.
   (`hit.carries`), or that `hit.read` could not read, is not sent, and the queue stops. So a popup, a reload, or a layer
   the screenshot did not show (one at opacity 0) stops the press. `on: ""` presses what has no words, and checks
   nothing. Keys are never checked.
+- **A step may give name instead of uid** when its chrome-devtools-mcp tool needs a uid (`click`, `fill`, `hover`,
+  `upload_file`; `_named_tool`): `_step` finds the control in snapshots taken until one whose name is or begins with
+  those words shows, up to `NAME_WAIT`, and runs the step on its uid (`_named` says which control fits).
 - **Every snapshot a report holds is a view** (`_view`'s docstring), or with `full: true` its lines as written; either
   is cut at `VIEW_MOST`. The whole snapshot is saved in the tab's record folder, and the header names the file.
 - **A step that begins a download says where it went**, since chrome-devtools-mcp's reply never does (an agent told
   nothing failed WebGames' combination lock hunting for the file): `run` waits up to `DOWNLOAD_WAIT` after each step
   while a download the tab's `downloads.Watcher` heard is still in progress (`../chrome/`).
 - **Text agents read repeats some of these numbers and lines.** `../tools.py`'s `QUEUE_HELP` and `STEPS_HELP` say
-  10,000 characters (`VIEW_MOST`), 5s (`dialogs.LATE`) and 100 characters (where chrome-devtools-mcp's `fill` sets a
+  10,000 characters (`VIEW_MOST`), 5s (`dialogs.LATE`, `NAME_WAIT`) and 100 characters (where chrome-devtools-mcp's `fill` sets a
   value by script), and describe the report's lines; `../../tests/checks/steps.py` matches those lines word for word,
   and `queue_steps` acts on chrome-devtools-mcp's "No page found". Change them together.

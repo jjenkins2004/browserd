@@ -1,5 +1,6 @@
 """What a press at a point lands on, read off Chrome's accessibility tree, or the page's DOM where the tree gives no
-words, just before the press goes out; and whether it carries the words a press's on names.
+words, just before the press goes out; and whether it carries the words a press's on names, by fit, which also ranks
+the controls a step's name could mean.
 """
 
 import collections
@@ -110,19 +111,27 @@ def read(browser, session, x, y):
 
 
 def carries(what, on):
-    """Whether what a press lands on carries the words on names: all of them, in order and next to each other, in one
-    of its names or its text, case aside; each whole, but for one of PREFIX letters or more, which may begin a longer
-    word (`Bold` in "Bold (Ctrl+B)", `Close` in "Closer", but not `1` in "Clicks so far: 12"). An on with no words, a
-    symbol like +, need only be in one."""
-    need = _words(on)
-    for said in what.words:
-        have = _words(said)
-        if need and any(all(_word(have[at + i], want) for i, want in enumerate(need))
-                        for at in range(len(have) - len(need) + 1)):
-            return True
-        if not need and _plain(on) in _plain(said):
-            return True
-    return False
+    """Whether what a press lands on carries the words on names, as fit matches them, in one of its names or its text."""
+    return any(fit(said, on) is not None for said in what.words)
+
+
+def fit(said, on):
+    """How said carries the words on names: all of them, in order and next to each other, case aside; each whole, but
+    for one of PREFIX letters or more, which may begin a longer word (`Bold` in "Bold (Ctrl+B)", `Close` in "Closer",
+    but not `1` in "Clicks so far: 12"). An on with no words, a symbol like +, need only be in it.
+
+    Returns 0 when said's words are exactly on's, 1 when on's begin it, 2 when they sit further in, None when it does
+    not carry them.
+    """
+    need, have = _words(on), _words(said)
+    if need:
+        at = next((at for at in range(len(have) - len(need) + 1)
+                   if all(_word(have[at + i], want) for i, want in enumerate(need))), -1)
+        whole = have == need
+    else:
+        want, text = _plain(on), _plain(said)
+        at, whole = text.find(want), want == text
+    return None if at < 0 else 0 if whole else 1 if at == 0 else 2
 
 
 def described(what):

@@ -373,6 +373,32 @@ def confirm_live(served, open_tab):
           and returned(answered.split("--- 2")[-1]) == "confirmed", text + answered)
 
 
+# A button that opens a menu 300ms after its click, as an editor's menus do: two items and a field, each named as
+# Slides names its own.
+MENU = """<title>names scratch</title><button onclick="setTimeout(show, 300)">Open menu</button><p id=out></p>
+<script>function show() {
+  const menu = document.createElement('div'); menu.setAttribute('role', 'menu');
+  for (const name of ['Table b >', 'Image i >']) {
+    const item = document.createElement('div'); item.setAttribute('role', 'menuitem'); item.tabIndex = 0;
+    item.textContent = name; item.onclick = () => { out.textContent = 'clicked ' + name; }; menu.append(item);
+  }
+  const label = document.createElement('label'); label.textContent = 'Width '; label.append(document.createElement('input'));
+  menu.append(label); document.body.append(menu);
+}</script>"""
+
+
+def names_live(served, open_tab):
+    """Steps given name, not uid, in one queue: a click that opens a menu, then a click on its item and a fill of its
+    field, each found in a snapshot taken as the step runs."""
+    queue, tab = served.queue, open_tab(MENU)
+    text, is_error = queue(tab, {"tool": "click", "name": "Open menu"}, {"tool": "click", "name": "Table"},
+                           {"tool": "fill", "name": "Width", "value": "9"},
+                           {"tool": "evaluate_script", "function": "() => out.textContent + ' ' + document.querySelector('input').value"})
+    check("a click by name, then a click and a fill by name on what it opened, run in one queue",
+          not is_error and re.search(r'^name "Table" is uid=\S+ menuitem "Table b >"$', text, re.M)
+          and returned(text.split("--- 4")[-1]) == "clicked Table b > 9", text)
+
+
 def windows_live(profile, state):
     """The checks of windows and the focus, which need a Chrome with windows (the checks' --headed): put on screen
     and taken back, each for under a tenth of a second, while the user's focus moves and comes back."""
@@ -412,7 +438,7 @@ def windows_live(profile, state):
 def queue_live(profile, state):
     """The queue in blocks that run at once (harness.parallel), each on tabs of its own, each tab with its own
     chrome-devtools-mcp: a and b on the same form page, a page the pointer steps press on, the checked steps' page,
-    and a confirm's."""
+    a confirm's, and a menu that steps given name open and act on."""
     if not os.path.exists(PACKAGE):
         skipped.append("queue")
         print("skipped the live queue checks: chrome-devtools-mcp is not installed; run npm ci")
@@ -441,7 +467,7 @@ def queue_live(profile, state):
                     server.NAME)
     try:
         served = Queuing(profile, state, httpd, tabs, workers, folder, root)
-        parallel(*(served.block(run) for run in (forms_live, pointer_live, checked_live, confirm_live)))
+        parallel(*(served.block(run) for run in (forms_live, pointer_live, checked_live, confirm_live, names_live)))
 
         numbered, total = True, 0
         for tab in os.listdir(served.home):

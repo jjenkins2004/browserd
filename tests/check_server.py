@@ -27,7 +27,7 @@ from checks import chrome, cli, dashboard, live, protocol, records, steps, tabs,
 OFFLINE = {group.__name__.removesuffix("_offline"): group for group in (
     protocol.protocol, tabs.tabs_offline, chrome.focus_offline, steps.queue_offline, steps.checked_offline,
     tabs.pairing_offline, tabs.queue_tools_offline, steps.dialogs_offline, chrome.downloads_offline,
-    steps.paste_offline, steps.screenshot_offline, steps.pointer_offline, steps.hit_offline, steps.on_offline,
+    steps.paste_offline, steps.screenshot_offline, steps.pointer_offline, steps.hit_offline, steps.on_offline, steps.names_offline,
     steps.limits_offline, records.records_offline, records.recording_offline, chrome.profiles_offline,
     tools.profile_tools_offline, dashboard.page_offline, chrome.quitting, cli.service_offline, cli.paths_offline)}
 # Each given the throwaway Chrome's profile and a state.db holding it.

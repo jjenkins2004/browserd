@@ -93,7 +93,7 @@ def queue_offline():
         for label, step, words in (
                 ("an argument its tool does not take", {"tool": "click", "uid": "1_1", "bogus": 1}, "does not take bogus"),
                 ("an argument of the wrong type", {"tool": "click", "uid": 5}, "click's uid must be string"),
-                ("a missing argument", {"tool": "click"}, "click needs uid"),
+                ("a missing argument", {"tool": "click"}, "click needs uid or name"),
                 ("a value its tool does not allow", {"tool": "take_screenshot", "format": "gif"}, "png|jpeg|webp"),
                 ("true for a number", {"tool": "take_screenshot", "quality": True}, "quality"),
                 ("a file path outside the folders file tools may use", {"tool": "upload_file", "uid": "1_1", "filePaths": [inside, hosts]}, "cannot use %s" % hosts),
@@ -121,8 +121,10 @@ def queue_offline():
         described = steps.describe({"fill": {"description": "Type text into an input. More detail.", "inputSchema": {
             "properties": {"pageId": {"type": "number"}, "uid": {"type": "string"}, "includeSnapshot": {"type": "boolean"}},
             "required": ["pageId", "uid"]}}})
-        check("a tool is described by its arguments without pageId, optional ones marked, and its first sentence",
-              described.endswith("\n  fill(uid: string, includeSnapshot?: boolean) - Type text into an input"), described)
+        check("a tool is described by its arguments without pageId, optional ones marked, a uid it needs as uid or name, "
+              "and its first sentence",
+              described.endswith("\n  fill(uid or name: string, includeSnapshot?: boolean) - Type text into an input"),
+              described)
         check("the queue's own pick, expect, type and paste are described first",
               described.startswith("  pick(") and "\n  expect(" in described and "\n  type(" in described.split("\n  fill(")[0]
               and "\n  paste(text: string, uid?: string) - " in described.split("\n  fill(")[0], described[:1500])
@@ -1389,6 +1391,111 @@ def on_offline():
     content, failed = pointer.run({"tool": "click_down", "on": ""}, "P5", lambda: hand)
     check("but with on \"\" it goes out there, saying it could not read what is there",
           not failed and hand.events and "(browserd could not read what is there:" in content[0]["text"], repr(content))
+
+
+MENU = """uid=1_0 RootWebArea "Deck"
+  uid=1_1 menubar
+    uid=1_2 menuitem "Format"
+    uid=1_3 menuitem "Insert"
+  uid=2_0 menu
+    uid=2_1 menuitem "Table b ►"
+      uid=2_2 StaticText "Table b ►"
+    uid=2_3 menuitem "Image i ►"
+    uid=2_4 menuitem "Format options"
+  uid=2_5 button "Insert Image"
+  uid=2_6 button "New slide (Ctrl+M)"
+  uid=2_7 menuitem "New slide n Ctrl+M"
+  uid=2_8 heading "Tables"
+  uid=2_9 textbox "Width" value="5\""""
+
+
+class Named(FakeDevtools):
+    """FakeDevtools whose take_snapshot gives each of snapshots in turn, the last repeated, and whose evaluate_script
+    reads every element as a plain text box, as checked.FILL_JS would."""
+
+    def __init__(self, answers, snapshots):
+        super().__init__(answers)
+        self.snapshots = list(snapshots)
+
+    def text(self, tool, arguments, wait=None):
+        self.calls.append((tool, arguments))
+        if tool == "evaluate_script":
+            return "```json\n%s\n```" % json.dumps([{"kind": "box"}] * len(arguments["args"])
+                                                   if arguments["args"][1:] else {"kind": "box"})
+        return steps.SNAPSHOT + "\n" + (self.snapshots.pop(0) if self.snapshots[1:] else self.snapshots[0])
+
+
+@mock.patch.object(steps, "GAP", 0)  # a stand-in page has nothing to react to between steps
+def names_offline():
+    """A step given name, not uid: what check takes and refuses, how hit.fit ranks a name, and the control a queue then
+    acts on, waits for, or will not guess between."""
+    schemas = dict(SCHEMAS, fill={"inputSchema": {"required": ["pageId", "uid", "value"], "properties": {
+        "pageId": {"type": "number"}, "uid": {"type": "string"}, "value": {"type": "string"}}}})
+    check("a click, fill or upload_file may give name instead of uid",
+          not refusal(lambda: steps.check([{"tool": "click", "name": "Table"}, {"tool": "fill", "name": "Width", "value": "9"},
+                                           {"tool": "upload_file", "name": "Upload", "filePaths": []}], schemas),
+                      steps.StepError))
+    for label, step, words in (
+            ("both uid and name", {"tool": "click", "uid": "1_1", "name": "Table"}, "takes uid or name, not both"),
+            ("an empty name", {"tool": "click", "name": " "}, "click's name must be words"),
+            ("a name on a tool that needs no uid", {"tool": "take_screenshot", "name": "Logo"}, "does not take name"),
+            ("an unknown key on a tool that takes name", {"tool": "click", "uid": "1_1", "bogus": 1},
+             "it takes uid, includeSnapshot, name")):
+        said = refusal(lambda: steps.check([step], schemas), steps.StepError)
+        check("a step with %s is refused before any step runs" % label, words in said, said)
+
+    check("a name is ranked by where its words sit: all of the name, its start, or further in",
+          [hit.fit("Format", "format"), hit.fit("Table b ►", "Table"), hit.fit("Insert Image", "Image"),
+           hit.fit("Insert", "Ins"), hit.fit("+ New", "+")] == [0, 1, 2, None, 1])
+    check("a word that only begins a longer one is no exact fit, so Comment fits \"Comment\" before \"Comments\"",
+          [hit.fit("Comment", "Comment"), hit.fit("Comments", "Comment"), hit.fit("Format", "Form")] == [0, 1, 1])
+
+    workdir = tempfile.mkdtemp(prefix="browser-names-")
+    clock = Clock()
+    try:
+        with mock.patch.object(steps, "time", clock), mock.patch.object(checked, "time", clock):
+            def run(planned, snapshots, answers=1):
+                fake = Named([([{"type": "text", "text": "Successfully clicked on the element"}], False)] * answers,
+                             snapshots)
+                report = text_of(steps.run(fake, 7, planned, lambda name: os.path.join(workdir, name))["content"])
+                return fake, report
+
+            fake, report = run([{"tool": "click", "name": "Table"}], ['uid=1_0 RootWebArea "Deck"', MENU])
+            check("a click by name waits for a snapshot to show its control, then clicks that control's uid",
+                  [call for call in fake.calls if call[0] == "click"] == [("click", {"uid": "2_1", "pageId": 7})]
+                  and [tool for tool, _ in fake.calls].count("take_snapshot") == 2, repr(fake.calls))
+            check("and its line says which control the name fit, not text inside it",
+                  'name "Table" is uid=2_1 menuitem "Table b ►"\nSuccessfully clicked' in report
+                  and "--- 1 click ok" in report, report)
+            for name, uid_ in (("Format", "1_2"), ("Format options", "2_4"), ("Image", "2_3")):
+                fake, report = run([{"tool": "click", "name": name}], [MENU])
+                check("a name that is a control's whole name, or else begins it, fits best: %s" % name,
+                      ("click", {"uid": uid_, "pageId": 7}) in fake.calls, repr(fake.calls))
+            fake, report = run([{"tool": "click", "name": "New slide"}, {"tool": "click", "uid": "1_3"}], [MENU])
+            check("controls that fit equally well are never guessed between: the step fails, listing them with their uids",
+                  report.startswith(steps.STOPPED) and not [call for call in fake.calls if call[0] == "click"]
+                  and '2 controls fit name "New slide" equally well: uid=2_6 button "New slide (Ctrl+M)", '
+                      'uid=2_7 menuitem "New slide n Ctrl+M". Give its uid' in report, report)
+            fake, report = run([{"tool": "click", "name": "Image"}], ['uid=1_0 RootWebArea "Deck"\n  uid=2_5 button "Insert Image"',
+                                                                     MENU])
+            check("a control that only carries a name's words further in does not win while the one that begins with "
+                  "them is still opening", ("click", {"uid": "2_3", "pageId": 7}) in fake.calls, repr(fake.calls))
+            began = clock.now
+            fake, report = run([{"tool": "click", "name": "Tables"}], [MENU])
+            check("a name only a line that is no control carries fails once NAME_WAIT passes, naming that line",
+                  "--- 1 click FAILED" in report and 'no control\'s name carries the words of name "Tables"' in report
+                  and 'not controls: uid=2_8 heading "Tables"' in report
+                  and steps.NAME_WAIT <= clock.now - began < steps.NAME_WAIT + 1, report)
+            fake, report = run([{"tool": "fill", "uid": "1_9", "value": "a"}, {"tool": "fill", "name": "Width", "value": "9"},
+                                {"tool": "fill", "uid": "1_8", "value": "b"}], [MENU], answers=3)
+            check("a fill by name joins no run of fills: it reads its own element once its uid is found, and fills that uid",
+                  fake.calls == [("evaluate_script", fake.calls[0][1]), ("fill", {"uid": "1_9", "value": "a", "pageId": 7}),
+                                 ("take_snapshot", {"pageId": 7}), ("evaluate_script", fake.calls[3][1]),
+                                 ("fill", {"uid": "2_9", "value": "9", "pageId": 7}), ("evaluate_script", fake.calls[5][1]),
+                                 ("fill", {"uid": "1_8", "value": "b", "pageId": 7})]
+                  and [fake.calls[at][1]["args"] for at in (0, 3, 5)] == [["1_9"], ["2_9"], ["1_8"]], repr(fake.calls))
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 @mock.patch.object(steps, "GAP", 0)  # a stand-in page has nothing to react to between steps

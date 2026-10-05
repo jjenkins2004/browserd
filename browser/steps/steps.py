@@ -12,7 +12,7 @@ import urllib.parse
 
 from .. import system
 from ..chrome import cdp
-from . import checked, dialogs, pointer, screenshot
+from . import checked, dialogs, hit, pointer, screenshot
 from ..tabs.devtools import ROOTS_SPELLED, may_touch
 
 # Left out: the page tools, since the tab tools own tabs; and lighthouse_audit and take_heapsnapshot, which profile a
@@ -36,6 +36,10 @@ SHOT_SCALE = 0.5  # the screenshot a refused press's stop ends with; _after_stop
 # Claude Code drops a reply after about 60s.
 SHOT_BEFORE = 30.0
 WORD_RUN_LEAST = 3  # one-word lines a run needs before a view joins it; two neighbours are often two labels
+# Seconds a step given name, not uid, waits for a control that name fits well to show (_named): the step before it
+# may have just opened the menu or dialog it is in.
+NAME_WAIT = 5.0
+NAMES_SHOWN = 8  # elements a name's failure lists
 # chrome-devtools-mcp's reply sections: a dialog a step left open, its refusal when one was open before the step,
 # and the list of every page in Chrome, which names other tabs and is no use inside one tab's queue.
 OPEN_DIALOG = "# Open dialog"
@@ -124,7 +128,8 @@ def describe(tools):
         schema = tool.get("inputSchema", {})
         required = set(schema.get("required", []))
         arguments = ", ".join(
-            "%s%s: %s" % (key, "" if key in required else "?", _shape(spec))
+            "%s%s: %s" % ("uid or name" if key == "uid" and _named_tool(schema) else key,
+                          "" if key in required else "?", _shape(spec))
             for key, spec in schema.get("properties", {}).items() if key in _takes(name, schema)
         ) + {"take_snapshot": ", under?: string, full?: boolean, find?: string, after?: string",
              "take_screenshot": ", scale?: number"}.get(name, "")
@@ -252,6 +257,12 @@ def _takes(name, schema):
             if key != "pageId" and not (name == "take_snapshot" and key == "filePath")]
 
 
+def _named_tool(schema):
+    """Whether a step naming this tool may give name instead of uid: its tool needs a uid, as click, fill, hover and
+    upload_file do."""
+    return "uid" in schema.get("required", [])
+
+
 def _arguments_problem(step, tool):
     """Why a chrome-devtools-mcp step's arguments would fail, or None: checked against the tool's own schema, and
     its file paths against the folders its file tools may use."""
@@ -280,15 +291,22 @@ def _arguments_problem(step, tool):
             return "take_screenshot's scale must be a number above 0, up to 1, like 0.5"
     schema = tool.get("inputSchema", {})
     properties = {key: spec for key, spec in schema.get("properties", {}).items() if key != "pageId"}
-    own = OWN_OPTIONS.get(name, ())
+    named = _named_tool(schema)
+    own = OWN_OPTIONS.get(name, ()) + (("name",) if named else ())
+    if named and "name" in step:
+        if "uid" in step:
+            return "%s takes uid or name, not both" % name
+        if not isinstance(step["name"], str) or not step["name"].strip():
+            return "%s's name must be words of its element's name, like \"Format options\"" % name
     given = {key: value for key, value in step.items() if key != "tool" and key not in own}
     unknown = sorted(set(given) - set(properties))
     if unknown:
         takes = _takes(name, schema) + list(own)
         return "%s does not take %s; it takes %s" % (name, ", ".join(unknown), ", ".join(takes) or "nothing")
-    missing = [key for key in schema.get("required", []) if key in properties and key not in given]
+    missing = [key for key in schema.get("required", [])
+               if key in properties and key not in given and not (key == "uid" and "name" in step and named)]
     if missing:
-        return "%s needs %s" % (name, ", ".join(missing))
+        return "%s needs %s" % (name, ", ".join("uid or name" if key == "uid" and named else key for key in missing))
     if isinstance(given.get("timeout"), (int, float)) and given["timeout"] > checked.WAIT_MOST:
         return "%s's timeout must be milliseconds, up to %d, since a queue starts no step after %gs" % (
             name, checked.WAIT_MOST, QUEUE_MOST)
@@ -461,12 +479,10 @@ def view(text, path, under=None, full=False, find=None, after=None):
     Returns (text, missing): missing is True when under or after names no element in the snapshot.
     """
     lines = text.split("\n")
-    if SNAPSHOT not in lines:
+    span = _snapshot_span(lines)
+    if span is None:
         return text, False
-    start = lines.index(SNAPSHOT) + 1
-    end = next((at for at in range(start, len(lines)) if lines[at] in AFTER_SNAPSHOT), len(lines))
-    while end > start and not lines[end - 1]:
-        end -= 1  # the blank lines before the next section stay where they are
+    start, end = span
     before, whole, tail = lines[:start - 1], lines[start:end], lines[end:]
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(whole) + "\n")
@@ -497,6 +513,18 @@ def view(text, path, under=None, full=False, find=None, after=None):
     asked = {key: value for key, value in (("under", under), ("full", full), ("find", find)) if value}
     shown = ["%s (%s%s; saved whole to %s)" % (SNAPSHOT, kind, scope, path)] + _cut(kept, asked)
     return "\n".join(before + shown + tail), False
+
+
+def _snapshot_span(lines):
+    """(start, end) of the snapshot in a reply's lines: from the line after SNAPSHOT up to the next section
+    chrome-devtools-mcp puts after it, less the blank lines before that section; None when the reply has none."""
+    if SNAPSHOT not in lines:
+        return None
+    start = lines.index(SNAPSHOT) + 1
+    end = next((at for at in range(start, len(lines)) if lines[at] in AFTER_SNAPSHOT), len(lines))
+    while end > start and not lines[end - 1]:
+        end -= 1  # the blank lines before the next section stay where they are
+    return start, end
 
 
 def _matching(lines, find):
@@ -716,7 +744,20 @@ def _downloaded(download):
 
 def _step(devtools, page_id, step, left, answerer, target, connect, read=None):
     """(content, failed) for one step: a checked step, a pointer step, a screenshot of the viewport, a dialog the
-    answerer answered, a refused fill, or the tool's own. read is a fill's read taken earlier, by _Fills."""
+    answerer answered, a refused fill, or the tool's own; a step given name runs on the uid _named finds, its line
+    first. read is a fill's read taken earlier, by _Fills."""
+    if "name" in step:
+        began = time.monotonic()
+        try:
+            said, uid = _named(devtools, page_id, step["name"], min(NAME_WAIT, left))
+        except cdp.CdpError as exc:
+            return [{"type": "text", "text": str(exc)}], True
+        if uid is None:
+            return [{"type": "text", "text": said}], True
+        found = dict({key: value for key, value in step.items() if key != "name"}, uid=uid)
+        content, failed = _step(devtools, page_id, found, left - (time.monotonic() - began), answerer, target, connect,
+                                read)
+        return [{"type": "text", "text": said}] + content, failed
     if step["tool"] in checked.STEPS:
         text, failed = checked.run(devtools, page_id, step, left, target, connect)
         return [{"type": "text", "text": text}], failed
@@ -745,6 +786,56 @@ def _step(devtools, page_id, step, left, answerer, target, connect, read=None):
         return [{"type": "text", "text": str(exc)}], True
 
 
+def _named(devtools, page_id, name, wait):
+    """(its line, uid) for the control (CONTROLS) whose name fits a step's name best, as hit.fit ranks them: the one
+    whose name is those words, or else begins with them, or else carries them further in. Snapshots are taken until
+    one shows a control whose name is or begins with them, or wait seconds pass, so a control already on the page
+    that carries them further in does not win over the one the step before is still opening. (why not, None) when
+    none fits, or several fit equally well, so a step never acts on a guess."""
+    took, fits, controls = 0.0, [], []
+    for took, snapshot in checked.snapshots(devtools, page_id, wait):
+        fits = []
+        for node, said in _names(snapshot):
+            rank = hit.fit(said, name)
+            if rank is not None:
+                fits.append((rank, node, said))
+        controls = [(rank, node, said) for rank, node, said in fits if node["role"] in CONTROLS]
+        if any(rank < 2 for rank, _, _ in controls):
+            break
+    if not controls:
+        others = "; lines that carry them but are not controls: %s" % ", ".join(
+            _named_line(node, said) for _, node, said in fits[:NAMES_SHOWN]) if fits else ""
+        return ('no control\'s name carries the words of name "%s", after %.1fs%s. Give a uid, or take_snapshot to see '
+                "the names" % (name, took, others)), None
+    least = min(rank for rank, _, _ in controls)
+    best = [(node, said) for rank, node, said in controls if rank == least]
+    if best[1:]:
+        return ('%d controls fit name "%s" equally well: %s. Give its uid, or more of its name\'s words'
+                % (len(best), name, ", ".join(_named_line(node, said) for node, said in best[:NAMES_SHOWN]))), None
+    node, said = best[0]
+    return 'name "%s" is %s' % (name, _named_line(node, said)), node["uid"]
+
+
+def _names(text):
+    """(node, its name) for each element a snapshot in a tool's reply names."""
+    lines = text.split("\n")
+    span = _snapshot_span(lines)
+    if span is None:
+        return
+    start, end = span
+    for top in _tree(lines[start:end])[0]:
+        for node in [top, *_below(top)]:
+            name = NAME.match(node["rest"])
+            if name and name.group(1).strip():
+                yield node, name.group(1)
+
+
+def _named_line(node, said):
+    """An element as a view line names it, its name cut to hit.SHOWN characters."""
+    shown = said if len(said) <= hit.SHOWN else said[:hit.SHOWN - 1].rstrip() + "…"
+    return 'uid=%s %s "%s"' % (node["uid"], node["role"], shown)
+
+
 class _Fills:
     """The reads a queue's runs of fill steps are judged by, each run's elements read in one call as its first step runs
     (four text boxes in a row took 0.9s, against 1.8s with a read and a GAP per fill;
@@ -763,10 +854,13 @@ class _Fills:
         self.reads = {}  # step number -> the read of its text box, taken with its run's first step
 
     def read(self, number):
-        """The read of fill step `number`'s element taken with its run's first step, or None for its own read."""
-        if number == 1 or self.steps[number - 2]["tool"] != "fill":
+        """The read of fill step `number`'s element taken with its run's first step, or None for its own read. A fill
+        given name is in no run: its uid is found only at its turn."""
+        if "uid" not in self.steps[number - 1]:
+            return None
+        if number == 1 or not _uid_fill(self.steps[number - 2]):
             run = [number]
-            while run[-1] < len(self.steps) and self.steps[run[-1]]["tool"] == "fill":
+            while run[-1] < len(self.steps) and _uid_fill(self.steps[run[-1]]):
                 run.append(run[-1] + 1)
             fills = [self.steps[at - 1] for at in run]
             found = checked.read_fills(self.devtools, self.page_id, fills) if run[1:] else None
@@ -777,6 +871,10 @@ class _Fills:
                 if not isinstance(read, dict) or read.get("kind") != "box":
                     break
         return self.reads.pop(number, None)
+
+
+def _uid_fill(step):
+    return step["tool"] == "fill" and "uid" in step
 
 
 def _stopped(steps, done, why):
