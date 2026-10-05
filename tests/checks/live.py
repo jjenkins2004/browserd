@@ -641,7 +641,7 @@ def queue_live(profile, state):
               images and images[0]["mimeType"] == "image/png" and shape == tuple(size or ()) and box == [300, 200, 339, 239],
               "%r %r %r" % (size, shape, box))
         text, is_error = call(httpd, "queue", session=session, tab=drawn, steps=[
-            {"tool": "move_at", "x": 310, "y": 225}, {"tool": "click_down"}, {"tool": "click_up"},
+            {"tool": "move_at", "x": 310, "y": 225}, {"tool": "click_down", "on": ""}, {"tool": "click_up"},
             {"tool": "evaluate_script", "function": "() => hits"}])
         check("move_at, click_down and click_up at a point read off that screenshot click there, with trusted input",
               not is_error and returned(text) == [[True, 10, 25]], text)
@@ -651,7 +651,7 @@ def queue_live(profile, state):
         call(httpd, "queue", session=session, tab=pad, steps=[{"tool": "take_screenshot"}])
         began = time.monotonic()
         text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
-            {"tool": "move_at", "x": 50, "y": 60}, {"tool": "click_down"}, {"tool": "move_at", "x": 150, "y": 160},
+            {"tool": "move_at", "x": 50, "y": 60}, {"tool": "click_down", "on": ""}, {"tool": "move_at", "x": 150, "y": 160},
             {"tool": "click_up"}, {"tool": "evaluate_script", "function": "() => seen"}])
         took = time.monotonic() - began
         check("a drag is a press at one point, a move holding the button, and a let-go at another",
@@ -660,7 +660,7 @@ def queue_live(profile, state):
         check("and its four pointer steps take under 2s, and a frame's wait on Windows", took < 2 + FRAME_WAIT, "%.1fs" % took)
         began = time.monotonic()
         text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
-            {"tool": "move_at", "x": 540, "y": 70}, {"tool": "click_down"}, {"tool": "click_up"}])
+            {"tool": "move_at", "x": 540, "y": 70}, {"tool": "click_down", "on": "Warn"}, {"tool": "click_up"}])
         took = time.monotonic() - began
         check("a click that opens an alert nothing waits on counts as done after about 5s, naming it",
               not is_error and 'the alert "hi" it opened blocks the page' in text and 4 < took < 10 + FRAME_WAIT, "%.1fs: %s" % (took, text))
@@ -677,28 +677,33 @@ def queue_live(profile, state):
         call(httpd, "queue", session=session, tab=pad, steps=[{"tool": "take_screenshot"}])  # the button now has focus
         began = time.monotonic()
         text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[
-            {"tool": "click_down"}, {"tool": "click_up"}, {"tool": "handle_dialog", "action": "accept"}])
+            {"tool": "click_down", "on": "Warn"}, {"tool": "click_up"}, {"tool": "handle_dialog", "action": "accept"}])
         took = time.monotonic() - began
         check("a click whose alert a handle_dialog step right after waits on is answered as it opens",
               not is_error and "was accepted as it opened" in text and took < 3, "%.1fs: %s" % (took, text))
 
         clicks = {"tool": "evaluate_script", "function": "() => clicks"}
-        press = [{"tool": "click_down"}, {"tool": "click_up"}]
         pressed = open_tab(PRESSES)
         text, is_error = call(httpd, "queue", session=session, tab=pressed, steps=[
-            {"tool": "move_at", "x": 100, "y": 60}, *press, clicks])
-        check("a press on a tab no screenshot came back from goes out, saying what it landed on",
-              not is_error and returned(text) == ["b"] and 'on button "Buy"' in text, text)
-        call(httpd, "queue", session=session, tab=pressed, steps=[{"tool": "evaluate_script", "function": "() => cover()"}])
+            {"tool": "move_at", "x": 100, "y": 60}, {"tool": "click_down", "on": "buy"}, {"tool": "click_up"}, clicks])
+        check("a press whose on names what is there goes out, on a tab no screenshot came back from, saying what it "
+              "landed on", not is_error and returned(text) == ["b"] and 'on button "Buy"' in text, text)
         text, is_error = call(httpd, "queue", session=session, tab=pressed, steps=[
-            {"tool": "move_at", "x": 100, "y": 60}, *press, clicks,
+            {"tool": "evaluate_script", "function": "() => cover()"}, {"tool": "move_at", "x": 100, "y": 60},
+            {"tool": "click_down", "on": "Buy"}, {"tool": "click_up"}, clicks])
+        check("one under a layer raised since is not pressed, saying what is there, and its queue stops",
+              is_error and 'Not pressed: at 100,60 is text "Publish now", not "Buy"' in text
+              and "not run: 4 click_up, 5 evaluate_script" in text, text)
+        text, is_error = call(httpd, "queue", session=session, tab=pressed, steps=[
+            {"tool": "move_at", "x": 100, "y": 60}, {"tool": "click_down", "on": ""}, {"tool": "click_up"}, clicks,
             {"tool": "evaluate_script", "function": "() => modal.remove()"}])
-        check("one under a layer raised since lands on that layer, and says so",
+        check("and with on \"\" it is pressed there, on the layer",
               not is_error and returned(text) == ["b", "modal"] and 'on text "Publish now"' in text, text)
         text, is_error = call(httpd, "queue", session=session, tab=pressed, steps=[
-            {"tool": "move_at", "x": 350, "y": 60}, *press, {"tool": "click_down", "count": 2},
-            {"tool": "click_up", "count": 2}, clicks])
-        check("a double click is two presses, the second with count 2", not is_error and "dbl" in returned(text), text)
+            {"tool": "move_at", "x": 350, "y": 60}, {"tool": "click_down", "on": "Double"}, {"tool": "click_up"},
+            {"tool": "click_down", "count": 2}, {"tool": "click_up", "count": 2}, clicks])
+        check("a double click is two presses, the second with count 2 and no on", not is_error and "dbl" in returned(text),
+              text)
 
         text, is_error = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "new_page", "url": "about:blank"}])
         check("a tab-managing tool is refused in a queue", is_error and "new_page" in text, text)

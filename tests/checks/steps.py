@@ -879,11 +879,13 @@ class Hand:
     """A connection to a profile's Chrome that records each mouse event it is sent; with late or a dialog, each goes
     unanswered in time (cdp.Late), and with a dialog, that dialog's event is heard; with held, a dialog open already
     leaves Page.enable unanswered. Every point holds the element whose backend node id is hit, in the tree nodes (GO
-    by default); with hit None, none, as off the page; the page is scrolled by scroll, and frame is a frame's src."""
+    by default); with hit None, none, as off the page; the page is scrolled by scroll, and frame is a frame's src.
+    With unread, the tree is never given."""
 
-    def __init__(self, dialog=None, late=False, held=False, nodes=GO, hit=7, scroll=(0, 0), frame=None):
+    def __init__(self, dialog=None, late=False, held=False, nodes=GO, hit=7, scroll=(0, 0), frame=None, unread=False):
         self.events, self.dialog, self.late, self.held = [], dialog, late or dialog is not None, held
         self.nodes, self.hit, self.scroll, self.frame, self.asked = nodes, hit, scroll, frame, []
+        self.unread = unread
 
     def call(self, method, session=None, wait=None, **params):
         if method == "Target.attachToTarget":
@@ -898,6 +900,8 @@ class Hand:
                 raise cdp.CdpError("DOM.getNodeForLocation: No node found at given location")
             return {"backendNodeId": self.hit, "frameId": "F1"}
         if method == "Accessibility.getPartialAXTree":
+            if self.unread:
+                raise cdp.CdpError("Accessibility.getPartialAXTree: the page went away")
             return {"nodes": self.nodes}
         if method == "DOM.describeNode":
             return {"node": {"nodeName": "IFRAME", "attributes": ["src", self.frame] if self.frame else []}}
@@ -923,11 +927,15 @@ def pointer_offline():
                         ({"tool": "move_at", "x": True, "y": 5}, "move_at needs x and y"),
                         ({"tool": "move_at", "x": 1, "y": 5, "uid": "1_1"}, "move_at does not take uid"),
                         ({"tool": "click_down", "button": "side"}, "click_down's button must be left, right or middle"),
+                        ({"tool": "click_down"}, "click_down needs on"),
+                        ({"tool": "click_down", "on": 3}, "click_down needs on"),
+                        ({"tool": "click_down", "count": 2, "on": "Go"}, "click_down's on goes on the first press"),
                         ({"tool": "click_up", "count": 4}, "click_up's count must be 1, 2 or 3")):
         check("pointer refuses %s" % json.dumps(step), (pointer.problem(step) or "").startswith(wrong), pointer.problem(step))
-    check("and passes a move_at of fractional pixels and a right double click",
-          pointer.problem({"tool": "move_at", "x": 10.5, "y": 0}) is None
-          and pointer.problem({"tool": "click_down", "button": "right", "count": 2}) is None)
+    check("and passes a move_at of fractional pixels, a right double click, and presses naming what they press or "
+          "nothing", pointer.problem({"tool": "move_at", "x": 10.5, "y": 0}) is None
+          and pointer.problem({"tool": "click_down", "button": "right", "count": 2}) is None
+          and pointer.problem({"tool": "click_down", "on": "Go"}) is None and pointer.problem({"tool": "click_down", "on": ""}) is None)
     hand = Hand()
     content, failed = pointer.run({"tool": "click_down"}, "P1", lambda: hand)
     check("a press before the pointer is placed on the tab is refused, and sends nothing",
@@ -971,7 +979,7 @@ def pointer_offline():
           failed and "as when a dialog is open on it: answer it with a handle_dialog step first" in content[0]["text"]
           and hand.events == [], repr(content))
     try:
-        steps.check([{"tool": "move_at", "x": 1, "y": 2}, {"tool": "click_down"}, {"tool": "click_up", "count": 2}], {})
+        steps.check([{"tool": "move_at", "x": 1, "y": 2}, {"tool": "click_down", "on": ""}, {"tool": "click_up", "count": 2}], {})
         passed_check = True
     except steps.StepError:
         passed_check = False
@@ -1021,6 +1029,52 @@ def hit_offline():
     hit.read(hand, "S1", 10.4, 20.6)
     check("a scrolled page's point is read at its place in the document, in whole pixels", hand.asked == [(10, 521)],
           repr(hand.asked))
+
+    def carries(said, on):
+        return hit.carries(hit.What("text", said, [said], False, False, None), on)
+
+    check("on is carried by a name holding its words, whole, in order, case aside",
+          carries("Bold (Ctrl+B)", "bold") and carries("Clicks so far: 12", "so far") and carries("CAFÉ", "café"))
+    check("but not by one holding them only inside other words, or out of order",
+          not carries("Clicks so far: 12", "1") and not carries("Clicks so far: 12", "far so")
+          and not carries("Insert link", "Ins"))
+    check("an on of no words, a symbol, is carried by a name holding it", carries("+ New", "+") and not carries("Close", "x"))
+
+
+def on_offline():
+    """click_down's on: a press is sent only when what is at the point carries its words."""
+    hand = Hand()
+    pointer.run({"tool": "move_at", "x": 5, "y": 6}, "P5", lambda: hand)
+    content, failed = pointer.run({"tool": "click_down", "on": "go"}, "P5", lambda: hand)
+    check("a press whose on names what is there goes out",
+          not failed and hand.events[-1]["type"] == "mousePressed" and 'on button "Go"' in content[0]["text"], repr(content))
+    pointer.run({"tool": "click_up"}, "P5", lambda: hand)
+    sent = len(hand.events)
+    content, failed = pointer.run({"tool": "click_down", "on": "Buy"}, "P5", lambda: hand)
+    check("one whose on names something else is not sent, and says what is there",
+          failed and len(hand.events) == sent and content[0]["text"].startswith(
+              'Not pressed: at 5,6 is button "Go", not "Buy". The page may have changed since your screenshot'),
+          repr(content))
+    content, failed = pointer.run({"tool": "click_down", "on": ""}, "P5", lambda: hand)
+    check("and leaves the button up, so a press with on \"\" goes out there after it",
+          not failed and len(hand.events) == sent + 1, repr(content))
+    pointer.run({"tool": "click_up"}, "P5", lambda: hand)
+    content, failed = pointer.run({"tool": "click_down", "count": 2}, "P5", lambda: hand)
+    check("a second press of a double click, which takes no on, goes out unchecked", not failed, repr(content))
+    pointer.run({"tool": "click_up", "count": 2}, "P5", lambda: hand)
+    frame = [ax("RootWebArea", "page", 1), ax("Iframe", "", 2, 1, backend=7)]
+    content, failed = pointer.run({"tool": "click_down", "on": "Accept all"}, "P5",
+                                  lambda: Hand(nodes=frame, frame="https://consent.example/"))
+    check("one at a frame from another site is not sent for any on but \"\", naming where the frame is from",
+          failed and "is a frame from consent.example, which browserd cannot read into" in content[0]["text"],
+          repr(content))
+    content, failed = pointer.run({"tool": "click_down", "on": "Go"}, "P5", lambda: Hand(unread=True))
+    check("nor at a point browserd could not read",
+          failed and content[0]["text"].startswith('Not pressed: browserd could not read what is at 5,6'), repr(content))
+    hand = Hand(unread=True)
+    content, failed = pointer.run({"tool": "click_down", "on": ""}, "P5", lambda: hand)
+    check("but with on \"\" it goes out there, saying it could not read what is there",
+          not failed and hand.events and "(browserd could not read what is there:" in content[0]["text"], repr(content))
 
 
 def limits_offline():

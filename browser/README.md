@@ -500,15 +500,23 @@ same tabs under the same ids. A crash leaves the same.
   names the menu, with no words of its items'. With no control, it names the text drawn right in the element hit (a
   paragraph's, a clickable div's, an SVG text's), else its role (a canvas). A frame from another site, which Chrome
   keeps in another process, is named only by where it is from. The read takes about 2 ms (measured: each call 1 ms
-  or less on Windows). chrome-devtools-mcp's own `click_at` (behind `--experimental-vision`, which browserd does
+  or less on Windows). A `click_down` names what it presses in `on`, a few words as the screenshot shows them, and a
+  queue with one of count 1 that has none is refused before any step runs; `hit.carries` checks them against what
+  the read found, and a press there that does not carry them is not sent: the step fails, saying what is there, and
+  the queue stops. Words match whole and in order, case aside, in a name or the text found (`on: "Bold"` passes on
+  `button "Bold (Ctrl+B)"`, `on: "1"` fails on `text "Clicks so far: 12"`), so a popup, a layer or a reload under the
+  point stops the press when it does not carry them, and so does a layer already there that the screenshot did not
+  show (one at opacity 0). `on: ""` presses what has no words (a canvas, a map, a drag's handle) and checks nothing.
+  A frame from another site, or a point browserd could not read, fails any `on` but `""`. Only the first press of a
+  double or triple click takes `on`. Keys are not checked. chrome-devtools-mcp's own `click_at` (behind `--experimental-vision`, which browserd does
   not pass) cannot hover or drag: WebGames' herding needs the pointer moved over a canvas, and an agent given
   `click_at` spent 40 of them standing in for moves.
 - **No check compares a press with the agent's last screenshot.** browserd had one, a click guard that stopped a
   press, or keys, when the page had changed there since that screenshot (`../experiments/findings/click-guard.md`,
   `real-sites.md`). It was removed: on a Slides deck it made 22 stops, none needed, since Slides types into a frame it
   could not follow, and a press after a step of the same queue that changed the page always looked changed; the agent
-  stopped chaining clicks and took twice Playwright's deck turns (`trip-compare.md`). A press's report names what it
-  landed on instead (above).
+  stopped chaining clicks and took twice Playwright's deck turns (`trip-compare.md`). A press names what it presses
+  in `on` instead, checked against what is there (above).
 - **Every snapshot a queue reports is a view**: `take_snapshot`'s, `wait_for`'s, an `includeSnapshot`
   step's and the failed queue's. A reply's snapshot runs from chrome-devtools-mcp's
   `## Latest page snapshot` line to the next of the headers it can put after one
@@ -681,8 +689,8 @@ same tabs under the same ids. A crash leaves the same.
     canvas down a scrolled page in a viewport screenshot's own pixels, and click it there with `move_at`,
     `click_down` and `click_up`; its pointer checks drag across a pad that records trusted mouse events, click a
     button whose alert holds the let-go, and then try a `move_at` and a screenshot with that alert still open. Its
-    press checks press with no screenshot, under a layer raised since, and twice for a double click, and read what
-    each press landed on.
+    press checks press with no screenshot, under a layer raised since (not pressed for its `on`, then pressed with
+    `on: ""`), and twice for a double click, and read what each press landed on.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; their downloads go in a `Folder` of their own in a temporary folder, never `~/Downloads`
     (`downloads_live`, run last, sets the throwaway profile to ask where to save each file, and quits and starts

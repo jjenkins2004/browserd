@@ -11,10 +11,14 @@ from . import hit
 BUTTONS = {"left": 1, "right": 2, "middle": 4}  # CDP's buttons bit for each
 MOST_COUNT = 3  # a triple click selects a paragraph; no page counts further
 DIALOG_WAIT = 5.0  # seconds a step waits for the page to take its input; a dialog it opens holds it till answered
-KEYS = {"move_at": {"tool", "x", "y"}, "click_down": {"tool", "button", "count"},
+KEYS = {"move_at": {"tool", "x", "y"}, "click_down": {"tool", "on", "button", "count"},
         "click_up": {"tool", "button", "count"}}
 STEPS = tuple(KEYS)
 EVENTS = {"move_at": "mouseMoved", "click_down": "mousePressed", "click_up": "mouseReleased"}
+
+
+class Missed(cdp.CdpError):
+    """A press not sent: what is at the point does not carry the words its on names, or could not be read."""
 
 
 class Busy(cdp.CdpError):
@@ -46,6 +50,11 @@ def problem(step):
     count = step.get("count", 1)
     if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MOST_COUNT:
         return "%s's count must be 1, 2 or 3: which click of a double or triple click this is" % tool
+    if tool == "click_down" and count > 1 and "on" in step:
+        return "click_down's on goes on the first press of a double or triple click, which is checked; give this one none"
+    if tool == "click_down" and count == 1 and not isinstance(step.get("on"), str):
+        return ('click_down needs on: a few words of what it presses, as the screenshot shows them (a button\'s label, '
+                'a menu item\'s text), or "" for what has none (a canvas, a map, a drag\'s handle)')
     return None
 
 
@@ -54,8 +63,10 @@ def describe():
     return "\n".join([
         "  move_at(x: number, y: number) - Move the pointer to a point's CSS coordinates in a viewport screenshot, "
         "over what is there (a hover); with a button down, a drag",
-        "  click_down(button?: string, count?: integer) - Press a button (left, right or middle; default left) where "
-        "the pointer is, and hold it; count is which click of a double or triple click this is (default 1)",
+        "  click_down(on: string, button?: string, count?: integer) - Press a button (left, right or middle; default "
+        "left) where the pointer is, and hold it; on is a few words of what it presses, as the screenshot shows them, "
+        "and it is not pressed when what is there does not carry them (\"\" for what has none: a canvas, a map); count "
+        "is which click of a double or triple click this is (default 1), and only the first takes on",
         "  click_up(button?: string, count?: integer) - Let go of a button click_down holds, where the pointer is; "
         "give it the same count as that click_down (default 1)",
     ])
@@ -93,7 +104,10 @@ def run(step, target, connect):
     else:
         event.update(button=button, clickCount=step.get("count", 1))
     try:
-        dialog, landed = _send(event, target, connect, tool == "click_down")
+        dialog, landed = _send(event, target, connect, tool == "click_down",
+                               step.get("on") if step.get("count", 1) == 1 else None)
+    except Missed as exc:
+        return _said(str(exc)), True
     except Busy as exc:
         _pointers[target] = {"x": x, "y": y, "held": held}
         return _said("sent the input, but %s" % exc), True
@@ -114,9 +128,10 @@ def run(step, target, connect):
     return _said(text), False
 
 
-def _send(event, target, connect, press=False):
+def _send(event, target, connect, press=False, on=None):
     """Send one mouse event to the tab; (the dialog ({type, message}) it opened when that kept the page from taking it
-    in time, or None; for a press, what it lands on, read just before it goes out, as its report says it)."""
+    in time, or None; for a press, what it lands on, read just before it goes out, as its report says it). A press
+    whose on is not "" or None is not sent, raising Missed, when what is there does not carry its words."""
     browser = connect()
     try:
         session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
@@ -128,9 +143,18 @@ def _send(event, target, connect, press=False):
         landed = None
         if press:
             try:
-                landed = "on " + hit.described(hit.read(browser, session, event["x"], event["y"]))
+                what = hit.read(browser, session, event["x"], event["y"])
             except cdp.CdpError as exc:
+                if on:
+                    raise Missed('Not pressed: browserd could not read what is at %g,%g (%s), so not whether it is "%s"; '
+                                 'give on as "" to press there anyway' % (event["x"], event["y"], exc, on))
                 landed = "(browserd could not read what is there: %s)" % exc
+            else:
+                if on and not hit.carries(what, on):
+                    raise Missed('Not pressed: at %g,%g is %s, not "%s". The page may have changed since your '
+                                 'screenshot: take one, or give on as "" to press there anyway'
+                                 % (event["x"], event["y"], hit.described(what), on))
+                landed = "on " + hit.described(what)
         try:
             browser.call("Input.dispatchMouseEvent", session, DIALOG_WAIT, **event)
         except cdp.Late:

@@ -1,10 +1,12 @@
 """What a press at a point lands on, read off Chrome's accessibility tree just before the press goes out: the control
 there and its words, as a snapshot's view names them.
 
-README.md, "Agent Gotchas & Invariants", says what a press reports of it.
+README.md, "Agent Gotchas & Invariants", says what a press reports of it, and how its on is checked.
 """
 
 import collections
+import re
+import unicodedata
 import urllib.parse
 
 from ..chrome import cdp
@@ -78,6 +80,20 @@ def read(browser, session, x, y):
     return What(role, name, words, False, False, None)
 
 
+def carries(what, on):
+    """Whether what a press lands on carries the words on names: all of them, whole, in order and next to each other,
+    in one of its names or its text, case aside (`Bold` in "Bold (Ctrl+B)", but not `1` in "Clicks so far: 12"). An on
+    with no words, a symbol like +, need only be in one."""
+    need = _words(on)
+    for said in what.words:
+        have = _words(said)
+        if need and any(have[at:at + len(need)] == need for at in range(len(have) - len(need) + 1)):
+            return True
+        if not need and _plain(on) in _plain(said):
+            return True
+    return False
+
+
 def described(what):
     """What a press landed on, for its report: `button "Bold (Ctrl+B)"`."""
     if what.frame is not None:
@@ -89,6 +105,14 @@ def described(what):
         role = what.role if what.role not in ("generic", "none") else "a part of the page"
         return "%s, which has no words%s" % (role, " (disabled)" if what.disabled else "")
     return '%s "%s"%s' % (what.role if what.control else "text", name, " (disabled)" if what.disabled else "")
+
+
+def _plain(text):
+    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def _words(text):
+    return re.findall(r"\w+", _plain(text))
 
 
 def _role(node):

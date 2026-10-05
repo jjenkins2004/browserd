@@ -334,9 +334,11 @@ leaving (unsaved changes); give it handleBeforeUnload "dismiss" to stay.
 Pixels: a take_screenshot of the viewport comes back as an image, one pixel per CSS pixel unless its line gives a
 factor to multiply by. move_at moves the pointer to a point in it, and click_down and click_up press and let go of a
 button where the pointer is: a click is move_at, click_down, click_up; a drag, move_at, click_down, move_at, click_up;
-a double click, a click then click_down and click_up, each with count 2. click_down's line names what it pressed on,
-as a snapshot names it. Use them for what has no uid, like a slide, a map or a canvas, and end the queue with
-take_screenshot to see what they did. take_screenshot with scale 0.5 costs a
+a double click, a click then click_down and click_up, each with count 2. click_down needs on, a few words of what it
+presses as the screenshot shows them (on: "Insert", on: "Bold"): it is not pressed, and the queue stops, when what is
+there does not carry them, as when a popup opened over it; on: "" presses what has no words, like a canvas, a map or a
+drag's handle. Its line names what it pressed on, as a snapshot names it. Use them for what has no uid, like a slide, a
+map or a canvas, and end the queue with take_screenshot to see what they did. take_screenshot with scale 0.5 costs a
 quarter of the tokens: use it to see what is where, and no scale to read small text or aim at anything under about 16
 CSS pixels.
 

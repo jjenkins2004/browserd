@@ -41,6 +41,7 @@ if __name__ == "__main__":
     print()
     steps.pointer_offline()
     steps.hit_offline()
+    steps.on_offline()
     print()
     steps.limits_offline()
     print()
