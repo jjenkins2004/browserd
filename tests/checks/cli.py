@@ -6,6 +6,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import types
 
 from browser import server, system
 from browser.cli import service
@@ -17,7 +19,7 @@ from harness import check, refusal, serving
 
 def service_offline():
     saved = (server.URL, server.PORT, server.ROOT, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE,
-             subprocess.Popen)
+             service.time, subprocess.Popen)
     code = paths.ROOT  # the folder holding the browser package
     workdir = tempfile.mkdtemp(prefix="browser-service-")
     stand_ins = []
@@ -34,6 +36,9 @@ def service_offline():
         server.PID_FILE = os.path.join(workdir, "server.pid")
         server.LOG_FILE = os.path.join(workdir, "server.log")
         service.LOCK_FILE = os.path.join(workdir, "start.lock")
+        # service's looks at a stopping stand-in a tenth as far apart; its deadlines stay real, as the stand-ins are real
+        # processes.
+        service.time = types.SimpleNamespace(time=time.time, sleep=lambda seconds: time.sleep(seconds / 10))
 
         free = mcp.Server("127.0.0.1", 0, [], "nobody")
         aim(free.server_address[1])
@@ -121,7 +126,7 @@ def service_offline():
             if stand_in.stdout:
                 stand_in.stdout.close()
         (server.URL, server.PORT, server.ROOT, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE,
-         subprocess.Popen) = saved
+         service.time, subprocess.Popen) = saved
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -147,8 +152,8 @@ def paths_offline():
         check("the version is read from VERSION, and unknown without one", paths.version() == "unknown")
         with open(os.path.join(workdir, "VERSION"), "w") as handle:
             handle.write("1.2.3\n")
-        check("browserd version names the version and the folder", service.version() == "browserd 1.2.3 (%s)" % workdir,
-              service.version())
+        check("browserd version names the version and the folder",
+              service.version() == "browserd 1.2.3 (%s)" % service._home(workdir), service.version())
 
         free = mcp.Server("127.0.0.1", 0, [], "nobody")
         server.PORT = free.server_address[1]

@@ -24,12 +24,21 @@ passed, failed, skipped = [], [], []
 
 
 STAND_IN = Profile("School", "/nowhere/Chrome-School", 9223)  # the profile offline checks name; no Chrome is behind it
+SERVE_POLL = 0.01  # seconds between a stand-in server's looks for its shutdown, which waits on one; serve_forever's is 0.5
 
 
 def stand_in_state(workdir, profile=STAND_IN):
     """A state.db in workdir holding one profile."""
-    state = State(os.path.join(workdir, "state.db"))
+    state = unsynced(State(os.path.join(workdir, "state.db")))
     state.add_profile(profile)
+    return state
+
+
+def unsynced(state):
+    """state, its writes no longer waiting on the disk: each costs some 4ms on Windows, and a check's records need not
+    outlive a crash. A check that reopens the file keeps a State as the server has it."""
+    state._db.execute("PRAGMA synchronous=OFF")
+    state._db.execute("PRAGMA journal_mode=MEMORY")
     return state
 
 
@@ -57,7 +66,7 @@ def refusal(run, kind: type[BaseException] = cdp.CdpError):
 def serving(tools, name="check"):
     """An mcp.Server on a free port, serving on a thread, and a session its checks' requests carry."""
     httpd = mcp.Server("127.0.0.1", 0, tools, name)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, args=(SERVE_POLL,), daemon=True).start()
     setattr(httpd, "session", initialize(httpd))
     return httpd
 

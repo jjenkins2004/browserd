@@ -47,6 +47,7 @@ class Blocked:
 
 def queue_offline():
     workdir = tempfile.mkdtemp(prefix="browser-steps-")
+    gap, steps.GAP = steps.GAP, 0  # a stand-in page has nothing to react to between steps
     try:
         def load(**arguments):
             return refusal(lambda: steps.load(arguments, workdir), steps.StepError)
@@ -333,6 +334,7 @@ def queue_offline():
         check("but stops none of a session a call has resumed since", workers.pause(["paus"], lambda: False) == 0
               and paused._devtools.alive())
     finally:
+        steps.GAP = gap
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -585,34 +587,54 @@ class Page:
         return "## Latest page snapshot\n" + self.page(self.taken)
 
 
+class Clock:
+    """A module's time, stood in for: sleep moves it on at once, so a wait of seconds takes none."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def time(self):
+        return self.now
+
+    monotonic = time
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
 def waits():
-    """checked.wait's snapshot conditions over pages whose text goes, stays, or always changes."""
-    root = 'uid=1_0 RootWebArea "Form" url="https://example.com/Parsing"'
-    going = Page(lambda n: root + ('\n  uid=1_1 StaticText "Parsing your resume"' if n < 3 else ""))
-    said, failed = checked.run(going, 1, {"tool": "wait", "gone": "Parsing your resume"})
-    check("a wait for text to go passes once a snapshot no longer holds it",
-          not failed and "is off the page" in said and going.taken == 3, said)
-    late = Page(lambda n: root + ('\n  uid=1_1 StaticText "Parsing your resume"' if 2 <= n < 4 else ""))
-    said, failed = checked.run(late, 1, {"tool": "wait", "gone": "Parsing your resume"})
-    check("a wait for text to go waits for it to show first, when the page starts its work late",
-          not failed and "is off the page" in said and late.taken == 4, said)
-    for text in ("Parsing", "RootWebArea"):
-        said, failed = checked.run(Page(lambda n: root), 1, {"tool": "wait", "gone": text, "timeout": 1000})
-        check("a wait for text found only in a url, uid or role fails once its time to show is up (%s)" % text,
-              failed and "did not show on the page in the wait's first 1s" in said, said)
-    said, failed = checked.run(Page(lambda n: root), 1, {"tool": "wait", "gone": "Form", "timeout": 500})
-    check("a wait for text that stays fails at its timeout, saying so", failed and "still on the page after 500ms" in said, said)
-    began = time.monotonic()
-    said, failed = checked.run(Page(lambda n: root), 1, {"tool": "wait", "still": 500, "timeout": 3000})
-    check("a wait for a page that does not change passes once still ms have gone by",
-          not failed and "not changed for 500ms" in said and time.monotonic() - began >= 0.5, said)
-    said, failed = checked.run(Page(lambda n: 'uid=1_0 RootWebArea "Tick %d"' % n), 1, {"tool": "wait", "still": 500, "timeout": 1500})
-    check("a wait for a page that keeps changing fails at its timeout", failed and "did not stay unchanged" in said, said)
-    began = time.monotonic()
-    said, failed = checked.run(Page(lambda n: 'uid=1_0 RootWebArea "Tick %d"' % n), 1,
-                               {"tool": "wait", "still": 500, "timeout": 20000}, left=1.0)
-    check("a wait longer than the queue has left is cut to it, and says so when it fails",
-          failed and "its timeout was cut to the 1.0s the queue had left" in said and time.monotonic() - began < 5, said)
+    """checked.wait's snapshot conditions over pages whose text goes, stays, or always changes, on a Clock."""
+    clock = Clock()
+    saved, checked.time = checked.time, clock
+    try:
+        root = 'uid=1_0 RootWebArea "Form" url="https://example.com/Parsing"'
+        going = Page(lambda n: root + ('\n  uid=1_1 StaticText "Parsing your resume"' if n < 3 else ""))
+        said, failed = checked.run(going, 1, {"tool": "wait", "gone": "Parsing your resume"})
+        check("a wait for text to go passes once a snapshot no longer holds it",
+              not failed and "is off the page" in said and going.taken == 3, said)
+        late = Page(lambda n: root + ('\n  uid=1_1 StaticText "Parsing your resume"' if 2 <= n < 4 else ""))
+        said, failed = checked.run(late, 1, {"tool": "wait", "gone": "Parsing your resume"})
+        check("a wait for text to go waits for it to show first, when the page starts its work late",
+              not failed and "is off the page" in said and late.taken == 4, said)
+        for text in ("Parsing", "RootWebArea"):
+            said, failed = checked.run(Page(lambda n: root), 1, {"tool": "wait", "gone": text, "timeout": 1000})
+            check("a wait for text found only in a url, uid or role fails once its time to show is up (%s)" % text,
+                  failed and "did not show on the page in the wait's first 1s" in said, said)
+        said, failed = checked.run(Page(lambda n: root), 1, {"tool": "wait", "gone": "Form", "timeout": 500})
+        check("a wait for text that stays fails at its timeout, saying so", failed and "still on the page after 500ms" in said, said)
+        began = clock.monotonic()
+        said, failed = checked.run(Page(lambda n: root), 1, {"tool": "wait", "still": 500, "timeout": 3000})
+        check("a wait for a page that does not change passes once still ms have gone by",
+              not failed and "not changed for 500ms" in said and clock.monotonic() - began >= 0.5, said)
+        said, failed = checked.run(Page(lambda n: 'uid=1_0 RootWebArea "Tick %d"' % n), 1, {"tool": "wait", "still": 500, "timeout": 1500})
+        check("a wait for a page that keeps changing fails at its timeout", failed and "did not stay unchanged" in said, said)
+        began = clock.monotonic()
+        said, failed = checked.run(Page(lambda n: 'uid=1_0 RootWebArea "Tick %d"' % n), 1,
+                                   {"tool": "wait", "still": 500, "timeout": 20000}, left=1.0)
+        check("a wait longer than the queue has left is cut to it, and says so when it fails",
+              failed and "its timeout was cut to the 1.0s the queue had left" in said and clock.monotonic() - began < 5, said)
+    finally:
+        checked.time = saved
 
 
 class FakeDialogs:
@@ -648,7 +670,7 @@ def dialogs_offline():
     connection = FakeDialogs()
     answerer = dialogs.Answerer("T1", {"tool": "handle_dialog", "action": "dismiss"}, lambda: connection)
     answerer.start_listening()
-    check("no dialog within the late wait leaves nothing answered", answerer.answered(0.2) is None
+    check("no dialog within the late wait leaves nothing answered", answerer.answered(0.02) is None
           and all(method != "Page.handleJavaScriptDialog" for method, _ in connection.calls), repr(connection.calls))
 
     def unreachable():
@@ -658,9 +680,10 @@ def dialogs_offline():
     answerer.start_listening()
     check("an answerer that cannot reach the tab answers nothing", answerer.answered(0.2) is None)
 
-    saved = dialogs.Answerer
+    saved, gap = dialogs.Answerer, steps.GAP
     workdir = tempfile.mkdtemp(prefix="browser-dialogs-")
     try:
+        steps.GAP = 0  # a stand-in page has nothing to react to between steps
         called = lambda name: os.path.join(workdir, "001-" + name)
         dialogs.Answerer = lambda target, handle, connect: saved(target, handle, lambda: FakeDialogs(opens=1))
         fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False)])
@@ -671,7 +694,7 @@ def dialogs_offline():
               not result["isError"] and "--- 2 handle_dialog ok" in report and "was accepted as it opened" in report
               and [tool for tool, _ in fake.calls] == ["click"], report)
         dialogs.Answerer = lambda target, handle, connect: saved(target, handle, lambda: FakeDialogs())
-        saved_late, dialogs.LATE = dialogs.LATE, 0.2
+        saved_late, dialogs.LATE = dialogs.LATE, 0.02
         fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False),
                              ([{"type": "text", "text": "Error: No open dialog found"}], True)])
         result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "handle_dialog", "action": "accept"}],
@@ -690,7 +713,7 @@ def dialogs_offline():
               made == [] and not result["isError"] and [tool for tool, _ in fake.calls] == ["evaluate_script", "handle_dialog"],
               text_of(result["content"]))
     finally:
-        dialogs.Answerer = saved
+        dialogs.Answerer, steps.GAP = saved, gap
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -1085,16 +1108,17 @@ def on_offline():
 def limits_offline():
     """What a queue refuses or stops for: its time, a fill that would do harm, a chrome-devtools-mcp timeout too long."""
     workdir = tempfile.mkdtemp(prefix="browser-limits-")
-    saved = steps.QUEUE_MOST
+    saved, gap = steps.QUEUE_MOST, steps.GAP
     try:
+        steps.GAP = 0  # a stand-in page has nothing to react to between steps
         called = lambda name: os.path.join(workdir, "001-" + name)
 
         class Slow(FakeDevtools):
             def call(self, tool, arguments, wait=None):
-                time.sleep(0.3)
+                time.sleep(0.03)
                 return super().call(tool, arguments, wait)
 
-        steps.QUEUE_MOST = 0.2
+        steps.QUEUE_MOST = 0.02
         fake = Slow([([{"type": "text", "text": "Successfully clicked on the element"}], False)] * 3)
         result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "click", "uid": "1_2"},
                                      {"tool": "click", "uid": "1_3"}], called)
@@ -1160,5 +1184,5 @@ def limits_offline():
         check("a dialog answered for a step that then failed is still reported",
               "was accepted as it opened, though its handle_dialog step did not run" in report, report)
     finally:
-        steps.QUEUE_MOST = saved
+        steps.QUEUE_MOST, steps.GAP = saved, gap
         shutil.rmtree(workdir, ignore_errors=True)

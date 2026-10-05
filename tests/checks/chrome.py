@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 
 from browser import system
@@ -14,6 +15,7 @@ from browser.protocol import mcp
 from browser.steps import steps
 from browser.records.state import State
 from browser.protocol.ws import WebSocketError
+from checks.steps import Clock
 from harness import FakeDevtools, STAND_IN, check, chrome_folder, refusal, text_of
 
 
@@ -54,18 +56,19 @@ def created(target, opener: "str | None" = "T1", kind="page"):
 
 
 def focus_offline():
-    """opens: what a tab a page opened did on screen put back, a window the user opened shown, and show."""
-    saved = (focus.front, focus.bring, system.happened, system.minimize, opens.TAKE_WAIT, opens.POLL)
+    """opens: what a tab a page opened did on screen put back, a window the user opened shown, and show, on a Clock."""
+    saved = (focus.front, focus.bring, system.happened, system.minimize, opens.time)
     fronts, brought, minimized, record = [], [], [], []
     focus.front = lambda: fronts.pop(0) if fronts else 77
     focus.bring = lambda pid: brought.append(pid) or True
     system.happened = lambda pid, since: [entry for entry in record if entry[0] >= since]
     system.minimize = lambda window: minimized.append(window) or True
-    opens.TAKE_WAIT, opens.POLL = 0.05, 0.01
+    clock = opens.time = Clock()
+    opens._shown.clear()  # what an earlier group's show left, stamped on another clock
 
     def kept(events, in_front, happened=(), state="minimized"):
         fronts[:], brought[:], minimized[:] = in_front, [], []
-        now = time.monotonic()
+        now = clock.monotonic()
         record[:] = [(now + when, kind, window, before) for when, kind, window, before in happened]
         browser, lines = FakeEvents(events), []
         browser.state = state
@@ -107,7 +110,7 @@ def focus_offline():
         _, lines = kept([created("P1")], [], [(-0.03, "restored", 504, None), (-0.02, "front", 504, FakeEvents.pid)])
         check("nor when the OS says the School Chrome had the focus before the tab took it", brought == []
               and minimized == [] and lines[0].startswith("left this Chrome as it was"), repr((minimized, lines)))
-        opens._shown[FakeEvents.pid] = time.monotonic()
+        opens._shown[FakeEvents.pid] = clock.monotonic()
         _, lines = kept([created("P1")], [77], [(-0.03, "restored", 505, None)])
         opens._shown.clear()
         check("nor a window Open Chrome or Show brought up just before", minimized == [], repr((minimized, lines)))
@@ -143,23 +146,32 @@ def focus_offline():
                   "url": "https://example.com/w", "newWindow": True, "windowState": "minimized",
                   "browserContextId": "C1"}), repr(browser.calls[-1]))
     finally:
-        focus.front, focus.bring, system.happened, system.minimize, opens.TAKE_WAIT, opens.POLL = saved
+        focus.front, focus.bring, system.happened, system.minimize, opens.time = saved
         opens._shown.clear()
 
 
 class FakeDownloads:
-    """The connection a downloads.Watcher holds: it hands out the events in `events`, which a check may add to, one per
-    wait."""
+    """The connection a downloads.Watcher holds: it hands out the events in `events`, and those a check adds, one per
+    wait, and sets `drained` once it has none left, so the Watcher has taken in each it handed out."""
 
     def __init__(self, events=()):
         self.events = list(events)
+        self.drained = threading.Event()
+        self._lock = threading.Lock()
+
+    def add(self, *events):
+        with self._lock:
+            self.drained.clear()
+            self.events += events
 
     def call(self, method, session=None, **params):
         return {"sessionId": "S1"} if method == "Target.attachToTarget" else {}
 
     def next_event(self, timeout):
-        if self.events:
-            return self.events.pop(0)
+        with self._lock:
+            if self.events:
+                return self.events.pop(0)
+            self.drained.set()
         time.sleep(0.01)
         return None
 
@@ -199,11 +211,12 @@ class FakeFolder:
 
 
 class FolderConnection:
-    """The connection a downloads.Folder holds: it records what it is asked, hands out `events`, and raises
-    WebSocketError, as a dropped connection does, once `drop` is set."""
+    """The connection a downloads.Folder holds: it records what it is asked, hands out `events`, setting `drained` once
+    it has none left, and raises WebSocketError, as a dropped connection does, once `drop` is set."""
 
     def __init__(self, events=(), refuse=False):
         self.events, self.asked, self.drop, self.closed, self.refuse = list(events), [], False, False, refuse
+        self.drained = threading.Event()
 
     def call(self, method, session=None, **params):
         self.asked.append((method, params))
@@ -216,6 +229,7 @@ class FolderConnection:
             raise WebSocketError("the connection dropped")
         if self.events:
             return self.events.pop(0)
+        self.drained.set()
         time.sleep(0.01)
         return None
 
@@ -226,7 +240,9 @@ class FolderConnection:
 def downloads_offline():
     """downloads.Folder and downloads.Watcher against stand-in connections, and steps.run reporting what they took."""
     workdir = tempfile.mkdtemp(prefix="browser-downloads-")
+    retry = downloads.RETRY
     try:
+        downloads.RETRY = 0.05  # a tenth: its tries again come a tenth as far apart
         target = os.path.join(workdir, "downloads", "School")
         made, running = [], [True]
 
@@ -241,7 +257,7 @@ def downloads_offline():
               folder.ready(2) and made[0].asked == [("Browser.setDownloadBehavior", {
                   "behavior": "allow", "downloadPath": target, "eventsEnabled": True})] and os.path.isdir(target),
               repr(made[0].asked))
-        time.sleep(0.1)
+        made[0].drained.wait(2)
         check("it hears where each download went, and in which frame it began",
               folder.download("G1") == {"frame": "F1", "name": "note.txt", "state": "completed",
                                         "path": os.path.join(target, "note.txt")} and folder.begun_in({"F1"}) == ["G1"],
@@ -249,7 +265,7 @@ def downloads_offline():
         made[0].drop = True
         deadline = time.monotonic() + 3
         while len(made) < 2 and time.monotonic() < deadline:
-            time.sleep(0.05)
+            time.sleep(0.01)
         check("when its connection drops while the Chrome runs, it sets the folder again on a new one, since Chrome goes "
               "back to its own settings when the connection that set them closes",
               len(made) == 2 and folder.ready(2) and made[0].closed
@@ -265,7 +281,7 @@ def downloads_offline():
             folder = downloads.Folder("School", target, lambda: refusing.append(FolderConnection(refuse=True))
                                       or refusing[-1], lambda: True)
             folder.start()
-            time.sleep(1.2)
+            time.sleep(downloads.RETRY * 2.4)
             folder.stop()
             folder.join(3)
         finally:
@@ -284,12 +300,13 @@ def downloads_offline():
         stopping = [False]
         folder = downloads.Folder("School", target, refused, lambda: True, lambda: stopping[0])
         folder.start()
-        time.sleep(0.2)
+        time.sleep(downloads.RETRY * 2.4)
         check("one whose Chrome runs but does not answer keeps trying", folder.is_alive() and not folder.ready(0))
         stopping[0] = True
         folder.join(3)
         check("until the server stops", not folder.is_alive())
     finally:
+        downloads.RETRY = retry
         shutil.rmtree(workdir, ignore_errors=True)
 
     heard = FakeFolder()
@@ -297,28 +314,29 @@ def downloads_offline():
     heard.heard["G2"] = {"frame": "T2", "name": "theirs.txt", "state": "completed", "path": "/d/School/theirs.txt"}
     connection = FakeDownloads([will_begin("G1", "note.txt"), will_begin("G2", "theirs.txt", "S2")])
     watcher = downloads.Watcher("T1", lambda: connection, lambda: heard)
+    clock = downloads.time = Clock()  # a take's waits, and BEHIND from when the Watcher's thread heard an end, take none
     watcher.start_listening()
     try:
-        time.sleep(0.1)
+        connection.drained.wait(2)
         got = watcher.take(2)
         check("a download the tab began is taken once it completes, with where the Folder heard it went; another "
               "tab's is not", got == [{"name": "note.txt", "state": "completed", "path": "/d/School/note.txt"}], repr(got))
         check("and is taken only once", watcher.take(0) == [])
-        connection.events.append(will_begin("G3", "big.zip"))
+        connection.add(will_begin("G3", "big.zip"))
         heard.heard["G3"] = {"frame": "T1", "name": "big.zip", "state": "inProgress", "path": None}
-        time.sleep(0.1)
-        started = time.monotonic()
+        connection.drained.wait(2)
+        started = clock.monotonic()
         got = watcher.take(0.3)
         check("one still in progress after the wait is taken as such",
-              got == [{"name": "big.zip", "state": "inProgress", "path": None}] and time.monotonic() - started < 1, repr(got))
-        started = time.monotonic()
+              got == [{"name": "big.zip", "state": "inProgress", "path": None}] and clock.monotonic() - started < 1, repr(got))
+        started = clock.monotonic()
         check("and a take after that neither waits for it nor takes it again",
-              watcher.take(2) == [] and time.monotonic() - started < 0.5)
+              watcher.take(2) == [] and clock.monotonic() - started < 0.5)
         heard.heard["G3"]["state"] = "canceled"
         got = watcher.take(0)
         check("it is taken again once it ends", got == [{"name": "big.zip", "state": "canceled", "path": None}], repr(got))
-        connection.events += [will_begin("G6", "late.csv"), page_progress("G6", "completed")]
-        time.sleep(0.1)
+        connection.add(will_begin("G6", "late.csv"), page_progress("G6", "completed"))
+        connection.drained.wait(2)
         got = watcher.take(0.3)
         check("one the tab says completed but the Folder has not yet heard of waits for it, as still downloading",
               got == [{"name": "late.csv", "state": "inProgress", "path": None}], repr(got))
@@ -326,18 +344,15 @@ def downloads_offline():
         got = watcher.take(2)
         check("and is taken with where it went once the Folder hears it",
               got == [{"name": "late.csv", "state": "completed", "path": "/d/School/late.csv"}], repr(got))
-        saved_behind, downloads.BEHIND = downloads.BEHIND, 0.3
-        try:
-            connection.events += [will_begin("G8", "missed.zip"), page_progress("G8", "completed")]
-            time.sleep(0.1)
-            got = watcher.take(2)
-        finally:
-            downloads.BEHIND = saved_behind
+        connection.add(will_begin("G8", "missed.zip"), page_progress("G8", "completed"))
+        connection.drained.wait(2)
+        got = watcher.take(steps.DOWNLOAD_WAIT)
         check("one the Folder never heard, begun while it reconnected, is taken as completed after BEHIND, where to "
               "unknown, not as downloading for good", got == [{"name": "missed.zip", "state": "completed", "path": None}],
               repr(got))
     finally:
         watcher.stop()
+        downloads.time = time
     workdir = tempfile.mkdtemp(prefix="browser-downloads-")
     try:
         with open(os.path.join(workdir, "unnamed.pdf"), "w") as handle:
@@ -349,7 +364,7 @@ def downloads_offline():
         watcher = downloads.Watcher("T1", lambda: connection, lambda: heard)
         watcher.start_listening()
         try:
-            time.sleep(0.1)
+            connection.drained.wait(2)
             got = watcher.take(2)
         finally:
             watcher.stop()
@@ -365,7 +380,7 @@ def downloads_offline():
     watcher = downloads.Watcher("T1", lambda: connection, lambda: heard)
     watcher.start_listening()
     try:
-        time.sleep(0.1)
+        connection.drained.wait(2)
         got = watcher.take(2)
         check("a download begun in a page the tab opened, or one that page opened, is the tab's; another tab's popup's is not",
               got == [{"name": "popped.pdf", "state": "completed", "path": "/d/School/popped.pdf"}], repr(got))
@@ -375,7 +390,7 @@ def downloads_offline():
     watcher = downloads.Watcher("T1", lambda: connection)
     watcher.start_listening()
     try:
-        time.sleep(0.1)
+        connection.drained.wait(2)
         got = watcher.take(2)
         check("with no Folder, a download the tab began is still taken once it completes, where to unknown",
               got == [{"name": "note.txt", "state": "completed", "path": None}], repr(got))
@@ -399,7 +414,9 @@ def downloads_offline():
             return self.takes.pop(0) if self.takes else []
 
     workdir = tempfile.mkdtemp(prefix="browser-downloads-")
+    gap = steps.GAP
     try:
+        steps.GAP = 0  # a stand-in page has nothing to react to between steps
         called = lambda name: os.path.join(workdir, "001-" + name)
         fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False),
                              ([{"type": "text", "text": "Successfully clicked on the element"}], False)])
@@ -419,6 +436,7 @@ def downloads_offline():
         check("one no Folder heard says it went where Chrome's own settings say",
               report.endswith("--- downloaded note.txt, where Chrome's own download settings say"), report)
     finally:
+        steps.GAP = gap
         shutil.rmtree(workdir, ignore_errors=True)
 
 

@@ -14,7 +14,7 @@ from browser.chrome import cdp, focus, profiles
 from browser.dashboard import page
 from browser.records.state import State
 from browser.tabs.tabs import Tabs
-from harness import FakeChrome, check, chrome_folder, open_session
+from harness import FakeChrome, SERVE_POLL, check, chrome_folder, open_session, unsynced
 
 
 def page_offline():
@@ -22,7 +22,7 @@ def page_offline():
     over, its sessions closed, its Chrome quit, and the profile deleted, in a stand-in Chrome."""
     saved = (profiles.GOOGLE, profiles.FIRST_PORT)
     workdir = tempfile.mkdtemp(prefix="browser-page-")
-    state = State(os.path.join(workdir, "state.db"))
+    state = unsynced(State(os.path.join(workdir, "state.db")))
 
     class Windows:
         opened, quits, refuse, stuck = [], [], False, False
@@ -46,7 +46,7 @@ def page_offline():
     windows, dropped, chrome = Windows(), Dropped(), FakeChrome()
     tabs = Tabs(state, chrome.connect)
     board = page.Page("127.0.0.1", 0, state, (), windows, tabs, dropped)
-    threading.Thread(target=board.serve_forever, daemon=True).start()
+    threading.Thread(target=board.serve_forever, args=(SERVE_POLL,), daemon=True).start()
     here = "127.0.0.1:%d" % board.server_address[1]
 
     def ask(method, path, body=None, **headers):

@@ -12,14 +12,14 @@ from browser.records.state import State
 from browser.tabs.tabs import Tabs
 from browser.tabs.worker import Workers
 from browser.tools import profile_tools
-from harness import FakeChrome, call, check, open_session, serving
+from harness import FakeChrome, call, check, open_session, serving, unsynced
 
 
 def profile_tools_offline():
     """profile_new and profile_delete over HTTP, with a stand-in Google folder and Chrome."""
     saved = (profiles.GOOGLE, profiles.FIRST_PORT)
     workdir = tempfile.mkdtemp(prefix="browser-profile-tools-")
-    state = State(os.path.join(workdir, "state.db"))
+    state = unsynced(State(os.path.join(workdir, "state.db")))
 
     class Quitting:
         quits = []

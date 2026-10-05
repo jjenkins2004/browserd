@@ -80,8 +80,7 @@ def framing():
         ("125 byte", "w" * 125),
         ("126 byte", "x" * 126),
         ("65535 byte", "y" * 65535),
-        ("65536 byte", "z" * 65536),
-        ("1 MB", "m" * (1 << 20)),
+        ("65536 byte", "z" * 65536),  # a 64-bit length, and more than one read of the socket
     ):
         a, b = paired()
         check("a %s message survives the wire" % label, roundtrip(a, b, message) == message)
@@ -296,6 +295,7 @@ def connecting():
         profile_list(folder, ["Default"])
 
         started = []
+        clock = launch.time = Clock()  # launch's looks for the port, a quarter second apart, take no time
 
         def starting(m, comes_up=True, exits=None):
             def start(profile, flags=()):
@@ -327,15 +327,15 @@ def connecting():
         said = refusal(lambda: launch.launch(profile))
         check("launch refuses a School Chrome running without its port, and starts nothing", "pid 501" in said and not started, said)
         starting(machine(answer=VERSION), comes_up=False)
-        began = time.monotonic()
+        began = clock.time()
         said = refusal(lambda: launch.launch(profile, wait=0.5))
         check("launch says why when Chrome never opens its port, within the wait",
-              "did not answer within" in said and time.monotonic() - began < 3, said)
+              "did not answer within" in said and clock.time() - began < 3, said)
         starting(machine(answer=VERSION), comes_up=False, exits=launch.IN_USE)
-        began = time.monotonic()
+        began = clock.time()
         said = refusal(lambda: launch.launch(profile, wait=5))
         check("a Chrome that exits as another Chrome has the folder under another spelling says so, at once",
-              "spelled another way" in said and time.monotonic() - began < 2, said)
+              "spelled another way" in said and clock.time() - began < 2, said)
         starting(machine(answer=VERSION), comes_up=False, exits=0)
         said = refusal(lambda: launch.launch(profile, wait=0.5))
         check("a Chrome that hands its launch over and exits is waited on, as one still starting is",
@@ -362,7 +362,7 @@ def connecting():
         launch._open = will_not_start
         check("launch passes on why Chrome would not start",
               "Unable to find application" in refusal(lambda: launch.launch(profile, wait=0.5)))
-        launch._open = saved[2]
+        launch._open, launch.time = saved[2], time
 
         # The real OS, against ports this check holds itself.
         for name, value in zip(STANDS_IN, saved[0]):
@@ -439,7 +439,7 @@ def connecting():
     finally:
         for name, value in zip(STANDS_IN, saved[0]):
             setattr(system, name, value)
-        cdp._get, launch._open = saved[1], saved[2]
+        cdp._get, launch._open, launch.time = saved[1], saved[2], time
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -451,6 +451,21 @@ class FakeChrome:
 
     def poll(self):
         return self.code
+
+
+class Clock:
+    """A module's time, stood in for: sleep moves it on at once, so a wait of seconds takes none."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def time(self):
+        return self.now
+
+    monotonic = time
+
+    def sleep(self, seconds):
+        self.now += seconds
 
 
 def lock(folder, pid):
