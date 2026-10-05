@@ -1,7 +1,5 @@
 """What a press at a point lands on, read off Chrome's accessibility tree, or the page's DOM where the tree gives no
 words, just before the press goes out; and whether it carries the words a press's on names.
-
-README.md, "Agent Gotchas & Invariants", says what a press reports of it, and how its on is checked.
 """
 
 import collections
@@ -36,12 +34,12 @@ PREFIX = 4  # letters from which an on's word may begin a longer word of the nam
 # What a click acts on, in CSS: an element with two of them or more inside holds controls, as a menu or a toolbar does.
 CLICKABLE = ", ".join(["a[href]", "button", "input", "select", "textarea", "[tabindex]"]
                       + ["[role=%s]" % role for role in sorted(CONTROLS)])
-# The DOM's own words for an element the tree gives none for (a tool tile under aria-hidden, a consent dialog there):
-# its label, title, alt, placeholder or tooltip, and its text if short, then the same of each element above it (at most
-# 3, through a shadow root's host, below body), up to the first one a click acts on that has words (GeoGebra's tile is
-# an img, focusable but wordless, in a button that holds its name), or one whose text is too long to be a single
-# control's. It stops below an element holding two controls or more, so a wordless control in a toolbar, or a press in
-# a menu between its items, takes none of their words.
+# The DOM's own words for an element the tree names nothing for (a tool tile under aria-hidden, a consent dialog
+# there), from it and at most 3 elements above it, across a shadow root's host, never to body. The climb stops, taking
+# nothing, at an element holding two CLICKABLEs or more (a toolbar, a menu), so a wordless control, or a press between
+# menu items, takes none of their words; it stops at text longer than SHORT (a holder's); and it stops once any words
+# are found, at an element a click may act on (GeoGebra's tile is a focusable but wordless img in a button holding its
+# name).
 DOM_WORDS = r"""function () {
   // An SVG element has no innerText, and Slides draws each word as a text node of its own, placed by x with no space
   // between: joined with spaces, so "Probe Title" is two words, not "ProbeTitle".
@@ -67,14 +65,16 @@ DOM_WORDS = r"""function () {
 
 def read(browser, session, x, y):
     """What a press at (x, y), CSS px in the viewport, lands on: NOTHING off the page. Raises cdp.CdpError when the
-    page does not answer.
+    page does not answer. It reads the accessibility tree, which a snapshot's view comes from, so the names match a
+    view's; its three calls to the tree take about 2ms in all (measured).
 
     Args:
         browser (cdp.Browser): a connection to the tab's Chrome.
         session (str): its CDP session on the tab.
         x, y (float): the point, as a pointer step's.
     """
-    # DOM.getNodeForLocation takes whole CSS px in the document, so a scrolled page's point is offset by its scroll.
+    # DOM.getNodeForLocation takes whole CSS px in the document, so a scrolled page's point is offset by its scroll; it
+    # skips a pointer-events: none layer, as the press does.
     view = browser.call("Page.getLayoutMetrics", session, WAIT)["cssVisualViewport"]
     try:
         hit = browser.call("DOM.getNodeForLocation", session, WAIT, x=round(x + view["pageX"]),

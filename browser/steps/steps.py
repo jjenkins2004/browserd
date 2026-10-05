@@ -1,7 +1,7 @@
 """The queue: a list of steps run top to bottom on one tab, stopping at the first that fails, and the view each
 reply's snapshot is cut to.
 
-README.md, "Agent Gotchas & Invariants", has the rules for writing a step and what a view keeps.
+README.md, "Agent Gotchas & Invariants", has the rules for writing a step; _view's docstring says what a view keeps.
 """
 
 import json
@@ -15,12 +15,15 @@ from ..chrome import cdp
 from . import checked, dialogs, pointer, screenshot
 from ..tabs.devtools import ROOTS_SPELLED, may_touch
 
-# Tab tools own opening, closing and choosing tabs, and the rest profile a page, which a queue only reads and drives.
+# Left out: the page tools, since the tab tools own tabs; and lighthouse_audit and take_heapsnapshot, which profile a
+# page a queue only reads and drives.
 PAGE_TOOLS = {"new_page", "close_page", "select_page", "list_pages"}
 LEFT_OUT = PAGE_TOOLS | {"lighthouse_audit", "take_heapsnapshot"}
 RESTARTED = ("note: this tab's chrome-devtools-mcp had stopped and was started again, so element uids from before "
              "are gone; take a new snapshot")
-GAP = 0.1  # seconds between steps but two fills, so the page can react to one step before the next
+# Seconds between steps, so the page can react to one step before the next; none between two fills, since
+# chrome-devtools-mcp's fill waits for the page to settle.
+GAP = 0.1
 # ms a navigate_page that names no timeout gets, longer than a selected page's own (worker.py's select_page): a
 # navigation that runs out its timeout still reports ok, on a page half loaded.
 NAVIGATE_TIMEOUT = 30000
@@ -49,7 +52,9 @@ TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool,
 
 SNAPSHOT = "## Latest page snapshot"  # the header chrome-devtools-mcp puts over a snapshot in its reply
 VIEW_OPTIONS = ("under", "full", "find", "after")  # take_snapshot's own options, never sent on to chrome-devtools-mcp
-VIEW_MOST = 10000  # characters a view shows before it is cut; README.md, "Agent Gotchas & Invariants", says why
+# Characters a view shows before it is cut: 145 of 537 views were longer in two benchmark runs, and each later request
+# of a conversation carries every view again (../../experiments/findings/benchmark.md, "The view cap (`hay1`)").
+VIEW_MOST = 10000
 HEADINGS_MOST = 40  # headings below a cut that its note names
 LINE_UID = re.compile(r"^\s*uid=([^\s.]+)")  # a view line's uid, a word run's first
 HEADING = re.compile(r"^\s*uid=\S+ heading ")
@@ -193,8 +198,8 @@ def _command_key(step):
 def check(steps, allowed):
     """Refuse the whole queue, before any step runs, when any step could only fail or do what it was not meant to.
 
-    README.md, "Agent Gotchas & Invariants", says what it refuses and what it rewrites, in the steps themselves;
-    ../tabs/README.md, which file paths it refuses.
+    The tools left out and unknown are refused here; checked.problem, pointer.problem and _arguments_problem say what
+    else each kind of step refuses or rewrites, and ../tabs/README.md which file paths.
 
     Args:
         steps (list[dict]): from load.
@@ -288,7 +293,7 @@ def _arguments_problem(step, tool):
     for key, value in list(given.items()):
         if isinstance(value, str) and properties[key].get("type") == "array" \
                 and properties[key].get("items", {}).get("type") == "string":
-            step[key] = given[key] = value = [value]
+            step[key] = given[key] = value = [value]  # one string for a list of strings (wait_for's text), not refused
         if not _fits(value, properties[key]):
             return "%s's %s must be %s, not %s" % (name, key, _shape(properties[key]), json.dumps(value)[:80])
     for path in [given["filePath"]] if "filePath" in given else given.get("filePaths", []):
@@ -300,7 +305,8 @@ def _arguments_problem(step, tool):
 
 def place_screenshots(steps, path):
     """The steps, with each take_screenshot that gives no filePath given one in the tab's record folder, so its image
-    is saved there.
+    is saved there. A screenshot of an element or the whole page is chrome-devtools-mcp's, which then attaches no image:
+    the step's reply names the file.
 
     Args:
         steps (list[dict]): checked by load and check.
@@ -369,7 +375,7 @@ def _carries_words(node):
 
 
 def _collapsed(node, options):
-    """A native select as one line, in the form README.md, "Agent Gotchas & Invariants", gives."""
+    """A native select as one line: combobox "<name>" = "<value>" <attributes> (<n> options)."""
     name = NAME.match(node["rest"])
     rest = node["rest"][name.end():] if name else node["rest"]
     value = VALUE.search(rest)
@@ -419,7 +425,9 @@ def _view(nodes, depth, under, out):
         if options:
             out.append("  " * depth + _collapsed(node, options))
         elif node["role"] in DATE_ROLES and node["uid"] != under:
-            out.append("  " * depth + node["line"])  # its parts and picker button, which fill cannot take, left out
+            # Its parts and picker button left out: fill cannot take a part (20 of 50 FormFactory runs filled a Month
+            # part, and every such fill failed).
+            out.append("  " * depth + node["line"])
         elif node["role"] in CONTROLS or _carries_words(node):
             out.append("  " * depth + node["line"])
             _view(node["children"], depth + 1, under, out)
@@ -490,8 +498,9 @@ def view(text, path, under=None, full=False, find=None, after=None):
 
 
 def _matching(lines, find):
-    """The lines find matches, ignoring case, with a line between two of them saying how many it left out there;
-    README.md, "Agent Gotchas & Invariants", says why."""
+    """The lines find matches, ignoring case, with a line between two of them saying how many it left out there: two
+    lines shown one after the other read as neighbours (on an MCP-Universe task a find for "ROLE" showed <ROLE>, a
+    block's first line and </ROLE>, its second line left out, and the agent answered with the first alone)."""
     out, left_out = [], 0
     for line in lines:
         if not re.search(find, line, re.I):
@@ -526,8 +535,9 @@ def _after(lines, uid, whole):
 
 def _cut(lines, asked):
     """lines, or those within VIEW_MOST characters and a note giving the take_snapshot call that reads on, asked's
-    options kept, and the headings below the cut. The first line, a page's RootWebArea with its url, always shows
-    and is not counted."""
+    options kept, and the headings below the cut, whose uids read on as after (under a heading gives the heading alone).
+    The first line, a page's RootWebArea with its url, always shows and is not counted. A view cut again to fit a
+    stopped queue's report, under ERROR_MOST, loses this note."""
     if sum(len(line) + 1 for line in lines[1:]) <= VIEW_MOST:
         return lines
     size, shown = 0, 1
@@ -613,10 +623,10 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
         page_id (int): the tab's page id in that process.
         steps (list[dict]): checked by load and check.
         path (callable): the full path for a file name, like record.Call.path; it names where each whole snapshot goes.
-        restarted (bool): the process was started again after dying, so the report says old uids are gone.
+        restarted (bool): the tab's uids may be gone (Worker.ensure says when), so the report says so.
         target (str | None): the tab's target id, for keeping the tab drawn while the queue runs, answering a dialog
-            the moment it opens, a paste's key press and a screenshot of the viewport; None leaves every dialog to
-            chrome-devtools-mcp and fails every paste and screenshot of the viewport.
+            the moment it opens, the pointer steps, a paste's key press and a screenshot of the viewport; None leaves
+            every dialog to chrome-devtools-mcp and fails every pointer step, paste and screenshot of the viewport.
         connect (callable | None): opens a proven connection to the tab's Chrome; given with target.
         began (float | None): time.monotonic() when the call began, if before this, so QUEUE_MOST counts from then:
             tab_open's steps count the time it took to open the tab.
@@ -654,7 +664,8 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
                                                      None if step["tool"] == "navigate_page" else navigated)
                 dialog = OPEN_DIALOG in text and DIALOG_BEFORE not in text
                 if failed and dialog and step["tool"] not in checked.STEPS and step["tool"] not in UNBLOCKED:
-                    # The action opened a dialog, which blocks the page, so the action itself ran out its 5s timeout.
+                    # The action opened a dialog, which blocks the page, so the action itself ran out its 5s timeout. A
+                    # checked step still fails: its read-back never ran.
                     failed = False
                     text += ("\n(a dialog opened during this step and blocked the page, so the step counts as done; "
                              "answer it with a handle_dialog step, and put one right after such a step to skip this 5s)")
@@ -673,7 +684,7 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
                 if failed:
                     report.extend(_after_stop(devtools, page_id, steps, number, path, len("\n".join(report))))
                     break
-                # No GAP between two fills; README.md, "Agent Gotchas & Invariants", says why.
+                # No GAP between two fills; GAP says why.
                 if number < len(steps) and (step["tool"], steps[number]["tool"]) != ("fill", "fill"):
                     time.sleep(GAP)
         finally:
@@ -728,8 +739,17 @@ def _step(devtools, page_id, step, left, answerer, target, connect, read=None):
 
 
 class _Fills:
-    """The reads a queue's runs of fill steps are judged by, each run's elements read in one call as its first step
-    runs; README.md, "Agent Gotchas & Invariants", says which fills use them, and why."""
+    """The reads a queue's runs of fill steps are judged by, each run's elements read in one call as its first step runs
+    (four text boxes in a row took 0.9s, against 1.8s with a read and a GAP per fill;
+    ../../experiments/findings/benchmark.md, "Fills read in one call (8b8695b, `fillrun-ff`)").
+
+    The first step, and each after it that checked.FILL_JS reads as a box (a text-like input, a textarea or a
+    contenteditable, with no combobox or listbox role) up to the first that is not one, is judged by that read; a
+    select, toggle, date or other input is what most often locks or unlocks the fields after it, so after one each fill
+    reads its own element. A read that refuses is taken again at the step's own turn. Not covered: a box the page makes
+    read-only or disabled after the run's read, by a handler an earlier fill set off or by work of its own (a reply or a
+    timer landing), is filled on the read from before; checked.fill_refused says what chrome-devtools-mcp's fill then
+    does."""
 
     def __init__(self, devtools, page_id, steps):
         self.devtools, self.page_id, self.steps = devtools, page_id, steps

@@ -1,7 +1,10 @@
 """A queue's pointer steps, move_at, click_down and click_up: real mouse input browserd sends the tab over its own
 connection, at a viewport screenshot's CSS pixels, as a hand moves, presses and lets go.
 
-README.md, "Agent Gotchas & Invariants", says why they are three steps and how a dialog one opens is reported.
+Three steps, so a click (move_at, click_down, click_up), a drag (a second move_at before the let-go) and a hover (a
+move_at alone) are each made of them, none repeating another's work. chrome-devtools-mcp's own click_at cannot hover
+or drag: on WebGames' herding an agent given it spent 40 of them standing in for moves. README.md, "Agent Gotchas &
+Invariants", says how a handle_dialog step answers a dialog a step opens.
 """
 
 from ..chrome import cdp
@@ -10,7 +13,9 @@ from . import hit
 
 BUTTONS = {"left": 1, "right": 2, "middle": 4}  # CDP's buttons bit for each
 MOST_COUNT = 3  # a triple click selects a paragraph; no page counts further
-DIALOG_WAIT = 5.0  # seconds a step waits for the page to take its input; a dialog it opens holds it till answered
+# Seconds a step waits for the page to take its input: a dialog it opens holds the input until answered (measured: it
+# waited out the whole 20s cdp.CALL_WAIT).
+DIALOG_WAIT = 5.0
 KEYS = {"move_at": {"tool", "x", "y"}, "click_down": {"tool", "on", "button", "count"},
         "click_up": {"tool", "button", "count"}}
 STEPS = tuple(KEYS)
@@ -121,8 +126,10 @@ def run(step, target, connect):
 
 
 def _send(event, target, connect, press, on):
-    """Send one mouse event to the tab; (the dialog ({type, message}) it opened when that kept the page from taking it
-    in time, or None; for a press, what it lands on, as its report says it, from _landed)."""
+    """Send one mouse event to the tab, and return (dialog, landed): dialog is the {type, message} of a dialog it
+    opened that kept the page from taking the input in time, or None; landed is _landed's words for a press, or None.
+    Raises Missed (nothing sent); CdpError (nothing sent) when a dialog open already holds the page; Busy when the
+    page has not taken the input after DIALOG_WAIT and no dialog opened."""
     browser = connect()
     try:
         session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]

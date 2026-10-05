@@ -17,13 +17,14 @@ ANSWER_WAIT = 5.0  # seconds the page has to answer before a screenshot fails, a
 # only another capture brings (measured: every capture answered within 3s nudged, where one in two hung for 60s).
 NUDGE = 0.5
 # A screencast, so Chrome draws a tab it is not drawing (a tab in a minimized window, or a background tab): smallest
-# frames, and few of them, which nothing reads; README.md, "Agent Gotchas & Invariants", says what drawing changes.
+# frames, and few of them, which nothing reads. Undrawn, a click waited out chrome-devtools-mcp's 3s for the page to
+# settle (2.9s a click; 0.2s drawn).
 DRAWN = {"format": "jpeg", "quality": 1, "maxWidth": 16, "maxHeight": 16, "everyNthFrame": 1000}
 LONGEST = 2000  # pixels on the image's longer side; Claude Code shrinks a larger image, moving every point read off it
 
 
 def drawn(browser, session):
-    """Whether Chrome draws the tab until browser closes, through a screencast of it on session."""
+    """Start a screencast so Chrome draws the tab until browser closes, and return whether it started."""
     try:
         browser.call("Page.startScreencast", session, **DRAWN)
     except cdp.CdpError:
@@ -120,7 +121,9 @@ def capture(browser, session, kind, quality, scale):
     clip = {"x": css["pageX"], "y": css["pageY"], "width": css["clientWidth"], "height": css["clientHeight"],
             "scale": fit * css["clientWidth"] / device["clientWidth"]}
     extra = {} if kind == "png" else {"quality": quality}
-    # A scaled capture, or one of a drawn tab, is asked once; README.md, "Agent Gotchas & Invariants", says why.
+    # Asked again, a scaled capture could leave the tab laid out at its scale, moving every point read off a later
+    # screenshot (4 of 15 asked again every 1ms). A drawn tab's capture answers, so it is asked once too; only one at
+    # one image pixel per device pixel (a clip scale of 1) of a tab Chrome will not draw is asked again.
     again = None if drawn(browser, session) or clip["scale"] != 1 else NUDGE
     data = browser.call("Page.captureScreenshot", session, nudge=again, format=kind, clip=clip, **extra)["data"]
     return data, css, fit

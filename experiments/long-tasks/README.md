@@ -87,9 +87,9 @@ answer key and graded in code; trip is written as a person would ask it, and an 
   left to the eye. That a Sheets chart reaches the `.xlsx` export as `xl/charts/` is untested: a run with a chart is
   the first proof.
 - `clean_start` opens the run's one window minimized (`opens.window`), and Chrome does not draw a tab in a minimized
-  window (`../../browser/README.md`, the screenshot gotcha): `record.py` asks each frame again until one comes, but
-  another server's own screenshots and clicks may wait on one. Un-minimize the window before a run, and keep it open,
-  even behind others.
+  window (`../../browser/steps/README.md`, the screenshot gotcha): `record.py` asks each frame again until one comes,
+  but another server's own screenshots and clicks may wait on one. Un-minimize the window before a run, and keep it
+  open, even behind others.
 - SEC refuses a User-Agent without a contact address: `key.py` sends a placeholder one, `SEC_USER_AGENT` a real one.
 - `grade.FLIGHTS_SEARCH` is Google Flights' own encoding of trip's search, copied from its address bar (dates, LAX, SEA,
   nonstop); another city swaps in for SEA. New dates in `prompt.md` need a new copy. Judge a run at once: fares move

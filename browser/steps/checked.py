@@ -21,8 +21,8 @@ APPEAR_WAIT = 3.0  # seconds a wait's gone gives its text to show, since a page 
 WAIT_TIMEOUT = 30000  # ms a wait step gives its condition by default
 WAIT_MOST = 45000  # ms, the longest a step may wait (a wait's or chrome-devtools-mcp tool's timeout, pick's wait)
 SHOWN_OPTIONS = 12
-# How each date or time input type takes its value, in words for fill's refusal; README.md, "Agent Gotchas &
-# Invariants", says how fill_refused asks Chrome whether it takes one.
+# How each date or time input type takes its value, in words for fill's refusal; FILL_JS asks Chrome's own parser
+# whether it takes one.
 DATE_VALUES = {"date": "YYYY-MM-DD, like 1957-08-01", "time": "HH:MM on a 24-hour clock, like 14:30",
                "datetime-local": "YYYY-MM-DDTHH:MM, like 1957-08-01T14:30", "month": "YYYY-MM, like 1957-08",
                "week": "YYYY-Www, like 1957-W31"}
@@ -73,8 +73,9 @@ CLEAR_JS = r"""(el) => {
 }"""
 
 
-# type's and paste's focus and select-all; README.md, "Agent Gotchas & Invariants", says which element it focuses. It
-# returns {focused: the box's type, or "editable"} or {refused: why}. getRootNode() reaches a box inside a shadow root.
+# type's and paste's focus and select-all, on the text box at or inside the uid, or the uid's own element when it is
+# contenteditable. It returns {focused: the box's type, or "editable"} or {refused: why}. getRootNode() reaches a box
+# inside a shadow root.
 SELECT_JS = r"""(el) => {
   const box = el.matches('input, textarea') ? el : el.isContentEditable ? null : el.querySelector('input, textarea');
   if (box) {
@@ -117,10 +118,14 @@ FOCUS_JS = r"""() => {
 }"""
 # The paste key's modifier: Meta (Command) on a Mac, Control on Windows.
 PASTE_KEY, PASTE_BIT, PASTE_PROPERTY = system.COMMAND_KEY, system.COMMAND_BIT, system.COMMAND_PROPERTY
-# paste's text, handed to the page in place of the clipboard by listeners in every same-origin frame; README.md,
-# "Agent Gotchas & Invariants", says what they do. It returns why the text cannot reach where the focus is, or null
-# once window.__browserdPaste holds how many pastes (seen) and paste key presses (pressed) arrived, ready(), whether
-# the focus is still where the listeners are, and undo().
+# paste's text, handed to the page in place of the clipboard by listeners in every same-origin frame. They give the
+# paste event the text as its clipboardData; insert the text themselves when no page script cancelled or stopped the
+# paste; cancel Chrome's own insert of the real clipboard, which follows a paste an editor stopped without cancelling
+# (Slides does); and block any paste after the first. A page script that reads the paste before them can still read
+# the real clipboard. It returns why the text cannot reach the focus, or null after setting window.__browserdPaste:
+#     seen, pressed  the pastes and paste key presses that arrived
+#     ready()        whether the focus is still where the listeners are
+#     undo()         takes the listeners off
 HAND_JS = r"""(text, modifier) => {
   const frames = ['IFRAME', 'FRAME', 'OBJECT', 'EMBED', 'FENCEDFRAME'];
   const focused = () => {  // the window the focus is in, or null when that is a frame from another site
@@ -166,8 +171,8 @@ HAND_JS = r"""(text, modifier) => {
   window.__browserdPaste = state;
   return null;
 }"""
-# What fill_refused reads first; README.md, "Agent Gotchas & Invariants", says why. A dropdown's option labels are
-# its options' accessible names, which chrome-devtools-mcp matches exactly; a <select multiple> matches by value.
+# What fill_refused reads first (its docstring says why). A dropdown's option labels are its options' accessible
+# names, which chrome-devtools-mcp matches exactly; a <select multiple> matches by value.
 FILL_JS = r"""(el, value) => {
   const dates = ['date', 'time', 'datetime-local', 'month', 'week'];
   const host = el.getRootNode().host;  // a date or time input's parts sit in its own shadow root
@@ -407,7 +412,8 @@ def _until_holds(devtools, page_id, uid, value, seconds):
 
 def type_(devtools, page_id, step):
     """Type text over a field's text with real keys, and confirm the field holds text, exactly or with only its
-    spacing and punctuation changed.
+    spacing and punctuation changed. It exists because type_text takes no uid, typing wherever the focus is, and fill
+    sets a value of 100 characters or more by script, which React ignores.
 
     Args:
         devtools (Devtools): the tab's process.
@@ -458,8 +464,11 @@ def _holds_text(devtools, page_id, uid, text, focused):
 
 
 def paste(devtools, page_id, step, target, connect):
-    """Put text in with a real paste, the command key and V, which an editor takes as it is: no quotes curled, brackets closed or
-    lines indented, as typing gets.
+    """Put text in with a real paste, the command key and V, which an editor takes as it is: no quotes curled, brackets
+    closed or lines indented, as typing gets. Three other ways were measured to fail: Input.insertText gets closed
+    brackets and curled quotes as typing does, a synthetic paste event puts nothing in a box with no paste handler, and
+    dropping the text puts nothing in CodeMirror or Quill. With a uid, it reads the field back as type does; without
+    one, nothing reads it back.
 
     Args:
         devtools (Devtools): the tab's process.
@@ -491,8 +500,9 @@ def paste(devtools, page_id, step, target, connect):
 
 def _press_paste(target, text, connect):
     """Hand the tab's page the text in place of the clipboard (HAND_JS), press the paste key once, check the page saw
-    the paste, and take the text back. The key press carries Chrome's own paste command; README.md, "Agent Gotchas &
-    Invariants", says why."""
+    the paste, and take the text back. The key press carries Chrome's own paste command, since on a Mac a key press
+    alone pastes nothing. It is pressed once, never again: cdp.INPUT_FLAG keeps Chrome from dropping it, so a press the
+    page did not take fails the step."""
     browser = connect()
     try:
         session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
@@ -543,6 +553,10 @@ def _press_paste(target, text, connect):
 
 def fill_refused(devtools, page_id, step, read=None):
     """Why a fill or fill_form step must not run, from a read of each of its elements first; None when it may.
+
+    chrome-devtools-mcp's own fill empties a read-only box and reports success, fails a disabled box or a date's part
+    after 5s, fails a toggle or a select given a wrong value at once with a message that does not say why, and leaves a
+    date it cannot parse empty, reporting success.
 
     Args:
         devtools (Devtools): the tab's process.
@@ -606,7 +620,9 @@ def _unfillable(found, uid, value):
 def wait(devtools, page_id, step):
     """Wait until text is off the page, a field holds a value, or the page has stopped changing.
 
-    README.md, "Agent Gotchas & Invariants", says how each condition is read.
+    gone and still read snapshots, one after another, not a script, so they see every frame and every field's value,
+    which a MutationObserver misses when a script sets .value. A page whose text changes more often than every still
+    ms (a clock, a carousel) never counts as still, and a change no snapshot carries (a CSS spinner) is no change.
 
     Args:
         devtools (Devtools): the tab's process.
