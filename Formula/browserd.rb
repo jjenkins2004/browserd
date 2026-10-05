@@ -17,7 +17,7 @@ class Browserd < Formula
 
   def install
     # A --HEAD build is a git clone, which .gitattributes' export-ignore does not reach.
-    rm_r "browser/dashboard/preview" if build.head?
+    rm_r ["browser/dashboard/preview", *Dir["browser/dashboard/ui/{*.stories.js,samples.js}"]] if build.head?
     libexec.install "browser", "browserd", "package.json", "package-lock.json", "VERSION"
     cd libexec do
       system "npm", "ci", "--omit=dev", "--no-audit", "--no-fund"

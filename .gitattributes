@@ -4,9 +4,12 @@
 *.pdf binary
 *.png binary
 # Left out of the archives GitHub serves for a tag, which install.sh, install.ps1 and Formula/browserd.rb install from.
+# The formula removes the browser/ ones itself from a --HEAD build, so a browser/ line here goes there too.
 /.claude export-ignore
 /experiments export-ignore
 /browser/dashboard/preview export-ignore
+/browser/dashboard/ui/*.stories.js export-ignore
+/browser/dashboard/ui/samples.js export-ignore
 /tests export-ignore
 /Formula export-ignore
 /scripts export-ignore
