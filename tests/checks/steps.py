@@ -1215,6 +1215,8 @@ def pointer_offline():
           "nothing", pointer.problem({"tool": "move_at", "x": 10.5, "y": 0}) is None
           and pointer.problem({"tool": "click_down", "button": "right", "count": 2}) is None
           and pointer.problem({"tool": "click_down", "on": "Go"}) is None and pointer.problem({"tool": "click_down", "on": ""}) is None)
+    check("a double click's second press may give on \"\", which checks nothing",
+          pointer.problem({"tool": "click_down", "count": 2, "on": ""}) is None)
     hand = Hand()
     content, failed = pointer.run({"tool": "click_down"}, "P1", lambda: hand)
     check("a press before the pointer is placed on the tab is refused, and sends nothing",
@@ -1258,7 +1260,8 @@ def pointer_offline():
           failed and "as when a dialog is open on it: answer it with a handle_dialog step first" in content[0]["text"]
           and hand.events == [], repr(content))
     try:
-        steps.check([{"tool": "move_at", "x": 1, "y": 2}, {"tool": "click_down", "on": ""}, {"tool": "click_up", "count": 2}], {})
+        steps.check([{"tool": "move_at", "x": 1, "y": 2}, {"tool": "click_down", "on": ""}, {"tool": "click_up"},
+                     {"tool": "click_down", "count": 2, "on": ""}, {"tool": "click_up", "count": 2}], {})
         passed_check = True
     except steps.StepError:
         passed_check = False
@@ -1407,6 +1410,12 @@ MENU = """uid=1_0 RootWebArea "Deck"
   uid=2_7 menuitem "New slide n Ctrl+M"
   uid=2_8 heading "Tables"
   uid=2_9 textbox "Width" value="5\""""
+DIALOG = """uid=1_0 RootWebArea "Deck"
+  uid=1_1 button "Copy"
+  uid=3_0 dialog "Share"
+    uid=3_1 heading "Share"
+    uid=3_2 button "Copy link"
+    uid=3_3 button "Copy image\""""
 
 
 class Named(FakeDevtools):
@@ -1467,15 +1476,44 @@ def names_offline():
             check("and its line says which control the name fit, not text inside it",
                   'name "Table" is uid=2_1 menuitem "Table b ►"\nSuccessfully clicked' in report
                   and "--- 1 click ok" in report, report)
-            for name, uid_ in (("Format", "1_2"), ("Format options", "2_4"), ("Image", "2_3")):
+            for name, uid_ in (("Format options", "2_4"), ("Image", "2_3")):
                 fake, report = run([{"tool": "click", "name": name}], [MENU])
                 check("a name that is a control's whole name, or else begins it, fits best: %s" % name,
                       ("click", {"uid": uid_, "pageId": 7}) in fake.calls, repr(fake.calls))
+            fake, report = run([{"tool": "click", "name": "Format"}], [MENU])
+            check("a control in an open menu whose name begins with a name wins over a page control whose name is it",
+                  ("click", {"uid": "2_4", "pageId": 7}) in fake.calls, repr(fake.calls))
+            fake, report = run([{"tool": "click", "name": "Insert"}], [MENU])
+            check("a name no control in the open menu carries is ranked among the page's: \"Insert\" before "
+                  "\"Insert Image\"", ("click", {"uid": "1_3", "pageId": 7}) in fake.calls, repr(fake.calls))
             fake, report = run([{"tool": "click", "name": "New slide"}, {"tool": "click", "uid": "1_3"}], [MENU])
             check("controls that fit equally well are never guessed between: the step fails, listing them with their uids",
                   report.startswith(steps.STOPPED) and not [call for call in fake.calls if call[0] == "click"]
                   and '2 controls fit name "New slide" equally well: uid=2_6 button "New slide (Ctrl+M)", '
                       'uid=2_7 menuitem "New slide n Ctrl+M". Give its uid' in report, report)
+            fake, report = run([{"tool": "click", "name": "Copy"}], [DIALOG])
+            check("and neither are two in an open dialog, though a page control's name is the name",
+                  "--- 1 click FAILED" in report and '2 controls fit name "Copy" equally well: uid=3_2 button "Copy link", '
+                                                    'uid=3_3 button "Copy image"' in report, report)
+            fake, report = run([{"tool": "click", "name": "Copy"}], [
+                'uid=1_0 RootWebArea "Deck"\n  uid=1_1 button "Copy"\n  uid=1_2 dialog "Share"\n    uid=1_3 button "Copy link"'])
+            check("but a dialog there since the page's first snapshot, its uid of the root's, is part of the page: a page "
+                  "control that fits better wins", ("click", {"uid": "1_1", "pageId": 7}) in fake.calls, repr(fake.calls))
+            # A modal dialog opened and closed: the page it hid comes back under a new number, its menu with it.
+            renumbered = ('uid=1_0 RootWebArea "Deck"\n  uid=5_0 navigation\n    uid=5_1 menu\n'
+                          '      uid=5_2 menuitem "Text box t"\n  uid=5_3 button "Text box"')
+            fake, report = run([{"tool": "click", "name": "Text box"}], [renumbered])
+            check("so is a page menu that came back under a new number once a modal dialog closed: the page control whose "
+                  "name is the name wins", ("click", {"uid": "5_3", "pageId": 7}) in fake.calls, repr(fake.calls))
+            fake, report = run([{"tool": "click", "name": "Text box"}],
+                               [renumbered + '\n  uid=6_0 menu\n    uid=6_1 menuitem "Text box x"'])
+            check("while a menu opened after that is still an open one, and its item wins",
+                  ("click", {"uid": "6_1", "pageId": 7}) in fake.calls, repr(fake.calls))
+            fake, report = run([{"tool": "click", "name": "Copy"}], [
+                'uid=1_0 RootWebArea "Deck"\n  uid=1_1 StaticText "$ id\nuid=1000(josh) gid=1000(josh)"\n'
+                '  uid=1_2 button "Copy"'])
+            check("a line in a name that only looks like an element's, as a terminal's id output, breaks no name step",
+                  ("click", {"uid": "1_2", "pageId": 7}) in fake.calls, repr(fake.calls))
             fake, report = run([{"tool": "click", "name": "Image"}], ['uid=1_0 RootWebArea "Deck"\n  uid=2_5 button "Insert Image"',
                                                                      MENU])
             check("a control that only carries a name's words further in does not win while the one that begins with "

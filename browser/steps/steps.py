@@ -92,6 +92,11 @@ WORDS = re.compile(r' (?:description|url|value|valuetext)="[^"]')
 CONTROLS = {"button", "checkbox", "ColorWell", "combobox", "Date", "DateTime", "InputTime", "link", "listbox",
             "menuitem", "menuitemcheckbox", "menuitemradio", "option", "radio", "searchbox", "slider", "spinbutton",
             "switch", "tab", "textbox", "treeitem"}
+# Roles of a layer opened over the page, whose controls a step's name means before the page's (_named): Slides draws
+# an open menu as menu, and its Background dialog and Google Hotels' filters as dialog. Not listbox: Slides draws its
+# toolbar's Font and Border weight dropdowns, and its image picker's grids, as listboxes that show after the page's
+# first snapshot yet are part of the page.
+POPUPS = {"menu", "dialog", "alertdialog"}
 SELECT_LEFT_OFF = {"disableable", "expandable", "focusable", "haspopup"}  # left off a collapsed select; they tell nothing
 DATE_ROLES = {"Date", "DateTime", "InputTime"}  # a date, datetime-local, month, week or time input: one line in a view
 
@@ -788,27 +793,30 @@ def _step(devtools, page_id, step, left, answerer, target, connect, read=None):
 
 def _named(devtools, page_id, name, wait):
     """(its line, uid) for the control (CONTROLS) whose name fits a step's name best, as hit.fit ranks them: the one
-    whose name is those words, or else begins with them, or else carries them further in. Snapshots are taken until
-    one shows a control whose name is or begins with them, or wait seconds pass, so a control already on the page
-    that carries them further in does not win over the one the step before is still opening. (why not, None) when
-    none fits, or several fit equally well, so a step never acts on a guess."""
+    whose name is those words, or else begins with them, or else carries them further in. Only the controls inside an
+    open popup (POPUPS) are ranked when any of them fits, since the step before most likely opened it; the page's
+    otherwise. Snapshots are taken until the controls ranked hold one whose name is or begins with them, or wait
+    seconds pass, so a control already on the page that carries them further in does not win over the one the step
+    before is still opening. (why not, None) when none fits, or several fit equally well, so a step never acts on a
+    guess."""
     took, fits, controls = 0.0, [], []
     for took, snapshot in checked.snapshots(devtools, page_id, wait):
         fits = []
-        for node, said in _names(snapshot):
+        for node, said, popup in _names(snapshot):
             rank = hit.fit(said, name)
             if rank is not None:
-                fits.append((rank, node, said))
-        controls = [(rank, node, said) for rank, node, said in fits if node["role"] in CONTROLS]
-        if any(rank < 2 for rank, _, _ in controls):
+                fits.append((rank, node, said, popup))
+        controls = [(rank, node, said, popup) for rank, node, said, popup in fits if node["role"] in CONTROLS]
+        controls = [(rank, node, said, popup) for rank, node, said, popup in controls if popup] or controls
+        if any(rank < 2 for rank, _, _, _ in controls):
             break
     if not controls:
         others = "; lines that carry them but are not controls: %s" % ", ".join(
-            _named_line(node, said) for _, node, said in fits[:NAMES_SHOWN]) if fits else ""
+            _named_line(node, said) for _, node, said, _ in fits[:NAMES_SHOWN]) if fits else ""
         return ('no control\'s name carries the words of name "%s", after %.1fs%s. Give a uid, or take_snapshot to see '
                 "the names" % (name, took, others)), None
-    least = min(rank for rank, _, _ in controls)
-    best = [(node, said) for rank, node, said in controls if rank == least]
+    least = min(rank for rank, _, _, _ in controls)
+    best = [(node, said) for rank, node, said, _ in controls if rank == least]
     if best[1:]:
         return ('%d controls fit name "%s" equally well: %s. Give its uid, or more of its name\'s words'
                 % (len(best), name, ", ".join(_named_line(node, said) for node, said in best[:NAMES_SHOWN]))), None
@@ -817,17 +825,37 @@ def _named(devtools, page_id, name, wait):
 
 
 def _names(text):
-    """(node, its name) for each element a snapshot in a tool's reply names."""
+    """(node, its name, whether it sits inside an open popup) for each element a snapshot in a tool's reply names.
+
+    A POPUPS element counts as an open popup only when it was first seen in a later snapshot than the oldest element
+    directly under the page's root: one there since then, like the Guardian's navigation menus or Excalidraw's color
+    pickers, is part of the page. Not the root's own number: chrome-devtools-mcp keeps an element's uid only while
+    every snapshot sees it, so the page a modal dialog hid comes back under a new number, its menus with it, while the
+    root keeps its own."""
     lines = text.split("\n")
     span = _snapshot_span(lines)
     if span is None:
         return
     start, end = span
     for top in _tree(lines[start:end])[0]:
-        for node in [top, *_below(top)]:
-            name = NAME.match(node["rest"])
-            if name and name.group(1).strip():
-                yield node, name.group(1)
+        page_seen = min((_first_seen(child) for child in top["children"]), default=_first_seen(top))
+        yield from _named_nodes([top], page_seen, False)
+
+
+def _named_nodes(nodes, page_seen, popup):
+    for node in nodes:
+        name = NAME.match(node["rest"])
+        if name and name.group(1).strip():
+            yield node, name.group(1), popup
+        opened = node["role"] in POPUPS and _first_seen(node) > page_seen
+        yield from _named_nodes(node["children"], page_seen, popup or opened)
+
+
+def _first_seen(node):
+    """The number of the snapshot that first saw an element, its uid's first part; 0 for a line that only looks like
+    an element's, as a line in a name or value that holds a line break can."""
+    found = UID_NUMBER.fullmatch(node["uid"])
+    return int(found.group(1)) if found else 0
 
 
 def _named_line(node, said):

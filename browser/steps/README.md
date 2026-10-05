@@ -59,8 +59,9 @@ bind this folder too: read it first.
   the screenshot did not show (one at opacity 0) stops the press. `on: ""` presses what has no words, and checks
   nothing. Keys are never checked.
 - **A step may give name instead of uid** when its chrome-devtools-mcp tool needs a uid (`click`, `fill`, `hover`,
-  `upload_file`; `_named_tool`): `_step` finds the control in snapshots taken until one whose name is or begins with
-  those words shows, up to `NAME_WAIT`, and runs the step on its uid (`_named` says which control fits).
+  `upload_file`; `_named_tool`): `_step` finds the control in snapshots taken up to `NAME_WAIT`, preferring one inside
+  a popup that opened after the page (`POPUPS`, `_names`), and runs the step on its uid (`_named` says which control
+  fits and when the snapshots stop).
 - **Every snapshot a report holds is a view** (`_view`'s docstring), or with `full: true` its lines as written; either
   is cut at `VIEW_MOST`. The whole snapshot is saved in the tab's record folder, and the header names the file.
 - **A step that begins a download says where it went**, since chrome-devtools-mcp's reply never does (an agent told

@@ -50,7 +50,7 @@ def problem(step):
     count = step.get("count", 1)
     if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MOST_COUNT:
         return "%s's count must be 1, 2 or 3: which click of a double or triple click this is" % tool
-    if tool == "click_down" and count > 1 and "on" in step:
+    if tool == "click_down" and count > 1 and step.get("on", "") != "":
         return "click_down's on goes on the first press of a double or triple click, which is checked; give this one none"
     if tool == "click_down" and count == 1 and not isinstance(step.get("on"), str):
         return ('click_down needs on: a few words of what it presses, as the screenshot shows them (a button\'s label, '

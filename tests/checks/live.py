@@ -374,8 +374,10 @@ def confirm_live(served, open_tab):
 
 
 # A button that opens a menu 300ms after its click, as an editor's menus do: two items and a field, each named as
-# Slides names its own.
+# Slides names its own; and a toolbar button named "Table", which fits the click's name better than the first item
+# does, as Slides' Text box button does.
 MENU = """<title>names scratch</title><button onclick="setTimeout(show, 300)">Open menu</button><p id=out></p>
+<div role=toolbar><button onclick="out.textContent = 'clicked the toolbar'">Table</button></div>
 <script>function show() {
   const menu = document.createElement('div'); menu.setAttribute('role', 'menu');
   for (const name of ['Table b >', 'Image i >']) {
@@ -388,13 +390,15 @@ MENU = """<title>names scratch</title><button onclick="setTimeout(show, 300)">Op
 
 
 def names_live(served, open_tab):
-    """Steps given name, not uid, in one queue: a click that opens a menu, then a click on its item and a fill of its
-    field, each found in a snapshot taken as the step runs."""
+    """Steps given name, not uid, in one queue: a click that opens a menu, then a fill of its field and a click on its
+    item, each found in a snapshot taken as the step runs; the click lands on the menu's item though a toolbar button's
+    name is exactly the click's name."""
     queue, tab = served.queue, open_tab(MENU)
-    text, is_error = queue(tab, {"tool": "click", "name": "Open menu"}, {"tool": "click", "name": "Table"},
-                           {"tool": "fill", "name": "Width", "value": "9"},
+    text, is_error = queue(tab, {"tool": "click", "name": "Open menu"}, {"tool": "fill", "name": "Width", "value": "9"},
+                           {"tool": "click", "name": "Table"},
                            {"tool": "evaluate_script", "function": "() => out.textContent + ' ' + document.querySelector('input').value"})
-    check("a click by name, then a click and a fill by name on what it opened, run in one queue",
+    check("a click by name, then a fill and a click by name on what it opened, run in one queue, the click on the "
+          "open menu's item rather than the toolbar's button",
           not is_error and re.search(r'^name "Table" is uid=\S+ menuitem "Table b >"$', text, re.M)
           and returned(text.split("--- 4")[-1]) == "clicked Table b > 9", text)
 
