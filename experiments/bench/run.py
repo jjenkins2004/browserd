@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Run each task through `claude -p` once per arm and repeat: same model, same prompt, only the browser MCP differs.
 
-    python3 experiments/bench/run.py --exp probe1 [--suite mcpuniverse] [--arms next,playwright] [--k 1] [--jobs 2] [--tasks sports]
+    python experiments/bench/run.py --exp probe1 [--suite mcpuniverse] [--arms next,playwright] [--k 1] [--jobs 2] [--tasks sports]
 
 Each run's stream-json transcript lands in the data folder's results/<exp>/<arm>/<task>-r<n>.jsonl. A run whose
-transcript already ends in a result is skipped, so running the same --exp again finishes what is missing.
+transcript already ends in a result is skipped, so running the same --exp again finishes what is missing. It runs the
+same on macOS, Linux and Windows: procs.py is the one place that differs.
 
-Every run cleans up after itself: its whole process group is stopped (its MCP servers, and through them any Chrome
-they started), orphaned headless Chromes of Puppeteer's, Playwright's and agent-browser's are killed, its agent-browser
-session is closed, and each browserd session it started is closed on the browserd page, which closes that session's
-tabs. A run starts only while the Mac has FREE_LEAST percent of its memory free, and the batch stops at the first sign
-that the runs are broken.
+Every run cleans up after itself: its whole process tree is stopped (its MCP servers, and through them any Chrome they
+started), its agent-browser session is closed, and each browserd session it started is closed on the browserd page,
+which closes that session's tabs. A suite with a prepare(task, mcp_url, profile, token) sets its page up before the
+run, and one with a collect(task, token, transcript, mcp_url) reads what the run left on its tabs first, both through
+browserd. The batch stops at the first sign that the runs are broken.
 """
 import argparse
 import concurrent.futures
@@ -19,8 +20,8 @@ import hashlib
 import json
 import os
 import re
-import signal
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -30,31 +31,67 @@ import botwall
 import formfactory
 import haystack
 import paths
+import procs
+import canvas
 import clicks
 import miniwob
+import popups
+import slides
+import traps
 import tasks
 import webgames
 
 SUITES = {"mcpuniverse": tasks, "webgames": webgames, "formfactory": formfactory, "botwall": botwall, "miniwob": miniwob,
-          "clicks": clicks, "haystack": haystack}
+          "clicks": clicks, "haystack": haystack, "canvas": canvas,
+          "popups": popups, "slides": slides,
+          "traps": traps}
 
 ARMS = {
     "browserd": {
         "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9230/mcp"}},
-        "system": "Your browser is browserd; its profile is Research.",
+        "system": "Your browser is browserd; its profile is research.",
         "page": "http://127.0.0.1:9231",
+        "profile": "research",
     },
     "next": {
         # browserd from the worktree nextserver.py serves, beside the main server, on a Chrome of its own.
         "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9250/mcp"}},
         "system": "Your browser is browserd; its profile is Bench.",
         "page": "http://127.0.0.1:9251",
+        "profile": "Bench",
     },
     "cap": {
         # The same server as next: benchmark-fixes with the view cap, on 9250.
         "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9250/mcp"}},
         "system": "Your browser is browserd; its profile is Bench.",
         "page": "http://127.0.0.1:9251",
+    },
+    "experiments": {
+        # The main server, on the profile signed in to Google, for suites that need a login (slides).
+        "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9230/mcp"}},
+        "system": "Your browser is browserd; its profile is experiments.",
+        "page": "http://127.0.0.1:9231",
+        "profile": "experiments",
+    },
+    # The text-check experiment's three arms: main as it is (click_down's on), main without on, and main with the click
+    # guard back in on's place; each a worktree of its own (browserd-arm-<name>) served by nextserver.py.
+    "trap-on": {
+        "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9250/mcp"}},
+        "system": "Your browser is browserd; its profile is TrapOn.",
+        "page": "http://127.0.0.1:9251",
+        "profile": "TrapOn",
+    },
+    "trap-none": {
+        "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9260/mcp"}},
+        "system": "Your browser is browserd; its profile is TrapNone.",
+        "page": "http://127.0.0.1:9261",
+        "profile": "TrapNone",
+    },
+    "trap-guard": {
+        "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9270/mcp"}},
+        "system": "Your browser is browserd; its profile is TrapGuard.",
+        "page": "http://127.0.0.1:9271",
+        "profile": "TrapGuard",
     },
     "nocap": {
         # benchmark-fixes before the view cap (the browserd-nocap worktree), on 9260, on a Chrome of its own.
@@ -65,22 +102,22 @@ ARMS = {
     "playwright": {
         # MCP-Universe's own entry for this domain, mcpuniverse/mcp/configs/server_list.json, with its @latest pinned
         # so a release mid-batch cannot change the arm.
-        "mcp": {"playwright": {"command": "npx", "args": ["@playwright/mcp@0.0.82", "--headless", "--isolated"]}},
+        "mcp": {"playwright": procs.server(["npx", "@playwright/mcp@0.0.82", "--headless", "--isolated"])},
         "system": "",
     },
     "agentbrowser": {
         # Vercel's agent-browser (npm i -g agent-browser, then agent-browser install), its MCP server with its default
         # core tools, headless. Its browser lives in a daemon outside the run's process group, so each run gets a
         # session of its own, named by the run's token in session_env, and the close command ends it after the run.
-        "mcp": {"agent-browser": {"command": "agent-browser", "args": ["mcp"]}},
+        "mcp": {"agent-browser": procs.server(["agent-browser", "mcp"])},
         "system": "",
         "session_env": "AGENT_BROWSER_SESSION",
         "close": ["agent-browser", "close"],
     },
     "devtools": {
         # The chrome-devtools-mcp browserd pins and runs under each tab, on its own: stock tools, its own Chrome.
-        "mcp": {"devtools": {"command": str(paths.ROOT / "node_modules/.bin/chrome-devtools-mcp"),
-                             "args": ["--headless", "--isolated", "--no-usage-statistics"]}},
+        "mcp": {"devtools": procs.server([str(paths.ROOT / "node_modules/.bin/chrome-devtools-mcp"), "--headless",
+                                          "--isolated", "--no-usage-statistics"])},
         "system": "",
     },
     "claudechrome": {
@@ -90,7 +127,7 @@ ARMS = {
         # Claude Code asks before each of its actions on a site no rule names, and bypassPermissions does not answer
         # it, so allow.py answers every ask with allow, hidden from the model; claude.ai, where that Chrome is signed
         # in, is denied.
-        "mcp": {"allow": {"command": "python3", "args": [str(paths.BENCH / "allow.py")]}},
+        "mcp": {"allow": {"command": sys.executable, "args": [str(paths.BENCH / "allow.py")]}},
         "flags": ["--chrome", "--permission-prompt-tool", "mcp__allow__approve",
                   "--disallowedTools", "mcp__allow__approve", "ClaudeInChromeDomain(claude.ai)"],
         "system": "",
@@ -100,12 +137,7 @@ ARMS = {
 }
 
 TIMEOUT = 900  # seconds a run may take before it is killed and counted as timed out
-FREE_LEAST = 25  # percent of the Mac's memory that must be free before a run starts
-FREE_WAIT = 600  # seconds a run waits for that much before the batch stops
 SESSION_STARTED = re.compile(r"session (\w{6}), on the ")  # session_start's reply
-# Temporary profile folders Puppeteer (chrome-devtools-mcp) and Playwright give a Chrome they launch.
-THROWAWAY_PROFILES = ("puppeteer_dev_chrome_profile", "playwright_chromiumdev_profile", "playwright-mcp",
-                      "agent-browser-chrome")
 # Lines in a run's transcript that mean every run after it would fail the same way. claude -p's own line is "Not
 # logged in · Please run /login"; "Not logged in" alone also turns up when an agent reports a site it is logged out of.
 BROKEN = {"Please run /login": "claude -p is not logged in",
@@ -133,7 +165,7 @@ def finished(path):
     again."""
     if not path.exists():
         return False
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8", errors="replace")
     return (any(json.loads(line).get("type") == "result" for line in text.splitlines() if line.strip())
             and not any(line in text for line in BROKEN) and refusal(text) is None)
 
@@ -194,53 +226,6 @@ def token(exp, arm_name, task_name, rep):
     return hashlib.sha1(("%s/%s/%s/%d" % (exp, arm_name, task_name, rep)).encode()).hexdigest()[:10]
 
 
-def free_memory():
-    """The Mac's free memory in percent, as memory_pressure gives it, or None when it cannot say."""
-    try:
-        said = subprocess.run(["memory_pressure", "-Q"], capture_output=True, text=True, timeout=10).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    found = re.search(r"free percentage: (\d+)%", said)
-    return int(found.group(1)) if found else None
-
-
-def wait_for_memory():
-    """Whether FREE_LEAST percent of memory came free within FREE_WAIT seconds."""
-    waited = time.time()
-    while (free_memory() or 0) < FREE_LEAST:
-        if time.time() - waited > FREE_WAIT or stop.is_set():
-            return False
-        time.sleep(15)
-    return True
-
-
-def stop_group(pgid):
-    """Stop every process left in a run's process group: SIGTERM first, so an MCP server can quit its Chrome."""
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(pgid, sig)
-        # macOS refuses (EPERM) a group left holding only zombies, as a timed-out claude is until proc.wait reaps it.
-        except (ProcessLookupError, PermissionError):
-            return
-        time.sleep(3)
-
-
-def kill_orphans():
-    """Kill the headless Chromes Puppeteer, Playwright or agent-browser launched whose parent is gone, and return how
-    many."""
-    listed = subprocess.run(["ps", "-axo", "pid=,ppid=,command="], capture_output=True, text=True).stdout
-    killed = 0
-    for line in listed.splitlines():
-        pid, ppid, command = line.split(None, 2)
-        if ppid == "1" and "--headless" in command and any(name in command for name in THROWAWAY_PROFILES):
-            try:
-                os.kill(int(pid), signal.SIGKILL)
-                killed += 1
-            except ProcessLookupError:
-                pass
-    return killed
-
-
 def close_sessions(transcript, page_url):
     """Close each browserd session the run started, as the browserd page at page_url's Close session does, and return
     the ids of those it closed; one closed already is passed over. Only these: sessions are the user's to close, and
@@ -288,16 +273,12 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
         return "%s %s r%d: already done" % (arm_name, task_name, rep)
     if stop.is_set():
         return "%s %s r%d: not run, the batch stopped" % (arm_name, task_name, rep)
-    if not wait_for_memory():
-        stop.set()
-        return "%s %s r%d: not run, and the batch stops: under %d%% of memory free for %ds" % (
-            arm_name, task_name, rep, FREE_LEAST, FREE_WAIT)
     path.parent.mkdir(parents=True, exist_ok=True)
     run_token = token(out.name, arm_name, task_name, rep)
     servers = arm["mcp"]
     if "session_env" in arm:
         servers = {name: dict(server, env={arm["session_env"]: run_token}) for name, server in servers.items()}
-    cmd = ["claude", "-p",
+    cmd = procs.command(["claude", "-p",
            "--model", model,
            "--output-format", "stream-json", "--verbose",
            "--mcp-config", json.dumps({"mcpServers": servers}), "--strict-mcp-config",
@@ -305,16 +286,21 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
            "--permission-mode", "bypassPermissions",
            "--setting-sources", "project",
            "--no-session-persistence",
-           "--max-turns", str(max_turns)]
+           "--max-turns", str(max_turns)])
     cmd += arm.get("flags", [])
     cmd += ["--append-system-prompt", " ".join(filter(None, [suite.SYSTEM, arm["system"]]))]
     started = time.time()
     timed_out = False
-    with path.open("w") as stdout, path.with_suffix(".err").open("w") as stderr:
-        # A group of its own, so stop_group reaches the MCP servers claude starts under it.
+    paths.DATA.mkdir(parents=True, exist_ok=True)
+    if hasattr(suite, "prepare") and "profile" in arm:
+        try:
+            close_sessions(suite.prepare(task, arm["mcp"]["browserd"]["url"], arm["profile"], run_token), arm["page"])
+        except Exception as exc:  # a suite's own code: whatever it raises, this run is not run and the batch goes on
+            return "%s %s r%d: not run: could not prepare its page (%s)" % (arm_name, task_name, rep, exc)
+    with path.open("w", encoding="utf-8") as stdout, path.with_suffix(".err").open("w", encoding="utf-8") as stderr:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr,
                                 # The data folder, as a run loads the Claude Code settings of the folder it runs in.
-                                cwd=paths.DATA, env=_env(), text=True, start_new_session=True)
+                                cwd=paths.DATA, env=_env(), text=True, encoding="utf-8", errors="replace", **procs.TREE)
         try:
             proc.stdin.write(suite.prompt(task, run_token))
             proc.stdin.close()
@@ -322,10 +308,16 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
         except subprocess.TimeoutExpired:
             timed_out = True
         finally:
-            stop_group(proc.pid)
+            procs.stop_tree(proc)
             proc.wait()
-    transcript = path.read_text() + path.with_suffix(".err").read_text()
+    transcript = (path.read_text(encoding="utf-8", errors="replace")
+                  + path.with_suffix(".err").read_text(encoding="utf-8", errors="replace"))
     notes = []
+    if hasattr(suite, "collect") and "page" in arm:
+        try:
+            suite.collect(task, run_token, transcript, arm["mcp"]["browserd"]["url"])
+        except Exception as exc:  # a suite's own code, as for prepare
+            notes.append("could not collect what it left on its tabs (%s)" % exc)
     if "close" in arm:
         try:
             subprocess.run(arm["close"], env=dict(os.environ, **{arm["session_env"]: run_token}), capture_output=True,
@@ -345,19 +337,16 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
         except (OSError, ValueError) as exc:
             stop.set()
             notes.append("could not close its tabs (%s), so the batch stops" % exc)
-    orphans = kill_orphans()
-    if orphans:
-        notes.append("killed %d orphaned Chrome" % orphans)
     for line, why in BROKEN.items():
         if line in transcript:
             stop.set()
             notes.append("the batch stops: %s" % why)
-    said = refusal(path.read_text())
+    said = refusal(path.read_text(encoding="utf-8", errors="replace"))
     if said is not None:
         stop.set()
         notes.append("the batch stops: claude -p ended the run before it began: %s" % said[:200])
     with dead_lock:
-        dead[arm_name] = 0 if reached_browser(path.read_text()) else dead.get(arm_name, 0) + 1
+        dead[arm_name] = 0 if reached_browser(path.read_text(encoding="utf-8", errors="replace")) else dead.get(arm_name, 0) + 1
         if dead[arm_name]:
             notes.append("no browser call succeeded")
         if dead[arm_name] >= DEAD_AFTER:
@@ -367,13 +356,8 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
     return "%s %s r%d: %s%s" % (arm_name, task_name, rep, ended, "".join("; " + note for note in notes))
 
 
-def other_batches():
-    """How many `claude -p` processes are running now, which a batch started beside them would compete with."""
-    listed = subprocess.run(["pgrep", "-f", "^claude -p"], capture_output=True, text=True).stdout
-    return len(listed.split())
-
-
 def main():
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # a run's line may name a page in any language
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp", required=True)
     parser.add_argument("--suite", default="mcpuniverse", choices=SUITES)
@@ -383,12 +367,7 @@ def main():
     parser.add_argument("--model", default="claude-sonnet-5")
     parser.add_argument("--max-turns", type=int, help="default: the suite's MAX_TURNS")
     parser.add_argument("--tasks", default="", help="comma-separated substrings of task names; all when empty")
-    parser.add_argument("--beside", action="store_true", help="start even while other claude -p processes run")
     args = parser.parse_args()
-
-    if other_batches() and not args.beside:
-        raise SystemExit("%d claude -p processes are running already (another batch?); wait, or pass --beside"
-                         % other_batches())
 
     suite = SUITES[args.suite]
     if hasattr(suite, "check"):
@@ -399,7 +378,7 @@ def main():
     chosen = {name: task for name, task in suite.load().items()
               if not args.tasks or any(part in name for part in args.tasks.split(","))}
     arms = args.arms.split(",")
-    (out / "config.json").write_text(json.dumps({
+    (out / "config.json").write_text(encoding="utf-8", data=json.dumps({
         "suite": args.suite, "model": args.model, "system": suite.SYSTEM, "max_turns": max_turns, "k": args.k,
         "arms": {a: ARMS[a] for a in arms}, "tasks": list(chosen)}, indent=2))
     # Arms interleave task by task, so both see the same sites at about the same time.

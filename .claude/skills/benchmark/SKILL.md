@@ -24,7 +24,7 @@ otherwise.
 
 ## 2. Set up (once, and after a pull)
 
-- `experiments/bench/setup.sh` fills the data folder; it skips what is there.
+- `python experiments/bench/setup.py` fills the data folder; it skips what is there.
 - `npm ci` in the repo root, for the devtools arm; `npm i -g agent-browser@0.38.1 && agent-browser install` for the
   agentbrowser arm.
 
@@ -34,23 +34,23 @@ otherwise.
   - an existing bench worktree: `git -C <tree> switch --detach <commit>`;
   - or a new one: `git worktree add ../browserd-bench-tree <commit>`, then
     `ln -s "$PWD/node_modules" ../browserd-bench-tree/node_modules` (its browserd runs chrome-devtools-mcp from there),
-    then once `python3 experiments/bench/nextserver.py --tree ../browserd-bench-tree --profile Bench`, which takes over the
+    then once `python experiments/bench/nextserver.py --tree ../browserd-bench-tree --profile Bench`, which takes over the
     Chrome-Bench folder an earlier worktree made.
 - Stop the `nextserver.py` already on 9250, if any, since it keeps running the code it started with:
   `kill $(lsof -tiTCP:9250 -sTCP:LISTEN)`; that quits its Bench Chrome too. Serve one bench worktree at a time.
 - Serve it detached, so a closed window does not stop it:
-  `python3 -c "import subprocess; subprocess.Popen(['python3', 'experiments/bench/nextserver.py', '--tree', '<tree>'], start_new_session=True, stdin=subprocess.DEVNULL, stdout=open('<data>/nextserver.log', 'a'), stderr=subprocess.STDOUT)"`,
+  `python -c "import subprocess; subprocess.Popen(['python', 'experiments/bench/nextserver.py', '--tree', '<tree>'], start_new_session=True, stdin=subprocess.DEVNULL, stdout=open('<data>/nextserver.log', 'a'), stderr=subprocess.STDOUT)"`,
   then wait for `curl -s http://127.0.0.1:9251/` to answer and check `<data>/nextserver.log`'s last line.
 
 ## 4. Run
 
-- `experiments/bench/sites.sh start` for a suite with a local site (formfactory, webgames, miniwob, clicks, haystack).
-- `experiments/bench/chain.sh <name> <arms> "<suite>[:<run.py args>]"...`, for example
-  `experiments/bench/chain.sh final3 next,playwright,devtools,agentbrowser "mcpuniverse:--k 2" formfactory webgames`. Give each
+- `python experiments/bench/sites.py start` for a suite with a local site (formfactory, webgames, miniwob, clicks, haystack).
+- `python experiments/bench/chain.py <name> <arms> "<suite>[:<run.py args>]"...`, for example
+  `python experiments/bench/chain.py final3 next,playwright,devtools,agentbrowser "mcpuniverse:--k 2" formfactory webgames`. Give each
   measurement a `<name>` not yet in `<data>/results/`: a used one resumes that experiment, keeping its done runs from
   whatever commit made them. It detaches itself; progress is in `<data>/results/chain.log` and each suite's
   `<data>/results/<name>-<suite>.log`.
-- Check the first run of each arm reached a browser: `python3 experiments/bench/report.py <name>-<suite>` after a few runs, and
+- Check the first run of each arm reached a browser: `python experiments/bench/report.py <name>-<suite>` after a few runs, and
   read one transcript's last line. A batch whose runs all end in seconds with no tool call is broken, not fast.
 
 ## 5. While it runs
@@ -69,9 +69,9 @@ otherwise.
 
 ## 6. Score and report
 
-- `python3 experiments/bench/report.py <exp>` for each suite; `python3 experiments/bench/tools/paired.py <exp>` for sign tests (and
-  `--key lenient <exp>` on MCP-Universe); `python3 experiments/bench/tools/analyze.py <exp>` for tool use.
+- `python experiments/bench/report.py <exp>` for each suite; `python experiments/bench/tools/paired.py <exp>` for sign tests (and
+  `--key lenient <exp>` on MCP-Universe); `python experiments/bench/tools/analyze.py <exp>` for tool use.
 - Report per arm: passed (and the lenient score on MCP-Universe), fields right on FormFactory, median time, turns,
   input tokens, cost, tool errors, and the sign tests. Say plainly when a difference is within noise.
-- Write the results into `experiments/findings/benchmark.md`, then `experiments/bench/sites.sh stop` and stop the bench server
+- Write the results into `experiments/findings/benchmark.md`, then `python experiments/bench/sites.py stop` and stop the bench server
   (`kill $(lsof -tiTCP:9250 -sTCP:LISTEN)`) when done.
