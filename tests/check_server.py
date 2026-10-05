@@ -40,6 +40,7 @@ if __name__ == "__main__":
     steps.screenshot_offline()
     print()
     steps.pointer_offline()
+    steps.hit_offline()
     print()
     steps.limits_offline()
     print()

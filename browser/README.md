@@ -58,6 +58,7 @@ parts.
         steps.py     the queue: load, check, run, report; snapshot views
         checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused, read_fills
         pointer.py   the queue's pointer steps: move_at, click_down, click_up
+        hit.py       what a press lands on, read off the accessibility tree just before it goes out
         guard.py     the click guard: a press or keys stopped when the page changed since the agent's screenshot
         screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
         dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
@@ -491,7 +492,17 @@ same tabs under the same ids. A crash leaves the same.
   asked for and counts as done, saying so, as a chrome-devtools-mcp step does; a `handle_dialog` step right after
   answers it as it opens. A dialog open already holds the `Page.enable` too, so the step fails after those 5s, sending
   nothing and saying to answer it first; input a busy page has not taken after them lands once it is free, so the
-  step fails saying so, and the pointer is kept where the input put it. chrome-devtools-mcp's own `click_at` (behind `--experimental-vision`, which browserd does
+  step fails saying so, and the pointer is kept where the input put it. A `click_down`'s report names what it lands
+  on (`pressed the left button at 545,85 on button "Fill color"`), read by `hit.read` on the step's own connection
+  just before the press goes out: `DOM.getNodeForLocation` at the point (in whole CSS px of the document, so a
+  scrolled page's point is offset by its scroll; skipping a `pointer-events: none` layer, as the press does), then
+  `Accessibility.getPartialAXTree` there, the tree a snapshot's view comes from, so the names match a view's. The read
+  climbs from the element hit to the first control (`hit.CONTROLS`) and names it; it stops below an element that holds
+  controls (`hit.HOLDERS`: a menu, a toolbar, a list, a dialog, the page), so a press in a menu between its items
+  names the menu, with no words of its items'. With no control, it names the text drawn right in the element hit (a
+  paragraph's, a clickable div's, an SVG text's), else its role (a canvas). A frame from another site, which Chrome
+  keeps in another process, is named only by where it is from. The read takes about 2 ms (measured: each call 1 ms
+  or less on Windows). chrome-devtools-mcp's own `click_at` (behind `--experimental-vision`, which browserd does
   not pass) cannot hover or drag: WebGames' herding needs the pointer moved over a canvas, and an agent given
   `click_at` spent 40 of them standing in for moves.
 - **The click guard stops a press, or keys, that the page changed under since the agent's last screenshot.** A point

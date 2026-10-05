@@ -12,7 +12,7 @@ import time
 
 from browser.chrome import cdp
 from browser.dashboard import page
-from browser.steps import checked, dialogs, pointer, screenshot, steps
+from browser.steps import checked, dialogs, hit, pointer, screenshot, steps
 from browser.tabs import devtools
 from browser.tabs.worker import Workers
 from harness import FakeDevtools, STAND_IN, check, failed, refusal, text_of, uid
@@ -865,19 +865,42 @@ def screenshot_offline():
         shutil.rmtree(workdir, ignore_errors=True)
 
 
+def ax(role, name="", node=1, parent=None, backend=None, **more):
+    """One node of Chrome's accessibility tree, as Accessibility.getPartialAXTree gives it."""
+    return dict({"nodeId": str(node), "role": {"value": role}, "name": {"value": name}}, **(
+        {"parentId": str(parent)} if parent else {}), **({"backendDOMNodeId": backend} if backend else {}), **more)
+
+
+# A button "Go" in a page: what a stand-in Chrome has at every point unless a check gives it another tree.
+GO = [ax("button", "Go", 2, 1, backend=7), ax("RootWebArea", "page", 1), ax("StaticText", "Go", 3, 2)]
+
+
 class Hand:
     """A connection to a profile's Chrome that records each mouse event it is sent; with late or a dialog, each goes
     unanswered in time (cdp.Late), and with a dialog, that dialog's event is heard; with held, a dialog open already
-    leaves Page.enable unanswered."""
+    leaves Page.enable unanswered. Every point holds the element whose backend node id is hit, in the tree nodes (GO
+    by default); with hit None, none, as off the page; the page is scrolled by scroll, and frame is a frame's src."""
 
-    def __init__(self, dialog=None, late=False, held=False):
+    def __init__(self, dialog=None, late=False, held=False, nodes=GO, hit=7, scroll=(0, 0), frame=None):
         self.events, self.dialog, self.late, self.held = [], dialog, late or dialog is not None, held
+        self.nodes, self.hit, self.scroll, self.frame, self.asked = nodes, hit, scroll, frame, []
 
     def call(self, method, session=None, wait=None, **params):
         if method == "Target.attachToTarget":
             return {"sessionId": "S1"}
         if method == "Page.enable" and self.held:
             raise cdp.Late("Page.enable did not answer in time")
+        if method == "Page.getLayoutMetrics":
+            return {"cssVisualViewport": {"pageX": self.scroll[0], "pageY": self.scroll[1]}}
+        if method == "DOM.getNodeForLocation":
+            self.asked.append((params["x"], params["y"]))
+            if self.hit is None:
+                raise cdp.CdpError("DOM.getNodeForLocation: No node found at given location")
+            return {"backendNodeId": self.hit, "frameId": "F1"}
+        if method == "Accessibility.getPartialAXTree":
+            return {"nodes": self.nodes}
+        if method == "DOM.describeNode":
+            return {"node": {"nodeName": "IFRAME", "attributes": ["src", self.frame] if self.frame else []}}
         if method == "Input.dispatchMouseEvent":
             self.events.append(params)
             if self.late:
@@ -922,7 +945,7 @@ def pointer_offline():
           repr(hand.events))
     check("and each step says where the pointer is and what it holds",
           said == [("the pointer is at 10,20", False),
-                   ("pressed the left button at 10,20; it stays down until a click_up", False),
+                   ('pressed the left button at 10,20 on button "Go"; it stays down until a click_up', False),
                    ("the pointer is at 50.5,60, the left button down", False),
                    ("let go of the left button at 50.5,60", False)], repr(said))
     content, failed = pointer.run({"tool": "click_up"}, "P1", lambda: hand)
@@ -960,6 +983,44 @@ def pointer_offline():
     result = steps.run(fake, 7, [{"tool": "move_at", "x": 5, "y": 6}], lambda name: name, target="P4", connect=lambda: Hand())
     check("a queue's pointer step never reaches chrome-devtools-mcp", fake.calls == [] and not result["isError"],
           repr(result))
+
+
+def hit_offline():
+    """What a press lands on, read off a stand-in Chrome's accessibility tree, and how its report names it."""
+    def landed(nodes, hit_=7, **more):
+        return hit.described(hit.read(Hand(nodes=nodes, hit=hit_, **more), "S1", 10.4, 20.6))
+
+    check("a press on an icon in a button lands on the button, by its name",
+          landed([ax("RootWebArea", "page", 1), ax("button", "Bold (Ctrl+B)", 2, 1), ax("image", "", 3, 2),
+                  ax("none", "", 4, 3, backend=7, ignored=True)]) == 'button "Bold (Ctrl+B)"')
+    menu = [ax("RootWebArea", "page", 1), ax("menu", "", 2, 1, backend=5), ax("menuitem", "Table", 3, 2, backend=7),
+            ax("StaticText", "Table", 4, 3), ax("menuitem", "Image", 5, 2), ax("StaticText", "Image", 6, 5)]
+    check("a press on a menu item lands on it", landed(menu) == 'menuitem "Table"')
+    gap = hit.read(Hand(nodes=menu, hit=5), "S1", 1, 2)
+    check("and one in the menu between its items lands on none of them, and carries none of their words",
+          hit.described(gap) == "menu, which has no words" and gap.words == [], repr(gap))
+    check("a press on plain text lands on that text, by its words",
+          landed([ax("RootWebArea", "page", 1), ax("paragraph", "", 2, 1, backend=7),
+                  ax("StaticText", "About Seattle weather.", 3, 2)]) == 'text "About Seattle weather."')
+    check("a press on a canvas names it, which has no words",
+          landed([ax("RootWebArea", "page", 1), ax("Canvas", "", 2, 1, backend=7)]) == "canvas, which has no words")
+    check("a press on the page itself names no control or words of the page's",
+          landed([ax("RootWebArea", "page", 1), ax("generic", "", 2, 1, backend=7), ax("button", "Go", 3, 2)])
+          == "a part of the page, which has no words")
+    check("a disabled control says so",
+          landed([ax("RootWebArea", "page", 1), ax("button", "Send", 2, 1, backend=7, properties=[
+              {"name": "disabled", "value": {"type": "boolean", "value": True}}])]) == 'button "Send" (disabled)')
+    long = "word " * 30
+    check("a long name is cut", landed([ax("RootWebArea", "page", 1), ax("link", long, 2, 1, backend=7)])
+          == 'link "%s…"' % long[:hit.SHOWN - 1].rstrip())
+    check("a frame from another site, which Chrome keeps in another process, is named by where it is from",
+          landed([ax("RootWebArea", "page", 1), ax("Iframe", "", 2, 1, backend=7)], frame="https://consent.example/x")
+          == "a frame from consent.example, which browserd cannot read into")
+    check("a point off the page lands on nothing", landed(GO, None) == "nothing browserd could name")
+    hand = Hand(scroll=(0, 500))
+    hit.read(hand, "S1", 10.4, 20.6)
+    check("a scrolled page's point is read at its place in the document, in whole pixels", hand.asked == [(10, 521)],
+          repr(hand.asked))
 
 
 def limits_offline():

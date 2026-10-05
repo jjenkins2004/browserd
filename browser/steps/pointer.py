@@ -6,6 +6,7 @@ README.md, "Agent Gotchas & Invariants", says why they are three steps and how a
 
 from ..chrome import cdp
 from ..protocol.ws import WebSocketError
+from . import hit
 
 BUTTONS = {"left": 1, "right": 2, "middle": 4}  # CDP's buttons bit for each
 MOST_COUNT = 3  # a triple click selects a paragraph; no page counts further
@@ -92,7 +93,7 @@ def run(step, target, connect):
     else:
         event.update(button=button, clickCount=step.get("count", 1))
     try:
-        dialog = _send(event, target, connect)
+        dialog, landed = _send(event, target, connect, tool == "click_down")
     except Busy as exc:
         _pointers[target] = {"x": x, "y": y, "held": held}
         return _said("sent the input, but %s" % exc), True
@@ -100,8 +101,8 @@ def run(step, target, connect):
         return _said("could not send the input: %s" % exc), True
     _pointers[target] = {"x": x, "y": y, "held": held}
     text = {"move_at": "the pointer is at %g,%g" % (x, y),
-            "click_down": "pressed the %s button at %g,%g%s; it stays down until a click_up"
-                          % (button, x, y, _nth(step.get("count", 1))),
+            "click_down": "pressed the %s button at %g,%g %s%s; it stays down until a click_up"
+                          % (button, x, y, landed, _nth(step.get("count", 1))),
             "click_up": "let go of the %s button at %g,%g%s" % (button, x, y, _nth(step.get("count", 1)))}[tool]
     if tool == "move_at" and held:
         text += ", the %s button%s down" % (" and ".join(held), "s" if len(held) > 1 else "")
@@ -113,9 +114,9 @@ def run(step, target, connect):
     return _said(text), False
 
 
-def _send(event, target, connect):
-    """Send one mouse event to the tab; the dialog ({type, message}) it opened when that kept the page from taking it in
-    time, or None."""
+def _send(event, target, connect, press=False):
+    """Send one mouse event to the tab; (the dialog ({type, message}) it opened when that kept the page from taking it
+    in time, or None; for a press, what it lands on, read just before it goes out, as its report says it)."""
     browser = connect()
     try:
         session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
@@ -124,14 +125,20 @@ def _send(event, target, connect):
         except cdp.Late:  # a dialog open already holds it, and would drop the input unseen
             raise cdp.CdpError("the page did not answer in %gs, as when a dialog is open on it: answer it with a "
                                "handle_dialog step first" % DIALOG_WAIT)
+        landed = None
+        if press:
+            try:
+                landed = "on " + hit.described(hit.read(browser, session, event["x"], event["y"]))
+            except cdp.CdpError as exc:
+                landed = "(browserd could not read what is there: %s)" % exc
         try:
             browser.call("Input.dispatchMouseEvent", session, DIALOG_WAIT, **event)
         except cdp.Late:
             try:
-                return browser.wait_for("Page.javascriptDialogOpening", session, 0)
+                return browser.wait_for("Page.javascriptDialogOpening", session, 0), landed
             except cdp.CdpError:
                 raise Busy("the page had not taken it after %gs, and takes it once free" % DIALOG_WAIT)
-        return None
+        return None, landed
     finally:
         browser.close()
 

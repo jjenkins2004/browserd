@@ -648,6 +648,7 @@ def queue_live(profile, state):
             {"tool": "evaluate_script", "function": "() => hits"}])
         check("move_at, click_down and click_up at a point read off that screenshot click there, with trusted input",
               not is_error and returned(text) == [[True, 10, 25]], text)
+        check("and the press says it landed on a canvas", "at 310,225 on canvas, which has no words" in text, text)
 
         pad = open_tab(PAD)
         call(httpd, "queue", session=session, tab=pad, steps=[{"tool": "take_screenshot"}])
@@ -666,6 +667,8 @@ def queue_live(profile, state):
         took = time.monotonic() - began
         check("a click that opens an alert nothing waits on counts as done after about 5s, naming it",
               not is_error and 'the alert "hi" it opened blocks the page' in text and 4 < took < 10 + FRAME_WAIT, "%.1fs: %s" % (took, text))
+        check("and the press says it landed on the button, by the name its view gives it",
+              'pressed the left button at 540,70 on button "Warn"' in text, text)
         for step in ({"tool": "move_at", "x": 540, "y": 70}, {"tool": "take_screenshot"}):
             began = time.monotonic()
             text, is_error = call(httpd, "queue", session=session, tab=pad, steps=[step])
