@@ -16,6 +16,8 @@ class Browserd < Formula
   depends_on "python@3.13"
 
   def install
+    # A --HEAD build is a git clone, which .gitattributes' export-ignore does not reach.
+    rm_r "browser/dashboard/preview" if build.head?
     libexec.install "browser", "browserd", "package.json", "package-lock.json", "VERSION"
     cd libexec do
       system "npm", "ci", "--omit=dev", "--no-audit", "--no-fund"

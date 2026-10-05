@@ -6,7 +6,7 @@
 # Left out of the archives GitHub serves for a tag, which install.sh, install.ps1 and Formula/browserd.rb install from.
 /.claude export-ignore
 /experiments export-ignore
-/preview export-ignore
+/browser/dashboard/preview export-ignore
 /tests export-ignore
 /Formula export-ignore
 /scripts export-ignore

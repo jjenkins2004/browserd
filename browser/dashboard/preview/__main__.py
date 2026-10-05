@@ -1,8 +1,8 @@
 """The preview: every state of the browserd page's parts, drawn by the page's own code from made-up data.
 
-    python3 preview/preview.py [port]    then http://127.0.0.1:9320/
+    python3 -m browser.dashboard.preview [port]    from the repo root, then http://127.0.0.1:9320/
 
-README.md says what each request answers and how to add a variant; ../browser/dashboard/ui/README.md, how to add a state.
+README.md says what each request answers and how to add a variant; ../ui/README.md, how to add a state.
 """
 
 import json
@@ -11,11 +11,10 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
-sys.path.insert(0, ROOT)
-from browser.dashboard import page  # noqa: E402
+from .. import page
+from ...config import paths
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = 9320  # README.md says why
 VARIANTS = os.path.join(HERE, "variants")
 STORIES = ".stories.js"
@@ -40,7 +39,7 @@ def variants():
 
 
 def version():
-    """The newest change under ../browser/dashboard/ui/ and here, a file's or a folder's, so a deletion counts too."""
+    """The newest change under ../ui/ and here, a file's or a folder's, so a deletion counts too."""
     newest = 0.0
     for top in (page.UI, HERE):
         for folder, _, names in os.walk(top):
@@ -58,7 +57,7 @@ def data():
 
 def _script(path):
     # One script per file, so one that fails leaves the rest running, and devtools names it.
-    return "<script>\n%s\n//# sourceURL=%s\n</script>" % (read(path), os.path.relpath(path, ROOT))
+    return "<script>\n%s\n//# sourceURL=%s\n</script>" % (read(path), os.path.relpath(path, paths.ROOT))
 
 
 def frame(file, story, variant):

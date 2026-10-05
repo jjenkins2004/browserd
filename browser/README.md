@@ -32,6 +32,7 @@ A folder per domain; each folder, and tools.py and server.py, imports only those
       dashboard/
         page.py      the browserd page's server: GET /, GET /state, a POST per action
         ui/          the browserd page itself; its own README
+        preview/     every state of ui/'s parts from made-up data, never installed; its own README
       tools.py       the tools agents call, their descriptions, and the queue's body
       server.py      the server process (`python -m browser.server`): serves the tools and the browserd page
       cli/

@@ -58,8 +58,9 @@ on a Mac and `%LOCALAPPDATA%\browserd` on Windows, whichever version runs; `BROW
 
 A git checkout runs as it is, and keeps its records in `.run/` beside the code: `npm ci` once, then
 `./browserd start`, or on Windows `browserd start` from its folder (browserd.cmd, from cmd or PowerShell);
-`./browserd` also runs in Git Bash. `browserd uninstall` refuses a checkout. A release is cut with
-`scripts/release 0.2.0`, which tags it, pushes it, and points the Homebrew formula at it.
+`./browserd` also runs in Git Bash. `python3 -m browser.dashboard.preview` (`py -3 -m` on Windows) shows every state
+of the page's parts from made-up data at http://127.0.0.1:9320/. `browserd uninstall` refuses a checkout. A release
+is cut with `scripts/release 0.2.0`, which tags it, pushes it, and points the Homebrew formula at it.
 
 ## Layout
 
@@ -72,7 +73,6 @@ A git checkout runs as it is, and keeps its records in `.run/` beside the code: 
     scripts/release         cuts a release: VERSION, the tag, and the formula's archive and sha256
     .run/                   gitignored, a checkout's records (listed under Use)
     tests/                  the checks, and their own README
-    preview/                every state of the page's parts from made-up data: `python3 preview/preview.py`, then http://127.0.0.1:9320/
     experiments/            what measures browserd: bench/, the benchmarks against other browser MCP servers; long-tasks/, the demo tasks; findings/, what each found
     .claude/skills/         benchmark: a rerun's steps, for an agent
 

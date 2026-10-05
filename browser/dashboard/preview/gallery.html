@@ -123,7 +123,7 @@ if (VARIANTS.length) {
   note.append("Comparing: current, " + VARIANTS.join(", ") + ".");
 } else {
   note.append("No variants. To compare a design, add ");
-  note.append(el("code", "", "preview/variants/<name>.css"), ".");
+  note.append(el("code", "", "browser/dashboard/preview/variants/<name>.css"), ".");
 }
 if (shelves.length) {
   showShelf();
@@ -132,7 +132,7 @@ if (shelves.length) {
   document.getElementById("shelf").append(el("p", "", "No stories found in browser/dashboard/ui/."));
 }
 
-// Reloads when a file under browser/dashboard/ui/ or preview/ changes.
+// Reloads when a file under browser/dashboard/ui/ or browser/dashboard/preview/ changes.
 let seen = null;
 async function watch() {
   try {
