@@ -2,6 +2,7 @@
 msvcrt locks and named events. The package's __init__.py lists what each name is; README.md says why each is so.
 """
 
+import collections
 import ctypes
 import hashlib
 import msvcrt
@@ -24,7 +25,7 @@ from . import Unanswered
 
 __all__ = ["NAME", "CHROME", "CHROME_FLAGS", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
-           "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "remove_own_folder", "drop_from_user_path", "ansi", "listen_for_stop", "request_stop",
+           "kill_chrome", "front", "bring", "happened", "minimize", "lock", "spawn_detached", "hidden", "remove_own_folder", "drop_from_user_path", "ansi", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
 
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -76,6 +77,14 @@ _SendMessageTimeoutW = _declare(_user32.SendMessageTimeoutW, ctypes.c_ssize_t, w
                                 wintypes.WPARAM, wintypes.LPCWSTR, wintypes.UINT, wintypes.UINT,
                                 ctypes.POINTER(ctypes.c_size_t))
 _WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+_WINEVENTPROC = ctypes.WINFUNCTYPE(None, wintypes.HANDLE, wintypes.DWORD, wintypes.HWND, wintypes.LONG, wintypes.LONG,
+                                   wintypes.DWORD, wintypes.DWORD)
+_SetWinEventHook = _declare(_user32.SetWinEventHook, wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.HMODULE,
+                            _WINEVENTPROC, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD)
+_GetMessageW = _declare(_user32.GetMessageW, wintypes.BOOL, ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT,
+                        wintypes.UINT)
+_DispatchMessageW = _declare(_user32.DispatchMessageW, ctypes.c_ssize_t, ctypes.POINTER(wintypes.MSG))
+_GetAncestor = _declare(_user32.GetAncestor, wintypes.HWND, wintypes.HWND, wintypes.UINT)
 _EnumWindows = _declare(_user32.EnumWindows, wintypes.BOOL, _WNDENUMPROC, wintypes.LPARAM)
 _GetClipboardSequenceNumber = _declare(_user32.GetClipboardSequenceNumber, wintypes.DWORD)
 _CreateEventW = _declare(_kernel32.CreateEventW, wintypes.HANDLE, ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL,
@@ -302,9 +311,11 @@ def chrome_owner(folder):
 
 
 def launch_chrome(args):
-    # Chrome is started off the user's focus: no window at first (--no-startup-window), and one shown later is shown
-    # without taking the focus. DETACHED_PROCESS and a group of its own keep it running past the server.
-    startup = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=4)  # SW_SHOWNOACTIVATE
+    # Chrome is started off the user's focus: no window at first (--no-startup-window), and every window it opens
+    # minimized (opens.window's) shown minimized from the start, never on screen first, which Chrome takes from how it
+    # was started (measured; README.md, "Agent Gotchas"). DETACHED_PROCESS and a group of its own keep it running past
+    # the server.
+    startup = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=7)  # SW_SHOWMINNOACTIVE
     try:
         return _spawn([CHROME, *args], _DETACHED_PROCESS | _NEW_GROUP, startupinfo=startup, stdin=subprocess.DEVNULL,
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
@@ -386,6 +397,56 @@ def bring(pid):
         _SwitchToThisWindow(window, True)
         time.sleep(0.05)
     return front() == pid
+
+
+# Every top-level window that took the focus, was un-minimized or was shown, newest last, as (when, kind, pid, window,
+# the pid that had the focus before): Windows tells of these as they happen, 10 to 55ms before Chrome tells of the tab
+# that did it (measured), so happened can say what a tab did after the fact.
+_HISTORY = collections.deque(maxlen=4096)
+_watching = threading.Lock()
+_watcher = []
+_FOREGROUND, _UNMINIMIZED, _SHOWN = 0x0003, 0x0017, 0x8002  # EVENT_SYSTEM_FOREGROUND, _MINIMIZEEND, EVENT_OBJECT_SHOW
+
+
+def _watch_windows(ready):
+    had = [front()]
+
+    def heard(hook, event, window, object_id, child, thread, at):
+        # A top-level window's own event (OBJID_WINDOW, CHILDID_SELF), not a caret's or a control's.
+        if not window or object_id != 0 or child != 0 or _GetAncestor(window, 2) != window:  # GA_ROOT
+            return
+        pid = _window_pid(window)
+        if event == _FOREGROUND:
+            _HISTORY.append((time.monotonic(), "front", pid, window, had[0]))
+            had[0] = pid
+        else:
+            _HISTORY.append((time.monotonic(), "restored" if event == _UNMINIMIZED else "shown", pid, window, None))
+
+    callback = _WINEVENTPROC(heard)  # held here as long as the hooks are, or Windows would call freed memory
+    hooks = [_SetWinEventHook(event, event, None, callback, 0, 0, 0)  # WINEVENT_OUTOFCONTEXT, every process
+             for event in (_FOREGROUND, _UNMINIMIZED, _SHOWN)]
+    ready.set()
+    if all(hooks):
+        message = wintypes.MSG()
+        while _GetMessageW(ctypes.byref(message), None, 0, 0) > 0:  # the hooks are called from this thread's messages
+            _DispatchMessageW(ctypes.byref(message))
+
+
+def happened(pid, since):
+    with _watching:
+        if not _watcher:
+            ready = threading.Event()
+            _watcher.append(threading.Thread(target=_watch_windows, args=(ready,), daemon=True))
+            _watcher[0].start()
+            ready.wait(5)
+    return [(when, kind, window, before) for when, kind, owner, window, before in list(_HISTORY)
+            if owner == pid and when >= since]
+
+
+def minimize(window):
+    if _IsWindowVisible(window) and not _IsIconic(window):
+        _ShowWindow(window, 6)  # SW_MINIMIZE, which gives the focus to the window under it
+    return bool(_IsIconic(window))
 
 
 def lock(handle):

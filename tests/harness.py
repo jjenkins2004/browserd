@@ -107,6 +107,8 @@ class FakeChrome:
         self.targets = []
         self.created = []
         self.activated = []
+        self.window_state = "minimized"  # every window's, as an agent's work leaves it
+        self.restored = []  # windowIds setWindowBounds made normal
         self.navigate_error: str | None = None
         self.navigate_raises: Exception | None = None
         self.loads = True
@@ -165,6 +167,13 @@ class FakeConnection:
             return {"targetInfo": dict(chrome.find(params["targetId"]))}
         if method == "Target.activateTarget":
             chrome.activated.append(params["targetId"])
+            return {}
+        if method == "Browser.getWindowForTarget":
+            chrome.find(params["targetId"])
+            return {"windowId": 1, "bounds": {"windowState": chrome.window_state}}
+        if method == "Browser.setWindowBounds":
+            chrome.restored.append(params["windowId"])
+            chrome.window_state = params["bounds"]["windowState"]
             return {}
         if method == "Target.closeTarget":
             chrome.targets.remove(chrome.find(params["targetId"]))

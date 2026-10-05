@@ -25,7 +25,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))
-from browser.chrome import cdp  # noqa: E402
+from browser.chrome import cdp, opens  # noqa: E402
 from browser.config import paths  # noqa: E402
 from browser.records.state import State  # noqa: E402
 
@@ -91,7 +91,7 @@ def background_tab(profile, url, host):
     once host's page has loaded. A new tab starts on about:blank, whose context goes when the page loads, so nothing
     may run before."""
     browser = cdp.Browser(State(STATE_FILE).profile(profile))
-    target = browser.call("Target.createTarget", url=url, background=True)["targetId"]
+    target = opens.tab(browser, url)
     try:
         session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
         for _ in range(40):

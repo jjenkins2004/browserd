@@ -42,8 +42,9 @@ parts.
       chrome/        each profile's Chrome
         cdp.py       which Chrome, port proof, one websocket to it
         launch.py    starts a profile's Chrome, or adopts one already up
-        chromes.py   each profile's Chrome: started on first use, focus kept, quit from the page or at stop
-        focus.py     the user's focus: which app has it; gives it back from tabs pages open
+        chromes.py   each profile's Chrome: started on first use, what its pages open put back, quit from the page or at stop
+        opens.py     every new window and tab, minimized and off the focus; what a page opens put back; Show
+        focus.py     the user's focus: which app has it, bringing one to the front
         profiles.py  Profile (name, folder, port); what a new profile is given; deleting one
         downloads.py each profile's downloads folder (Folder), and a tab's downloads and where each went (Watcher)
       records/       what browserd keeps in the records folder
@@ -76,6 +77,7 @@ parts.
     ../tests/harness.py         check and its tallies, the stand-in profile and state, a served MCP to call, the shared stand-ins
     ../tests/check_browser.py   framing, a profile's Chrome proof, launch; live proof, tab load
     ../tests/throwaway.py       the live checks' own Chrome, on a new folder and a free port
+    ../tests/popups.py          on Windows, every window that comes on screen or takes the focus while checks run
 
 ## Core Abstractions & Shared Pieces
 
@@ -89,8 +91,9 @@ parts.
 | the folder's owner | `SingletonLock`'s pid, `ps` showing Chrome's binary | `Chrome_MessageWindow` titled with the folder; its process's image is Chrome's, no `--type` |
 | a port's listeners | `lsof` | the TCP table (`GetExtendedTcpTable`), IPv4 and IPv6 |
 | a command line | `ps` (words joined by spaces) | `NtQueryInformationProcess`, split by `CommandLineToArgvW` |
-| starting Chrome | `open -gna`, no window | the binary, detached, its first window shown without the focus |
+| starting Chrome | `open -gna`, no window | the binary, detached, minimized and without the focus |
 | the app in front, bringing one | `lsappinfo`, AppKit through `osascript` | the foreground window; `SetForegroundWindow`, shared input, `SwitchToThisWindow` |
+| what a Chrome's windows did, minimizing one | nothing kept | WinEvent hooks: the focus taken, a window un-minimized or shown; `ShowWindow` |
 | `browserd stop`, `restart` | SIGTERM, SIGHUP | two named events per checkout and user |
 | the command's colors | on in a terminal | on in a console once asked (`ENABLE_VIRTUAL_TERMINAL_PROCESSING`) |
 | `browserd uninstall` removing its own folder | at once | by a process of its own, once browserd has exited; its `bin` taken off the user's PATH |
@@ -126,7 +129,7 @@ one command a timeout of its own in place of `cdp.CALL_WAIT` (a pointer step's 5
 **`chromes.Chromes`** is where the server starts and quits each profile's Chrome; it keeps no list of running
 ones, asking `cdp.owner` each time. `ensure(profile)` starts a profile's
 Chrome with `launch.launch` unless it is up, one start at a time per folder, and sends SIGTERM to a Chrome
-it launched but never saw answer. It then runs `focus.keep` for that Chrome on a connection of its own: a
+it launched but never saw answer. It then runs `opens.watch` for that Chrome on a connection of its own: a
 thread that ends when the Chrome quits and starts again with it; and a `downloads.Folder` beside it, which saves
 that Chrome's downloads in `downloads/<profile>/` in the records folder (`server.DOWNLOADS`); `ensure` waits up to
 `downloads.READY_WAIT` (2s) for a new one to take, outside the start lock, so a tab handed out after it is saved
@@ -134,7 +137,7 @@ there, and a Folder that has not taken by then keeps trying, logged once. `adopt
 waits for them together; `downloads(profile)` starts one, not waited on, for a Chrome that runs without one, and
 gives a running one's Folder to each tab's `Worker`. `adopt` does the same for every profile's
 Chrome already running as the server starts, `window` is the page's Open Chrome (it brings a running Chrome to the
-front, restoring a minimized window, and opens a window on `PLACEHOLDER` only when it has no page open), `quit` (the page's Quit Chrome, and `profiles.delete`) quits one once any start of it under way has
+front through `opens.show`, opening a window on `opens.PLACEHOLDER` first only when it has no page open), `quit` (the page's Quit Chrome, and `profiles.delete`) quits one once any start of it under way has
 finished, raising a `CdpError` when it is still running after, and `quit_all` quits every running one that way when the
 server stops, logging that error rather than raising it; no Chrome starts after it.
 
@@ -297,22 +300,40 @@ same tabs under the same ids. A crash leaves the same.
   no default context. With no page open either, `Tabs` lists no tabs rather than refusing, and
   `tab_open`'s `Target.createTarget` loads it again. No default context beside open pages
   is still refused, since those tabs cannot be told apart.
-- **Nothing but the page's Open Chrome and Show leaves a profile's Chrome with the user's focus.** No tool an agent
-  has brings a tab or its Chrome to the front.
-  On Windows, `launch` starts Chrome detached with `--no-startup-window` and its first window shown without the focus,
-  and a background tab, even in a new window, took no focus (measured); a page's `window.open` popup did, at once,
-  and `focus.keep` gave it back before a 20ms poll saw Chrome in front, so `keep` runs there as on a Mac. `bring`
-  tries `SetForegroundWindow`, then with its input joined to the app in front, then `SwitchToThisWindow`, and never
-  presses a key (a stray Alt would reach the app in front). On a Mac: Chrome raises itself over
-  the app in front each time it shows a window. macOS lets it at launch, even under `open -g`, and
-  after that only once Chrome has been in front at least once. So `launch` starts it with `open -g`
-  and `--no-startup-window`: with no window, the tabs it had open when it last quit do not come back, and the first
-  `tab_open` makes one. Nothing stops Chrome raising itself for a tab a page opens (a `target=_blank`
-  link, a `window.open` popup), so `focus.keep` hears its `Target.targetCreated` (a page with an
-  `openerId`) 10 to 30ms after the click and, if that Chrome takes the Mac's focus within
-  `focus.TAKE_WAIT` (Chrome was measured taking it 50 to 90ms after the click), gives the focus back
-  to the app that had it. With that Chrome in front when the event comes, as after Joshua's own
-  click, it leaves the focus there; it logs a line for each such tab.
+- **Every window and tab is opened in `opens.py`, and nothing but the page's Open Chrome and Show brings one
+  forward.** There are three ways a profile's Chrome gets one: `opens.window` (a new window), `opens.tab` (a new tab)
+  and a page opening one (a `target=_blank` link, `window.open`), which `opens.from_page` puts back; `opens.show`,
+  called by Open Chrome and Show alone, is the one way one comes to the front. No tool an agent has calls it, nor
+  does a check or an experiment open a window or tab any other way.
+  A window an agent's work opens stays minimized. `opens.window` asks `Target.createTarget` for `windowState:
+  minimized` and never `background`: Chrome shows a background window, or a window asked minimized of a Chrome
+  started the old way, on screen first and minimizes it after, about 10ms on screen (measured with
+  `tests/popups.py`). On Windows, `launch` starts Chrome detached with `--no-startup-window` and
+  `SW_SHOWMINNOACTIVE`, which Chrome takes for every window it opens minimized: with both, 0 windows came on screen in
+  every trial, the first window, a second, and one in a Chrome whose windows had all been closed. A window Chrome
+  opens of its own kind (Ctrl+N) then opens minimized too, so `opens.watch` un-minimizes a new page with no opener
+  that opens while that Chrome has the focus, which only the user's can; an agent's opens in a Chrome with no window.
+  A tab in a minimized window is drawn as a background tab is: `screenshot.capture` and typed keys behaved the same
+  in one as in a normal window (6 of 6 each, about 0.5s a capture). `bring` tries `SetForegroundWindow`, then with
+  its input joined to the app in front, then `SwitchToThisWindow`, and never presses a key (a stray Alt would reach
+  the app in front). On a Mac: Chrome raises itself over the app in front each time it shows a window. macOS lets
+  it at launch, even under `open -g`, and after that only once Chrome has been in front at least once. So `launch`
+  starts it with `open -g` and `--no-startup-window`: with no window, the tabs it had open when it last quit do not
+  come back, and the first `tab_open` makes one.
+  Nothing stops Chrome showing a tab a page opens: a `target=_blank` link un-minimizes its window and takes the
+  focus, and a `window.open` popup opens a window of its own with it. So `opens.watch` hears its
+  `Target.targetCreated` (a page with an `openerId`) and `from_page` puts back what it did: it minimizes each window
+  of that Chrome it un-minimized, at once through the OS, and the new window it showed, through Chrome (minimized by
+  the OS while Chrome is still showing it, Chrome shows it again where a minimized window sits, off every screen
+  and not minimized), and gives the focus back to the app that had it, watching for `opens.TAKE_WAIT` (0.5s). On
+  Windows, Chrome takes the focus 10 to 55ms before it tells of the tab (measured), so asking which app is in front
+  when the event comes finds Chrome itself; `system.happened` keeps what each window did as Windows tells of it, so
+  `from_page` reads which app had the focus before Chrome took it, `opens.LOOK_BACK` (0.25s) before the event. On
+  a Mac, the event comes 10 to 30ms after the click and Chrome takes the focus 50 to 90ms after it, so the app in
+  front when the event comes is the one. With that Chrome in front before, as after Joshua's own click, it leaves
+  everything as it is, and a window Open Chrome or Show brought up is never put back. Measured on Windows: a popup
+  window on screen 75ms and in front 22ms, a link's window on screen 54ms and in front 8ms, each then minimized
+  with the focus back where it was; it logs a line for each such tab.
 - **Every profile's Chrome starts with `--allow-pre-commit-input` (`cdp.INPUT_FLAG`).** Once a page
   loads, Chrome holds its input until it first draws (paint holding), dropping every key press and
   click while `Input.dispatchKeyEvent` and `Input.dispatchMouseEvent`, and so chrome-devtools-mcp, report success. The hold ends
@@ -320,23 +341,23 @@ same tabs under the same ids. A crash leaves the same.
   such a tab drops input indefinitely (measured: 40 of 40 first key presses on fresh background tabs dropped). `launch`
   `cdp.require` refuses a profile's Chrome whose command line lacks the flag, naming its pid to quit, so no tool,
   listing or window uses one, a Chrome kept through `browserd restart` from before the flag included.
-- **Tabs open in the background.** `Tabs.open` creates the tab with `background: true`, so the
+- **Tabs open in the background.** `opens.tab` creates the tab with `background: true`, so the
   Mac's focus never moves; without it, `Target.createTarget` brings Chrome to the front. Opening
   goes `about:blank`, attach, `Page.enable`, then navigate: Chrome can finish a load before a later
   `Page.enable` would hear it. A navigation the site has not answered by the websocket's 20s
   (`cdp.Late`) leaves the tab open and loading; a URL Chrome refuses is `could not open <url>: <why>`.
-  For the page's Show (`Tabs.show`), `Target.activateTarget` picks the tab, and `focus.bring` brings the tab's
-  Chrome to the front by pid, which `activateTarget` alone does not do for a Chrome never yet in front; when
-  macOS refuses, Show fails.
+  For the page's Show (`Tabs.show`), `opens.show` un-minimizes the tab's window, `Target.activateTarget` picks the
+  tab, and `focus.bring` brings the tab's Chrome to the front by pid, which `activateTarget` alone does not do for a
+  Chrome never yet in front; when macOS refuses, Show fails.
 - **`tab_open` never opens its tab in a window of its own.** A tab opened in a new window (as `Target.createTarget`
   opens one in a Chrome with no window open) holds a Google search page Chrome's omnibox prerenders there
   (`warmup.html`), and when Puppeteer attaches that hidden page before the tab's own, Puppeteer finishes connecting
   without the tab's page, so a new chrome-devtools-mcp lists no page for the tab and its queues cannot pair it
   (measured in two runs: 6 and 8 of 25 tabs opened in new windows, each failing for over 60s with a new process per
-  queue). So `Tabs.open`, in a Chrome with no page of its Chrome profile open,
-  first opens `chromes.PLACEHOLDER`, as the page's Open Chrome does in a Chrome with no page open, a `data:` page that no listing includes and so gets no tab id; the new window's
+  queue). So `opens.tab`, in a Chrome with no page of its Chrome profile open,
+  first opens `opens.PLACEHOLDER` with `opens.window`, as the page's Open Chrome does in a Chrome with no page open, a `data:` page that no listing includes and so gets no tab id; the new window's
   prerender goes to the placeholder, and the tab goes into that window beside it (measured: 0 of 25 failed, each opened
-  in a Chrome with no window open). A lock per profile, in `Tabs._placing`, covers looking for a page and opening the
+  in a Chrome with no window open). A lock per Chrome folder, in `opens._placing`, covers looking for a page and opening the
   placeholder, so two opens at once make one placeholder. The placeholder stays open until its Chrome quits or it is
   closed by hand, and the next `tab_open` with no window open opens another.
 - **No agent ends a session.** An agent would end one while its task still needed it, so only Joshua
@@ -667,7 +688,7 @@ same tabs under the same ids. A crash leaves the same.
     holds itself; `owning_mac` checks the lock, `ps`, `lsof` and `open`, and `owning_windows` a real
     `Chrome_MessageWindow` in a process of its own, a pid it cannot read, and how Chrome is started.
     `tabs_offline` and `session_tools_offline` stand in for Chrome and `osascript`, with `state.db` in a
-    temporary folder; `focus_offline` for `lsappinfo`, `osascript` and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
+    temporary folder; `focus_offline` for the OS's front app and window record, and Chrome's events; `queue_offline` for chrome-devtools-mcp and a snapshot;
     `pairing_offline` for a tab's chrome-devtools-mcp and the connection that marks the tab;
     `dialogs_offline` for the answerer's connection; `downloads_offline` for the Folder's and the watcher's connections; `paste_offline` for chrome-devtools-mcp and
     the connection that hands the page its text and presses the paste key; `screenshot_offline` for the connection
@@ -679,7 +700,12 @@ same tabs under the same ids. A crash leaves the same.
     signal, a process that runs `-m browser.server` in its command line.
   - **Live:** the live groups start a Chrome of their own, `throwaway.chrome()`, on a new folder under
     `$TMPDIR` and a free port, and quit it after, so no live check touches a profile's Chrome; with no
-    Chrome installed they skip. `queue_live` also needs `npm ci` done, and skips
+    Chrome installed they skip. It runs headless (`--headless=new`, passed through `launch.launch`'s `flags`, which
+    no profile's Chrome is given), so no live check puts a window on screen or moves the user's focus, and they run
+    while the user works. `--headed` (`check_server.py --headed`, `check_browser.py --headed`) runs them on a Chrome
+    with windows instead, and adds `windows_live`, the checks of windows and the focus: the first tab's window
+    minimized, and a page's popup and `target=_blank` link put back, each on screen for under a tenth of a second
+    while the focus moves and comes back. `queue_live` also needs `npm ci` done, and skips
     without it, and records into a temporary folder; its checked steps run on a local page whose
     dropdowns and one textarea take only trusted input, whose Parse resume button runs a stand-in resume parser,
     whose Quoted editor curls quotes as they are typed, whose Stopper editor puts a paste in itself and stops
@@ -694,8 +720,12 @@ same tabs under the same ids. A crash leaves the same.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; their downloads go in a `Folder` of their own in a temporary folder, never `~/Downloads`
     (`downloads_live`, run last, sets the throwaway profile to ask where to save each file, and quits and starts
-    its Chrome again to do it); a tab already open is never touched. No live check moves the Mac's focus:
-    `Tabs.show` and `focus.keep` are checked offline only, and `focus.front` and `focus.bring` never run in a check.
+    its Chrome again to do it); a tab already open is never touched. Every window and tab a live check opens comes
+    from `opens.window` or `opens.tab`, and `opens.watch` runs on the throwaway Chrome as the server runs it, so the
+    tabs the checks have a page open are put back; that moves the focus only back to the app that had it.
+    `Tabs.show` is checked offline only. On Windows, `tests/popups.py` watches the screen through every live group,
+    headless or not: a window of the checks' own processes that comes on screen or takes the focus fails the checks,
+    but for one `windows_live` has a page open (`popups.allowing`), put back within 0.25s. `py -3 tests/popups.py -- <command>` watches any command so.
   - **Never automated:** `browserd start`, `stop`, `restart`, `setup` and `uninstall` are never run, since each acts on the
     real browserd: stopping quits every profile's Chrome, restarting replaces the one running, and uninstalling
     removes it.

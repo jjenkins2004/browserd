@@ -9,8 +9,8 @@ import time
 
 from browser import system
 from browser.chrome import cdp, focus
+from browser.chrome.opens import PLACEHOLDER
 from browser.tabs import sessions
-from browser.chrome.chromes import PLACEHOLDER
 from browser.chrome.profiles import Profile
 from browser.records.state import Tab
 from browser.tabs.tabs import LETTERS, Tabs
@@ -102,9 +102,13 @@ def tabs_offline():
                       for row in state.open_tabs("School")))
 
         shown = tabs.show(mine, tab)
-        check("show brings the tab's target and its Chrome to the front and answers with where it is",
-              chrome.activated == [tabs.target(mine, tab)] and brought == [FakeConnection.pid]
-              and shown["url"] == "https://jobs.ashbyhq.com/new", repr((chrome.activated, brought)))
+        check("show un-minimizes the tab's window, brings the tab and its Chrome to the front and answers with where "
+              "it is", chrome.activated == [tabs.target(mine, tab)] and brought == [FakeConnection.pid]
+              and chrome.restored == [1] and shown["url"] == "https://jobs.ashbyhq.com/new",
+              repr((chrome.activated, brought, chrome.restored)))
+        tabs.show(mine, tab)
+        check("and leaves a window already up as it is", chrome.restored == [1], repr(chrome.restored))
+        chrome.window_state = "minimized"
         check("show refuses another session's tab", "no tab of this session" in refusal(lambda: tabs.show(theirs, tab)))
         focus.bring = lambda pid: False
         check("show fails when %s does not bring the Chrome to the front" % system.NAME, "did not bring that Chrome" in refusal(lambda: tabs.show(mine, tab)))
@@ -122,8 +126,9 @@ def tabs_offline():
         count = len(chrome.created)
         first, _ = tabs.open(mine, "https://example.com/first")
         chrome.default = "school"
-        check("open in a Chrome with no window open opens the placeholder first, in the background, and then its tab",
-              chrome.created[count:] == [{"url": PLACEHOLDER, "background": True},
+        check("open in a Chrome with no window open opens the placeholder first, in a new window minimized from the "
+              "start, and then its tab in the background",
+              chrome.created[count:] == [{"url": PLACEHOLDER, "newWindow": True, "windowState": "minimized"},
                                          {"url": "about:blank", "background": True}], repr(chrome.created[count:]))
         check("no listing includes the placeholder, so it gets no tab id", [t for t, _ in tabs.list(mine)[0]] == [first]
               and state.tab_for_target("School", chrome.targets[0]["targetId"]) is None, repr(chrome.targets))

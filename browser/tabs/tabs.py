@@ -9,8 +9,7 @@ import threading
 import time
 
 from .. import system
-from ..chrome import cdp, focus
-from ..chrome.chromes import PLACEHOLDER
+from ..chrome import cdp, opens
 from ..records.state import Tab
 from ..protocol.ws import WebSocketError
 
@@ -37,7 +36,6 @@ class Tabs:
         self._connect = connect
         self._start = start or (lambda profile: None)
         self._lock = threading.Lock()  # one listing gives out ids at a time, so no page gets two
-        self._placing = {}  # profile name -> its lock: one open at a time looks for a page, so two make one placeholder
 
     def profile(self, session):
         """The Profile a session drives."""
@@ -62,7 +60,7 @@ class Tabs:
         pages = [
             info for info in infos
             if info.get("type") == "page" and not info.get("url", "").startswith(("devtools://", "chrome-extension://"))
-            and info.get("url") != PLACEHOLDER
+            and info.get("url") != opens.PLACEHOLDER
         ]
         if not default:
             if not pages:
@@ -213,9 +211,7 @@ class Tabs:
         self._start(profile)
         browser = self._connect(profile)
         try:
-            self._keep_window(browser)
-            # background keeps Chrome from taking the user's focus; README.md, "Agent Gotchas".
-            target = browser.call("Target.createTarget", url="about:blank", background=True)["targetId"]
+            target = opens.tab(browser)
             with self._lock:
                 # A listing between createTarget and here gave the page a tab of no session's; this session takes it.
                 listed = self._state.tab_for_target(profile.name, target)
@@ -252,17 +248,8 @@ class Tabs:
             browser.close()
         return tab, info
 
-    def _keep_window(self, browser):
-        """Open the placeholder in a Chrome with no page of its Chrome profile open, so the tab opened next goes into
-        the placeholder's window, not a new one of its own; README.md, "Agent Gotchas & Invariants", says why."""
-        with self._placing.setdefault(browser.profile.name, threading.Lock()):
-            default = browser.call("Target.getBrowserContexts").get("defaultBrowserContextId")
-            infos = browser.call("Target.getTargets")["targetInfos"]
-            if not any(info.get("type") == "page" and info.get("browserContextId") == default for info in infos):
-                browser.call("Target.createTarget", url=PLACEHOLDER, background=True)
-
     def show(self, session, tab):
-        """Bring a tab to the front and return its target info.
+        """Bring a tab, its window and its Chrome to the front, and return its target info.
 
         Args:
             session (Session | None): who asks; None for the browserd page.
@@ -271,13 +258,10 @@ class Tabs:
         target = self.target(session, tab)
         browser = self._connect(self._profile_of(self._state.tab(tab)))
         try:
-            browser.call("Target.activateTarget", targetId=target)
-            info = browser.call("Target.getTargetInfo", targetId=target)["targetInfo"]
-            # activateTarget alone does not raise a Chrome never yet in front; README.md, "Agent Gotchas".
-            if not focus.bring(browser.pid):
+            if not opens.show(browser, target):
                 raise cdp.CdpError("tab %s is picked in the %s Chrome, but %s did not bring that Chrome to the front"
                                    % (tab, browser.profile.name, system.NAME))
-            return info
+            return browser.call("Target.getTargetInfo", targetId=target)["targetInfo"]
         finally:
             browser.close()
 

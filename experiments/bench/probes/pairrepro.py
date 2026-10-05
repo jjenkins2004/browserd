@@ -2,7 +2,7 @@
 import sys, tempfile, time
 import served
 import throwaway
-from browser.chrome import cdp
+from browser.chrome import cdp, opens
 from browser.tabs.worker import Worker
 
 DELAYS = [float(d) for d in sys.argv[1].split(",")] if len(sys.argv) > 1 else [0, 0.1, 0.3, 0.6, 1, 2]
@@ -25,7 +25,7 @@ def bench():
 def open_tab(profile, n):
     b = cdp.Browser(profile)
     try:
-        t = b.call("Target.createTarget", url="about:blank", background=True)["targetId"]
+        t = opens.window(b, "about:blank")  # the tab in a window of its own, as the pairing failure needs
         s = b.call("Target.attachToTarget", targetId=t, flatten=True)["sessionId"]
         b.call("Page.enable", session=s)
         b.call("Page.navigate", session=s, url=URL % n)

@@ -24,6 +24,11 @@ says what each OS does in its place.
     kill_chrome(pid)      stop a Chrome that never answered, by pid
     front()               the pid of the app the user's focus is in, or None
     bring(pid)            bring an app to the front, and return whether the OS let it
+    happened(pid, since)  what an app's windows did since a time.monotonic(): (when, kind, window, the pid that had
+                          the focus before a "front"), oldest first, kind "front" (took the focus), "restored"
+                          (un-minimized) or "shown" (a new window); [] where the OS keeps no record
+    minimize(window)      minimize a window happened said was restored, and return whether it is; False where the OS
+                          cannot
     lock(handle)          hold an exclusive lock on an open file until it is closed, waiting for it
     spawn_detached(argv, **popen)  a Popen of a process that runs on past this one, with no window of its own
     hidden()              Popen arguments that give a helper process no window of its own

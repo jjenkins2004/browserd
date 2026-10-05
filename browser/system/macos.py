@@ -12,7 +12,7 @@ from . import Unanswered
 
 __all__ = ["NAME", "CHROME", "CHROME_FLAGS", "APP", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
-           "kill_chrome", "front", "bring", "lock", "spawn_detached", "hidden", "remove_own_folder", "drop_from_user_path", "ansi", "listen_for_stop", "request_stop",
+           "kill_chrome", "front", "bring", "happened", "minimize", "lock", "spawn_detached", "hidden", "remove_own_folder", "drop_from_user_path", "ansi", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
 
 NAME = "macOS"
@@ -108,6 +108,14 @@ def bring(pid):
     except (OSError, subprocess.TimeoutExpired):
         return False
     return done.stdout.strip() == "true"
+
+
+def happened(pid, since):
+    return []  # macOS keeps no such record; Chrome tells of a tab before it takes the focus here (README.md)
+
+
+def minimize(window):
+    return False
 
 
 def lock(handle):

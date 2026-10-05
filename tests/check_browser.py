@@ -2,7 +2,9 @@
 
 browser/README.md, "Agent Gotchas & Invariants", "Checks", says what each group needs and touches.
 
-    python3 tests/check_browser.py    (py -3 tests\check_browser.py on Windows)
+    python3 tests/check_browser.py [--headed]    (py -3 tests\\check_browser.py on Windows)
+
+The live group runs on a headless Chrome, which puts no window on screen; --headed runs it on one with windows.
 """
 
 import json
@@ -18,9 +20,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import popups
 import throwaway
 from browser import system
-from browser.chrome import cdp, launch
+from browser.chrome import cdp, launch, opens
 from browser.protocol import mcp
 from browser.chrome.profiles import Profile
 from browser.protocol.ws import TEXT, WebSocket, WebSocketError
@@ -295,7 +298,7 @@ def connecting():
         started = []
 
         def starting(m, comes_up=True, exits=None):
-            def start(profile):
+            def start(profile, flags=()):
                 started.append(True)
                 if comes_up:
                     m.owner, m.listening, m.processes[501], m.hidden = 501, [501], school, 2  # the port opens on the third look
@@ -352,7 +355,7 @@ def connecting():
         said = refusal(lambda: launch.launch(profile._replace(folder=os.path.join(workdir, "Chrome-Gone"))))
         check("launch refuses a folder that is gone, and starts nothing", "is gone" in said and not started, said)
 
-        def will_not_start(profile):
+        def will_not_start(profile, flags=()):
             raise cdp.CdpError("could not start Chrome: Unable to find application")
 
         machine(answer=VERSION)
@@ -617,10 +620,10 @@ def owning_windows(folder, profile):
     try:
         said = refusal(lambda: launch._open(profile))
         args, kw = ran[-1] if ran else ([], {})
-        check("Chrome is started as its own process, detached, with no window yet and its first shown without the "
-              "focus, the port, the folder, the profile, and input let through before a page draws",
+        check("Chrome is started as its own process, detached, with no window yet and each it opens minimized shown "
+              "minimized without the focus, the port, the folder, the profile, and input let through before a page draws",
               not said and args[0] == cdp.CHROME and kw["creationflags"] & windows._DETACHED_PROCESS
-              and kw["startupinfo"].wShowWindow == 4 and {
+              and kw["startupinfo"].wShowWindow == 7 and {
                   "--remote-debugging-port=%d" % profile.port, "--user-data-dir=%s" % profile.folder,
                   "--profile-directory=Default", "--no-startup-window", cdp.INPUT_FLAG} <= set(args[1:]), repr(ran))
         check("out of the job it runs in if the job lets it, and in it if not",
@@ -660,7 +663,10 @@ def live():
             cdp.require, cdp.owner = saved
 
         browser = cdp.Browser(profile)
-        target = browser.call("Target.createTarget", url="about:blank", background=True)["targetId"]
+        watch = popups.watch()
+        if watch is not None:
+            check("the pop-up watch counts the throwaway Chrome's windows", watch.watches(browser.pid))
+        target = opens.tab(browser)
         try:
             session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
             browser.call("Page.enable", session=session)
@@ -670,12 +676,15 @@ def live():
         finally:
             browser.call("Target.closeTarget", targetId=target)
             browser.close()
+            if watch is not None:
+                popups.checked(watch, check)
         said = refusal(lambda: cdp.check_folder(profile.folder))
         check("once a tab has loaded its profile, the folder lists only Default and still passes", not said, said)
 
 
 if __name__ == "__main__":
     mcp.log = lambda line: None  # chromes.quit_chrome logs the throwaway Chrome's quit, which would bury the results
+    throwaway.HEADED = "--headed" in sys.argv[1:]
     framing()
     print()
     connecting()

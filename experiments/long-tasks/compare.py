@@ -29,7 +29,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import grade  # noqa: E402
 import judge  # noqa: E402
-from browser.chrome import cdp  # noqa: E402
+from browser.chrome import cdp, opens  # noqa: E402
 from browser.records.state import State  # noqa: E402
 
 ROOT = HERE.parents[1]
@@ -117,7 +117,7 @@ def clean_start(state, browser):
     while page_targets(browser) & others_tabs(state):
         print("waiting: an open browserd session has a tab in the %s Chrome" % PROFILE, flush=True)
         time.sleep(60)
-    fresh = browser.call("Target.createTarget", url="about:blank", newWindow=True)["targetId"]
+    fresh = opens.window(browser, "about:blank")
     clear_tabs(state, browser, keep=[fresh])
     return fresh
 

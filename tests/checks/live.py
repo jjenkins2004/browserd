@@ -18,7 +18,7 @@ import urllib.parse
 import zlib
 
 from browser import server, system
-from browser.chrome import cdp, chromes, downloads, launch
+from browser.chrome import cdp, chromes, downloads, launch, opens
 from browser.steps import checked, steps
 from browser.tabs import devtools, sessions
 from browser.tabs import devtools as devtools_module  # queue_live names its own chrome-devtools-mcp devtools
@@ -27,6 +27,8 @@ from browser.tabs.tabs import Tabs
 from browser.tabs.worker import Workers, returned
 from browser.tools import queue_steps, queue_tool, tab_tools
 from browser.protocol.ws import WebSocketError
+import popups
+import throwaway
 from harness import call, check, open_session, refusal, rpc, serving, skipped, text_of, uid
 
 
@@ -42,6 +44,10 @@ def front_app():
         return system.front()
     except system.Unanswered:
         return None
+
+
+def window_state(browser, target):
+    return browser.call("Browser.getWindowForTarget", targetId=target)["bounds"].get("windowState")
 
 
 def live(profile, state):
@@ -75,8 +81,7 @@ def live(profile, state):
     browser = connect()
     context = browser.call("Target.createBrowserContext")["browserContextId"]
     try:
-        hidden = browser.call("Target.createTarget", url="about:blank", browserContextId=context,
-                              background=True)["targetId"]
+        hidden = opens.window(browser, "about:blank", context)
         found, outside = tabs.list(session)
         check("an Incognito-like tab gets no id", hidden not in {info["targetId"] for _, info in found})
         check("and is counted as in another browser context", outside >= 1)
@@ -450,6 +455,42 @@ def checked_live(httpd, tabs, opened, session):
     check("wait for text to go waits for a status that shows a moment after the click", not is_error and "is off the page" in text, text)
 
 
+def windows_live(profile, state):
+    """The checks of windows and the focus, which need a Chrome with windows (the checks' --headed): put on screen
+    and taken back, each for under a tenth of a second, while the user's focus moves and comes back."""
+    tabs, session = Tabs(state, cdp.Browser), open_session(state, "windows", profile)
+    before = front_app()
+    tab, _ = tabs.open(session, "data:text/html,<title>window scratch</title>"
+                                "<a id=link target=_blank href='data:text/html,<title>linked</title>'>link</a>")
+    browser = cdp.Browser(profile)
+    popped = []
+    try:
+        opener = tabs.target(session, tab)
+        check("the first tab in a Chrome with no window open goes into a new window, minimized",
+              window_state(browser, opener) == "minimized", window_state(browser, opener))
+        attached = browser.call("Target.attachToTarget", targetId=opener, flatten=True)["sessionId"]
+        # A page's own: a popup window, and a target=_blank link, which un-minimizes its window and takes the focus.
+        with popups.allowing():
+            browser.call("Runtime.evaluate", session=attached, userGesture=True,
+                         expression="window.open('data:text/html,<title>popped</title>', 'popped', 'popup,width=400')")
+            time.sleep(opens.TAKE_WAIT + 0.5)
+        with popups.allowing():
+            browser.call("Runtime.evaluate", session=attached, userGesture=True,
+                         expression="document.getElementById('link').click()")
+            time.sleep(opens.TAKE_WAIT + 0.5)
+        popped = [(t, info) for t, info in tabs.list(session)[0] if info.get("openerId") == opener]
+        check("a tab or window a page opened is put back: its window minimized again and the user's focus where it was",
+              len(popped) == 2 and {window_state(browser, info["targetId"]) for _, info in popped}
+              | {window_state(browser, opener)} == {"minimized"} and (before is None or front_app() == before),
+              repr([(info["url"], window_state(browser, info["targetId"])) for _, info in popped]))
+    finally:
+        browser.close()
+        for extra, _ in popped:
+            with contextlib.suppress(cdp.CdpError, WebSocketError, OSError):
+                tabs.close(session, extra)
+        tabs.close(session, tab)
+
+
 def queue_live(profile, state):
     if not os.path.exists(PACKAGE):
         skipped.append("queue")
@@ -607,7 +648,9 @@ def queue_live(profile, state):
         popping = open_tab("<title>popup download scratch</title>"
                            "<a target=_blank href='data:application/octet-stream,hello popup'>Get it</a>")
         text, _ = call(httpd, "queue", session=session, tab=popping, steps=[{"tool": "take_snapshot"}])
-        text, is_error = call(httpd, "queue", session=session, tab=popping, steps=[{"tool": "click", "uid": uid(text, "link", "Get it")}])
+        with popups.allowing():
+            text, is_error = call(httpd, "queue", session=session, tab=popping,
+                                  steps=[{"tool": "click", "uid": uid(text, "link", "Get it")}])
         went = re.search(r"^--- downloaded .+ to (.+)$", text, re.M)
         check("and so does one begun in a popup the step opened",
               not is_error and went is not None and os.path.dirname(went.group(1)) == folder.folder
@@ -836,7 +879,7 @@ def downloads_live(profile):
 
     def begin(*names):
         """Open a page, begin a download of each name from it at once, and return which of them the folder holds."""
-        target = browser.call("Target.createTarget", url=base + "/", background=True)["targetId"]
+        target = opens.tab(browser, base + "/")
         opened.append(target)
         session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
         deadline = time.monotonic() + 10
@@ -883,10 +926,10 @@ def downloads_live(profile):
         chosen.setdefault("download", {})["prompt_for_download"] = True
         with open(preferences, "w", encoding="utf-8") as handle:
             json.dump(chosen, handle)
-        launch.launch(profile)
+        throwaway.start(profile)
         browser = cdp.Browser(profile)
         # Asked of Chrome's own settings page, so the check below is of a Chrome that really asks where to save.
-        settings = browser.call("Target.createTarget", url="chrome://settings/downloads", background=True)["targetId"]
+        settings = opens.tab(browser, "chrome://settings/downloads")
         opened.append(settings)
         session = browser.call("Target.attachToTarget", targetId=settings, flatten=True)["sessionId"]
         asks, deadline = None, time.monotonic() + 10

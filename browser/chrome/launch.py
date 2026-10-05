@@ -10,7 +10,7 @@ from . import cdp
 IN_USE = 21  # chrome.exe's exit code when another Chrome holds the folder under another spelling of it
 
 
-def _open(profile):
+def _open(profile, flags=()):
     """Start the profile's Chrome off the user's focus, with no window: README.md, "Agent Gotchas". The Popen of it, or
     None where the OS hands Chrome off (macOS's open)."""
     try:
@@ -19,18 +19,19 @@ def _open(profile):
             "--user-data-dir=%s" % profile.folder,
             "--profile-directory=%s" % cdp.PROFILE,
             "--no-first-run", "--no-default-browser-check", "--no-startup-window", cdp.INPUT_FLAG,
-            *system.CHROME_FLAGS,
+            *system.CHROME_FLAGS, *flags,
         ])
     except system.Unanswered as exc:
         raise cdp.CdpError(str(exc))
 
 
-def launch(profile, wait=15.0):
+def launch(profile, wait=15.0, flags=()):
     """Start a profile's Chrome unless it is already up, and return a line saying which.
 
     Args:
         profile (Profile): whose Chrome.
         wait (float): seconds to let a freshly started Chrome open its port.
+        flags (tuple): switches to start it with besides launch's own: the checks' --headless, never a profile's.
     """
     # Checked first: Chrome would quietly make an empty Chrome profile in a missing folder. An empty folder is a new
     # profile's, which its Chrome fills.
@@ -43,7 +44,7 @@ def launch(profile, wait=15.0):
         # profile's Chrome with its port and cdp.INPUT_FLAG, or require says what it is instead.
         cdp.require(profile)
         return "already running: %s" % profile.endpoint
-    started = _open(profile)
+    started = _open(profile, flags)
     deadline = time.time() + wait
     while True:
         try:

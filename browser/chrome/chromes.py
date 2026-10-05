@@ -7,21 +7,15 @@ README.md, "Core Abstractions & Shared Pieces", has the contract.
 import os
 import threading
 import time
-import urllib.parse
 
 from .. import system
 from ..config import paths
 from ..protocol import mcp
-from . import cdp, downloads, focus, launch
+from . import cdp, downloads, launch, opens
 from ..protocol.ws import WebSocketError
 
 QUIT_WAIT = 15.0  # seconds quit_chrome waits for a Chrome to exit after Browser.close
 LOOK_AGAIN = 5.0  # seconds before downloads asks again whether a Chrome with no Folder runs
-# A data: page, so nothing need serve it, and no tab listing includes it; window opens it, and tabs.Tabs.open before
-# its tab; README.md, "Agent Gotchas & Invariants", says why.
-PLACEHOLDER = "data:text/html," + urllib.parse.quote(
-    "<title>browserd placeholder</title>browserd opened this tab so the tabs it opens go into this window, not a new "
-    "one. Closing it is safe: browserd opens another when it needs one.")
 
 
 def quit_chrome(profile):
@@ -47,12 +41,12 @@ def quit_chrome(profile):
     mcp.log("the %s Chrome %s" % (profile.name, "has quit" if cdp.owner(profile.folder) is None else "is still running"))
 
 
-def _give_focus_back(profile):
+def _put_back(profile):
     try:
-        for line in focus.keep(cdp.Browser(profile)):
+        for line in opens.watch(cdp.Browser(profile)):
             mcp.log("the %s Chrome: %s" % (profile.name, line))
     except (cdp.CdpError, WebSocketError, OSError) as exc:
-        mcp.log("stopped giving the focus back from the %s Chrome: %s" % (profile.name, exc))
+        mcp.log("stopped putting back the tabs pages open in the %s Chrome: %s" % (profile.name, exc))
 
 
 class Chromes:
@@ -64,7 +58,7 @@ class Chromes:
         """
         self._lock = threading.Lock()
         self._starting = {}  # folder -> the lock that lets one first use start that Chrome
-        self._keepers = {}  # folder -> the thread giving the focus back from that Chrome
+        self._keepers = {}  # folder -> the thread putting back the tabs pages open in that Chrome, opens.watch
         self._folders = {}  # folder -> that Chrome's downloads.Folder
         self._looked = {}  # folder -> when downloads last asked the OS whether that Chrome, with no Folder, runs
         self._downloads_root = downloads_root
@@ -75,7 +69,7 @@ class Chromes:
             return self._starting.setdefault(folder, threading.Lock())
 
     def ensure(self, profile):
-        """Start a profile's Chrome unless it is up, keep giving the focus back from it, and keep its downloads in the
+        """Start a profile's Chrome unless it is up, keep putting back the tabs its pages open, and keep its downloads in the
         profile's folder: a new Folder is waited on up to downloads.READY_WAIT, so a tab handed out after is saved there.
 
         Args:
@@ -94,13 +88,13 @@ class Chromes:
                 raise
             if not was_up:
                 mcp.log("the %s Chrome: %s" % (profile.name, said))
-            self._keep_focus(profile)
+            self._keep_watching(profile)
             made = self._keep_downloads(profile)
         if made is not None:  # waited on outside the start lock, so no other tab_open waits behind it
             self._settle(made)
 
     def adopt(self, profiles):
-        """Keep giving the focus back from every profile's Chrome already running as the server starts, and save its
+        """Keep putting back the tabs pages open in every profile's Chrome already running as the server starts, and save its
         downloads in its folder again: the setting went with the last server's connection.
 
         Args:
@@ -110,7 +104,7 @@ class Chromes:
         for profile in profiles:
             try:
                 if cdp.owner(profile.folder) is not None:
-                    self._keep_focus(profile)
+                    self._keep_watching(profile)
                     made.append(self._keep_downloads(profile))
             except cdp.CdpError as exc:
                 mcp.log("could not check whether the %s Chrome is running: %s" % (profile.name, exc))
@@ -138,8 +132,8 @@ class Chromes:
         return self.downloads(profile)
 
     def window(self, profile):
-        """Bring a profile's Chrome to the front, starting it if it is down and opening a window on the placeholder
-        when it has no page open.
+        """Bring a profile's Chrome to the front, its window un-minimized, starting it if it is down and opening a
+        window on opens.PLACEHOLDER when it has no page open.
 
         Args:
             profile (Profile): whose Chrome.
@@ -149,14 +143,7 @@ class Chromes:
         try:
             targets = browser.call("Target.getTargets")["targetInfos"]
             page = next((target for target in targets if target.get("type") == "page"), None)
-            if page is None:
-                browser.call("Target.createTarget", url=PLACEHOLDER, newWindow=True)
-            else:
-                # Bringing Chrome to the front leaves a minimized window minimized.
-                window = browser.call("Browser.getWindowForTarget", targetId=page["targetId"])
-                if window["bounds"].get("windowState") == "minimized":
-                    browser.call("Browser.setWindowBounds", windowId=window["windowId"], bounds={"windowState": "normal"})
-            if not focus.bring(browser.pid):
+            if not opens.show(browser, page["targetId"] if page else opens.window(browser, opens.PLACEHOLDER)):
                 raise cdp.CdpError("%s did not bring the %s Chrome to the front" % (system.NAME, profile.name))
         finally:
             browser.close()
@@ -187,13 +174,13 @@ class Chromes:
                 if cdp.owner(profile.folder) is not None:
                     raise cdp.CdpError("the %s Chrome is still running; see server.log in %s" % (profile.name, paths.RUN))
 
-    def _keep_focus(self, profile):
+    def _keep_watching(self, profile):
         with self._lock:
             keeper = self._keepers.get(profile.folder)
             if keeper is not None and keeper.is_alive():
                 return
             # A keeper whose Chrome quit has ended; the Chrome started again gets a new one.
-            keeper = self._keepers[profile.folder] = threading.Thread(target=_give_focus_back, args=(profile,), daemon=True)
+            keeper = self._keepers[profile.folder] = threading.Thread(target=_put_back, args=(profile,), daemon=True)
             keeper.start()
 
     def _keep_downloads(self, profile):

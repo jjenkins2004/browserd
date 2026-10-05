@@ -1,4 +1,6 @@
-"""A Chrome of the checks' own, on a new folder and a free port, so no live check touches a profile's Chrome.
+"""A Chrome of the checks' own, on a new folder and a free port, so no live check touches a profile's Chrome. It runs
+headless, with no window at all, so no check puts one on screen or takes the user's focus; with HEADED set (the
+checks' --headed), it has windows as a profile's Chrome does, for the checks of windows and the focus.
 
     with throwaway.chrome() as profile:  # None when Chrome is not installed
 """
@@ -12,6 +14,18 @@ import tempfile
 from browser import system
 from browser.chrome import cdp, chromes, launch
 from browser.chrome.profiles import Profile
+
+HEADED = False  # set by the checks' --headed before chrome() is called
+
+
+def flags():
+    """The switches the checks' Chrome starts with besides launch's own."""
+    return () if HEADED else ("--headless=new",)
+
+
+def start(profile):
+    """Start the checks' Chrome on profile, as chrome() does, as when a check has quit it."""
+    return launch.launch(profile, flags=flags())
 
 
 @contextlib.contextmanager
@@ -27,7 +41,7 @@ def chrome():
         port = probe.getsockname()[1]
     profile = Profile("Check", folder, port)
     try:
-        launch.launch(profile)
+        start(profile)
         yield profile
     finally:
         pid = cdp.owner(folder)
