@@ -9,8 +9,9 @@ same on macOS, Linux and Windows: procs.py is the one place that differs.
 
 Every run cleans up after itself: its whole process tree is stopped (its MCP servers, and through them any Chrome they
 started), its agent-browser session is closed, and each browserd session it started is closed on the browserd page,
-which closes that session's tabs. A suite with a collect(task, token, transcript, mcp_url) reads what the run left on
-its tabs first, through browserd. The batch stops at the first sign that the runs are broken.
+which closes that session's tabs. A suite with a prepare(task, mcp_url, profile, token) sets its page up before the
+run, and one with a collect(task, token, transcript, mcp_url) reads what the run left on its tabs first, both through
+browserd. The batch stops at the first sign that the runs are broken.
 """
 import argparse
 import concurrent.futures
@@ -35,12 +36,13 @@ import canvas
 import clicks
 import miniwob
 import popups
+import slides
 import tasks
 import webgames
 
 SUITES = {"mcpuniverse": tasks, "webgames": webgames, "formfactory": formfactory, "botwall": botwall, "miniwob": miniwob,
           "clicks": clicks, "haystack": haystack, "canvas": canvas,
-          "popups": popups}
+          "popups": popups, "slides": slides}
 
 ARMS = {
     "browserd": {
@@ -61,6 +63,33 @@ ARMS = {
         "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9250/mcp"}},
         "system": "Your browser is browserd; its profile is Bench.",
         "page": "http://127.0.0.1:9251",
+    },
+    "experiments": {
+        # The main server, on the profile signed in to Google, for suites that need a login (slides).
+        "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9230/mcp"}},
+        "system": "Your browser is browserd; its profile is experiments.",
+        "page": "http://127.0.0.1:9231",
+        "profile": "experiments",
+    },
+    # The text-check experiment's three arms: main as it is (click_down's on), main without on, and main with the click
+    # guard back in on's place; each a worktree of its own (browserd-arm-<name>) served by nextserver.py.
+    "trap-on": {
+        "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9250/mcp"}},
+        "system": "Your browser is browserd; its profile is TrapOn.",
+        "page": "http://127.0.0.1:9251",
+        "profile": "TrapOn",
+    },
+    "trap-none": {
+        "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9260/mcp"}},
+        "system": "Your browser is browserd; its profile is TrapNone.",
+        "page": "http://127.0.0.1:9261",
+        "profile": "TrapNone",
+    },
+    "trap-guard": {
+        "mcp": {"browserd": {"type": "http", "url": "http://127.0.0.1:9270/mcp"}},
+        "system": "Your browser is browserd; its profile is TrapGuard.",
+        "page": "http://127.0.0.1:9271",
+        "profile": "TrapGuard",
     },
     "nocap": {
         # benchmark-fixes before the view cap (the browserd-nocap worktree), on 9260, on a Chrome of its own.
@@ -263,7 +292,7 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
     paths.DATA.mkdir(parents=True, exist_ok=True)
     if hasattr(suite, "prepare") and "profile" in arm:
         try:
-            close_sessions(suite.prepare(task, arm["mcp"]["browserd"]["url"], arm["profile"]), arm["page"])
+            close_sessions(suite.prepare(task, arm["mcp"]["browserd"]["url"], arm["profile"], run_token), arm["page"])
         except Exception as exc:  # a suite's own code: whatever it raises, this run is not run and the batch goes on
             return "%s %s r%d: not run: could not prepare its page (%s)" % (arm_name, task_name, rep, exc)
     with path.open("w", encoding="utf-8") as stdout, path.with_suffix(".err").open("w", encoding="utf-8") as stderr:

@@ -97,7 +97,7 @@ def _host(url):
     return urllib.parse.urlsplit(url).netloc
 
 
-def prepare(task, mcp_url, profile):
+def prepare(task, mcp_url, profile, token=None):
     """Clear what the task's site kept from an earlier visit, in a session of the runner's own; the reply holding that
     session's id, for the runner to close it."""
     if "clear" not in task:

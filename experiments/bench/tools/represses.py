@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Read every run's presses off its transcript again (and, for a suite that checks it, whether it saw its popup), into its suite's saved state, so a change to how presses are read
-(browserd_call.presses) applies to runs already done; the page state each run left is kept as collected.
+"""Read every run's presses off its transcript again (and, for a suite that checks it, whether it saw its popup), into
+its suite's saved state, so a change to how presses are read (browserd_call.presses) applies to runs already done; the
+page state each run left is kept as collected.
 
     python experiments/bench/tools/represses.py <exp>
 """

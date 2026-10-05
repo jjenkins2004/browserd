@@ -94,7 +94,7 @@ def prompt(task, token=None):
     return "Open %s. %s When you are done, reply DONE." % (task["url"], task["ask"])
 
 
-def prepare(task, mcp_url, profile):
+def prepare(task, mcp_url, profile, token=None):
     """Clear what the task's site kept, in a session of the runner's own, so its popup shows as on a first visit; the
     reply holding that session's id, for the runner to close it."""
     session = browserd_call.start(mcp_url, profile, "bench prepare")

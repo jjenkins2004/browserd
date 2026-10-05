@@ -1,8 +1,9 @@
 """browserd's server from a worktree, run beside the main one on ports of its own, with that worktree's own .run/ for
 its state, logs and records, so the main server (9230) is never restarted. Only the ports differ from the tree's code.
 
-    python3 experiments/bench/nextserver.py --tree PATH [--port N]      serve, in the foreground: MCP on N, the page on N+1
-    python3 experiments/bench/nextserver.py --tree PATH --profile NAME  first add a profile (its own Chrome folder and port) there
+    python experiments/bench/nextserver.py --tree PATH [--port N]      serve, in the foreground: MCP on N, the page on N+1
+    python experiments/bench/nextserver.py --tree PATH --profile NAME [--from N]  first add a profile (its own Chrome
+                                                                                folder, and a port from N up) there
 
 The tree is a git worktree of its own, never the checkout the main server runs from, whose .run/ it would share; the
 port defaults to 9250.
@@ -17,6 +18,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--tree", required=True)
 parser.add_argument("--port", type=int, default=9250)
 parser.add_argument("--profile")
+parser.add_argument("--from", dest="first", type=int, default=BENCH_PORT,
+                    help="the first Chrome port the profile may take: each bench server beside another needs its own")
 args = parser.parse_args()
 args.tree = os.path.abspath(args.tree)
 if os.path.isdir(os.path.join(args.tree, ".git")):  # a worktree has a .git file; a main checkout, a folder
@@ -45,7 +48,7 @@ if args.profile:
     # Chrome folder is one per Mac, so a worktree after the first takes over the folder an earlier one made.
     folder = profiles.PREFIX + args.profile
     taken_over = folder if folder in profiles.free_folders(state.profiles()) else None
-    print(profiles.make(state, args.profile, folder=taken_over, reserved=range(profiles.FIRST_PORT, BENCH_PORT)))
+    print(profiles.make(state, args.profile, folder=taken_over, reserved=range(profiles.FIRST_PORT, args.first)))
     state.close()
 else:
     server.serve()
