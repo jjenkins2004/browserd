@@ -33,6 +33,8 @@ if __name__ == "__main__":
     print()
     steps.queue_offline()
     print()
+    steps.checked_offline()
+    print()
     tabs.pairing_offline()
     print()
     steps.dialogs_offline()

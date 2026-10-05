@@ -802,6 +802,238 @@ def paste_offline():
     check("paste with a uid reads the text box back", said == 'pasted 3 characters; the field holds "a\\nb"', said)
 
 
+class Widget:
+    """A tab's chrome-devtools-mcp over a stand-in form, answering checked's scripts as they would read it, and
+    recording each call as FakeDevtools does. Its dropdown, 1_1, lists the options holding what its text box holds once
+    text is typed, as chrome-devtools-mcp lists them; a click on one closes the list and shows shows(text) beside the
+    box, or with in_box puts the text in the box, unless takes is False. elsewhere are options already on the page, in
+    a <select multiple>. Its other fields are in fields; a click on 1_12, Parse resume, shows a status for its next
+    `parse` calls, then fills City, and one on 1_13, Warn later, opens nothing it can see."""
+
+    def __init__(self, options=(), takes=True, shows=lambda text: text, in_box=False, elsewhere=(), parse=4):
+        self.options, self.takes, self.shows, self.in_box, self.elsewhere = options, takes, shows, in_box, elsewhere
+        self.parse, self.parsing, self.calls = parse, 0, []
+        self.typed, self.shown, self.open, self.focus, self.selected = "", "", False, None, False
+
+        def field(kind, value, select, fill, keeps=lambda text: text):
+            read = dict({"kind": kind, "value": value}, **({"parts": [value]} if kind == "shown" else {}))
+            return {"read": read, "select": select, "fill": fill, "keeps": keeps}
+
+        box = {"kind": "box"}
+        self.fields = {  # by uid: Name, I agree, Yes, Auth, Ethnicity, Zip, Phone, Locked, Off and City
+            "1_2": field("value", "Joshua Jenkins", {"focused": "text"}, box),
+            "1_3": field("checked", "true", {"refused": "checkbox"}, {"kind": "toggle"}),
+            "1_4": field("aria-pressed", "true", {"refused": "none"}, {"kind": "other"}),
+            "1_5": field("select", "Select", {"refused": "none"}, {"kind": "select", "options": ["Select", "US Citizen"]}),
+            "1_6": field("shown", "White (Not Hispanic or Latino)", {"refused": "combobox"}, {"kind": "other"}),
+            "1_7": field("value", "", {"focused": "text"}, box, lambda text: text[:5]),  # maxlength=5
+            "1_8": field("value", "", {"focused": "tel"}, box, lambda text: "(%s) %s-%s" % (text[:3], text[3:6], text[6:])),
+            "1_9": field("value", "fixed", {"refused": "readonly"}, {"kind": "box", "readonly": True}),
+            "1_10": field("value", "off", {"refused": "disabled"}, {"kind": "box", "disabled": True}),
+            "1_11": field("value", "", {"focused": "text"}, box),
+        }
+
+    def listed(self):
+        return [text for text in self.options if self.open and self.typed.lower() in text.lower()]
+
+    def call(self, tool, arguments, wait=None):
+        return [{"type": "text", "text": self.text(tool, arguments)}], False
+
+    def text(self, tool, arguments, wait=None):
+        self.calls.append((tool, arguments))
+        if self.parsing:
+            self.parsing -= 1
+            if not self.parsing:
+                self.fields["1_11"]["read"]["value"] = "Los Angeles"
+        if tool == "take_snapshot":
+            lines = ['uid=1_0 RootWebArea "Widgets"', '  uid=1_1 combobox "Clearance"']
+            if self.elsewhere:
+                lines.append('  uid=9_0 listbox "Languages known" multiselectable')
+                lines += ['    uid=9_%d option "%s" selectable value="%s"' % (n, text, text)
+                          for n, text in enumerate(self.elsewhere, 1)]
+            if self.parsing:
+                lines.append('  uid=3_1 StaticText "Parsing your resume%s"' % ("." * (self.parsing % 4)))
+            if self.listed():
+                lines.append("  uid=2_0 listbox")
+                lines += ['    uid=2_%d option "%s" selectable value="%s"' % (n, text, text)
+                          for n, text in enumerate(self.listed(), 1)]
+            return "## Latest page snapshot\n" + "\n".join(lines)
+        if tool == "evaluate_script":
+            return "Script ran on page and returned:\n```json\n%s\n```" % json.dumps(
+                self.script(arguments["function"], arguments["args"]))
+        if tool == "click":
+            at = arguments["uid"]
+            if at == "1_12":
+                self.parsing, self.fields["1_11"]["read"]["value"] = self.parse, ""
+            elif at.startswith("2_") and self.takes:
+                chosen = self.listed()[int(at[2:]) - 1]
+                self.open = False
+                self.typed, self.shown = (chosen, self.shown) if self.in_box else ("", self.shows(chosen))
+            elif at == "1_1" or at in self.fields:
+                self.focus, self.selected = at, False
+        elif tool == "type_text":
+            self.put(lambda held: held + arguments["text"])
+            self.open = self.open or self.focus == "1_1"
+        elif tool == "press_key" and arguments["key"] == "Backspace":
+            self.put(lambda held: held[:-1])
+        elif tool == "press_key" and arguments["key"] == "Escape":
+            self.open = False
+        return "Successfully did %s" % tool
+
+    def put(self, edit):
+        """Edit what the focused text box holds, its selected text deleted first."""
+        if self.focus == "1_1":
+            self.typed = edit("" if self.selected else self.typed)
+        elif self.focus in self.fields:
+            field = self.fields[self.focus]
+            field["read"]["value"] = field["keeps"](edit("" if self.selected else field["read"]["value"]))
+        self.selected = False
+
+    def script(self, function, uids):
+        """What one of checked's scripts returns for the elements uids name."""
+        at = uids[0]
+        if function == checked.READ_JS:
+            if at != "1_1":
+                return self.fields[at]["read"]
+            if self.typed:
+                return {"kind": "value", "value": self.typed}
+            return {"kind": "shown", "value": self.shown, "parts": [self.shown] if self.shown else []}
+        if function in (checked.CLEAR_JS, checked.SELECT_JS):
+            answer = {"refused": "combobox"} if at == "1_1" else self.fields[at]["select"]
+            if function == checked.CLEAR_JS or "focused" in answer:
+                self.focus, self.selected = at, True
+            if function == checked.SELECT_JS:
+                return answer
+            return len(self.typed if at == "1_1" else self.fields[at]["read"]["value"])
+        if checked.FILL_JS not in function:
+            raise AssertionError("not one of checked's scripts: %s" % function[:80])
+        found = [self.fields[element]["fill"] for element in uids]  # fill_refused's read, or read_fills'
+        return found if function.startswith("(...els)") else found[0]
+
+
+def checked_offline():
+    """checked's pick, expect, type and wait, and the fills and the dialog a queue judges or answers itself, against a
+    Widget; live.checked_live has what only Chrome can say."""
+    workdir = tempfile.mkdtemp(prefix="browser-checked-")
+    saved = checked.POLL, checked.SETTLE, steps.GAP
+    checked.POLL, checked.SETTLE, steps.GAP = 0.005, 0.02, 0  # what a stand-in needs; theirs are for real pages
+    try:
+        queue = lambda widget, *planned, **more: steps.run(widget, 7, list(planned), lambda name: os.path.join(
+            workdir, "001-" + name), **more)
+        tools = lambda widget: [tool for tool, _ in widget.calls]
+        clicked = lambda widget: [arguments["uid"] for tool, arguments in widget.calls if tool == "click"]
+        near = ["East Los Angeles, California, United States", "Los Angeles, California, United States",
+                "Los Angeles County, California, United States"]
+        widget = Widget(near, in_box=True)
+        said, failed = checked.run(widget, 7, {"tool": "pick", "uid": "1_1", "text": near[1], "search": "Los Angeles"})
+        check("pick types search and chooses the exact option among near matches",
+              not failed and said == 'picked "%s"; the field holds "%s"' % (near[1], near[1])
+              and clicked(widget) == ["1_1", "2_2"], said)
+        widget = Widget(["United States +1", "United Kingdom +44"], shows=lambda text: text.split(" ")[-1])
+        said, failed = checked.run(widget, 7, {"tool": "pick", "uid": "1_1", "text": "United States +1"})
+        check("pick accepts a field that shows a short form of the choice, and says what it shows",
+              not failed and said.endswith('the field now shows "+1"'), said)
+
+        widget = Widget(near, in_box=True)
+        result = queue(widget, {"tool": "pick", "uid": "1_1", "text": "Los Angeles, Chile", "search": "Los Angeles",
+                                "wait": 0.02}, {"tool": "expect", "uid": "1_3", "value": "true"})
+        report = text_of(result["content"])
+        check("a pick with no exact option fails the queue and says what typing showed",
+              result["isError"] and 'no option is exactly "Los Angeles, Chile"' in report
+              and 'typing "Los Angeles" showed %s' % ", ".join(json.dumps(text) for text in near) in report, report)
+        check("and the steps after it do not run", "--- not run: 2 expect" in report, report)
+        check("a failed pick leaves no typed text behind to pass for an answer, and closes the list",
+              widget.typed == "" and not widget.listed() and "the text box was emptied" in report, report)
+        widget = Widget(["Python"], takes=False)
+        said, failed = checked.run(widget, 7, {"tool": "pick", "uid": "1_1", "text": "Python", "wait": 0.02})
+        check("a pick whose option click takes nothing fails, though the box holds the typed text",
+              failed and 'but the field holds "Python" (read as value; that is only what was typed' in said, said)
+        check("and the typed text is cleared", widget.typed == "" and said.endswith("the text box was emptied"), said)
+        widget = Widget(["Python", "Rust"], elsewhere=["Python"])
+        said, failed = checked.run(widget, 7, {"tool": "pick", "uid": "1_1", "text": "Python"})
+        check("pick chooses in its own dropdown, not an option with the same words elsewhere on the page",
+              not failed and clicked(widget) == ["1_1", "2_1"] and said == 'picked "Python"; the field holds "Python"',
+              said)
+        widget = Widget()
+        said, failed = checked.run(widget, 7, {"tool": "pick", "uid": "1_7", "text": "90210", "wait": 0.02})
+        check("pick on a field that lists nothing as you type says to fill or type it, and empties the field",
+              failed and "fill or type it" in said and widget.fields["1_7"]["read"]["value"] == "", said)
+        widget = Widget()
+        said, failed = checked.run(widget, 7, {"tool": "pick", "uid": "1_5", "text": "US Citizen"})
+        check("pick refuses a native select before clicking or typing into it, so its choice is left alone",
+              failed and "element 1_5 is a native select, so nothing was typed" in said
+              and tools(widget) == ["evaluate_script"], said)
+
+        widget = Widget()
+        held = [checked.run(widget, 7, {"tool": "expect", "uid": element, "value": value})
+                for element, value in (("1_3", "true"), ("1_4", "true"), ("1_5", "Select"), ("1_2", "Joshua Jenkins"))]
+        check("expect passes on what a checkbox, a pressed button, a select and a text box hold, as READ_JS reads them",
+              not any(failed for _, failed in held), repr(held))
+        said, failed = checked.run(widget, 7, {"tool": "expect", "uid": "1_6", "value": "Hispanic or Latino"})
+        check("expect does not pass on a value that is only part of what a dropdown shows", failed, said)
+        said, failed = checked.run(widget, 7, {"tool": "expect", "uid": "1_6", "value": "White (Not Hispanic or Latino)"})
+        check("expect passes on the whole of what a dropdown shows", not failed, said)
+        said, failed = checked.run(widget, 7, {"tool": "expect", "uid": "1_2", "value": "Someone Else"})
+        check("expect fails on a value the field does not hold, naming what it holds",
+              failed and 'expected "Someone Else", but the field holds "Joshua Jenkins"' in said, said)
+
+        said, failed = checked.run(widget, 7, {"tool": "type", "uid": "1_7", "text": "902101234"})
+        check("type fails when the field does not end up holding exactly the text, saying the field cut it",
+              failed and 'expected "902101234", but the field holds "90210"' in said
+              and "keeps only its first 5 characters" in said, said)
+        said, failed = checked.run(widget, 7, {"tool": "type", "uid": "1_8", "text": "3105550100"})
+        check("type into a masked field passes, naming what it shows, when only spacing and punctuation changed",
+              not failed and 'the field shows them as "(310) 555-0100"' in said, said)
+        for label, element, text, words in (
+                ("a read-only box", "1_9", "x", "is a read-only text box, so nothing was typed"),
+                ("something that is not a text box", "1_4", "x", "holds no text box and is not contenteditable"),
+                ("a checkbox, saying why, so a space does not untick it", "1_3", " ", "is a checkbox input, not a text box"),
+                ("a line break for a one-line box, where it would press Enter", "1_2", "a\nb", "is a one-line text box")):
+            widget = Widget()
+            said, failed = checked.run(widget, 7, {"tool": "type", "uid": element, "text": text})
+            check("type refuses %s, typing nothing" % label, failed and words in said and "type_text" not in tools(widget),
+                  said)
+
+        widget = Widget()
+        report = text_of(queue(widget, {"tool": "click", "uid": "1_12"},
+                               {"tool": "wait", "uid": "1_11", "value": "Los Angeles", "timeout": 2000})["content"])
+        reads = [arguments for tool, arguments in widget.calls if tool == "evaluate_script"]
+        check("wait for a value waits until the field holds it, read again as the page changes it",
+              "--- 2 wait ok" in report and 'the field holds "Los Angeles"' in report and len(reads) == widget.parse
+              and all(read["function"] == checked.READ_JS for read in reads), report)
+        widget = Widget(parse=8)
+        report = text_of(queue(widget, {"tool": "click", "uid": "1_12"},
+                               {"tool": "wait", "still": 20, "timeout": 2000})["content"])
+        check("wait for the page to stop changing waits out the changes, then still ms more",
+              "--- 2 wait ok" in report and "has not changed for 20ms" in report and not widget.parsing
+              and tools(widget).count("take_snapshot") > widget.parse, report)
+
+        widget = Widget()
+        result = queue(widget, {"tool": "click", "uid": "1_13"}, {"tool": "handle_dialog", "action": "dismiss"},
+                       target="T1", connect=lambda: FakeDialogs(opens=5))
+        report = text_of(result["content"])
+        check("a dialog that opens after its click is done is still answered by the handle_dialog step after it",
+              not result["isError"] and '--- 2 handle_dialog ok' in report
+              and 'the prompt "Your name?" was dismissed as it opened' in report and tools(widget) == ["click"], report)
+
+        widget = Widget()
+        reports = [text_of(queue(widget, {"tool": "fill", "uid": element, "value": "x"})["content"])
+                   for element in ("1_9", "1_10")]
+        check("fill refuses a read-only box, which it would empty, and a disabled one, from a read of each, filling neither",
+              "element 1_9 is read-only, and fill would empty it, so nothing was filled" in reports[0]
+              and "element 1_10 is disabled, so nothing was filled" in reports[1] and "fill" not in tools(widget),
+              "\n".join(reports))
+        result = queue(widget, {"tool": "fill_form", "elements": [{"uid": "1_2", "value": "Changed Name"},
+                                                                  {"uid": "1_5", "value": "Atlantis"}]})
+        report = text_of(result["content"])
+        check("fill_form refuses a select given text none of its options has, before filling any element",
+              result["isError"] and 'no option of the select 1_5 is exactly "Atlantis"' in report
+              and "fill_form" not in tools(widget), report)
+    finally:
+        checked.POLL, checked.SETTLE, steps.GAP = saved
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
 class Shots:
     """A connection to a profile's Chrome whose tab has a viewport of css CSS pixels at a device pixel ratio, scrolled
     down 300; it records what it is asked, and answers a screenshot with the bytes b"img"."""

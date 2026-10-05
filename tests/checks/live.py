@@ -175,72 +175,54 @@ WIDGETS = r"""<title>checked scratch</title>
 <div class=field><label id=lab>Clearance</label>
   <div class=control><div id=shown></div><input id=cb role=combobox aria-labelledby=lab aria-expanded=false></div>
   <div id=list role=listbox hidden></div></div>
-<div class=field><label id=clab>Country</label>
-  <div class=control><div id=cshown></div><input id=cc role=combobox aria-labelledby=clab aria-expanded=false></div>
-  <div id=clist role=listbox hidden></div></div>
-<div class=field><label for=loc>Location</label><input id=loc role=combobox aria-expanded=false><div id=loclist role=listbox hidden></div></div>
 <label><input type=checkbox id=agree> I agree</label>
-<button id=yes aria-pressed=false onclick="this.setAttribute('aria-pressed', 'true')">Yes</button>
+<button id=yes aria-pressed=false>Yes</button>
 <label for=auth>Auth</label><select id=auth><option>Select</option><option>US Citizen</option></select>
 <label for=nm>Name</label><input id=nm>
-<div class=field><label id=dlab>Dud</label>
-  <div class=control><input id=dud role=combobox aria-labelledby=dlab></div><div id=dlist role=listbox hidden></div></div>
 <div class=field><label id=elab>Ethnicity</label>
   <div class=control><div>White (Not Hispanic or Latino)</div><input id=eth role=combobox aria-labelledby=elab></div></div>
 <label for=langs>Languages known</label><select id=langs multiple><option>Python</option><option>Go</option></select>
 <label for=letter>Cover letter</label><textarea id=letter>Old letter</textarea>
-<label for=zip>Zip</label><input id=zip maxlength=5>
 <label for=locked>Locked</label><input id=locked readonly value=fixed>
-<label for=mask>Phone</label><input id=mask oninput="const d = this.value.replace(/\D/g, ''); this.value = d.length > 6 ? '(' + d.slice(0, 3) + ') ' + d.slice(3, 6) + '-' + d.slice(6) : d">
+<label for=off>Off</label><input id=off disabled value=off>
 <div id=bio contenteditable role=textbox aria-multiline=true aria-label=Bio></div>
 <div id=quoted contenteditable role=textbox aria-label=Quoted></div>
 <div id=stopper contenteditable role=textbox aria-label=Stopper></div>
 <button onclick="document.getElementById('warned').textContent = confirm('Sure?') ? 'confirmed' : 'cancelled'">Warn me</button><p id=warned></p>
-<button onclick="setTimeout(() => { document.getElementById('warned').textContent = confirm('Later?') ? 'confirmed' : 'cancelled' }, 1500)">Warn later</button>
-<label for=off>Off</label><input id=off disabled value=off>
-<button id=parse onclick="parseResume(0)">Parse resume</button><button onclick="parseResume(1000)">Parse later</button><p id=parsing></p><label for=city>City</label><input id=city>
-<div class=field><label id=llab>Language</label>
-  <div class=control><div id=lshown></div><input id=lang role=combobox aria-labelledby=llab></div><div id=llist role=listbox hidden></div></div>
+<p id=parsing></p><label for=city>City</label><input id=city>
 <script>
-// Each dropdown ignores scripted events, as react-select does: only trusted input filters or picks.
-function wire(input, list, all, choose) {
-  input.addEventListener('input', (e) => {
-    if (!e.isTrusted) return;
-    setTimeout(() => {  // late, like a real search
-      list.innerHTML = '';
-      for (const text of all.filter(t => input.value && t.toLowerCase().includes(input.value.toLowerCase()))) {
-        const o = document.createElement('div');
-        o.setAttribute('role', 'option');
-        o.textContent = text;
-        o.addEventListener('click', (ev) => { if (ev.isTrusted && choose(text) !== false) list.hidden = true; });
-        list.appendChild(o);
-      }
-      list.hidden = false;
-    }, 600);
-  });
-}
-wire(cb, list, ['Never held a clearance', 'Currently hold a "Secret" clearance', 'Level "3" or above'],
-     (t) => { shown.textContent = t; cb.value = ''; });
-wire(dud, dlist, ['Python'], (t) => false);  // an option whose click takes nothing: the typed text and the list stay
-wire(lang, llist, ['Python', 'Rust'], (t) => { lshown.textContent = t; lang.value = ''; });
-wire(cc, clist, ['United States +1', 'United Kingdom +44'], (t) => { cshown.textContent = t.split(' ').pop(); cc.value = ''; });
-wire(loc, loclist, ['Los Angeles, California, United States', 'Los Ángeles, Biobío, Chile'], (t) => { loc.value = t; });
-// Like a resume parser: a status that changes for 4s, then goes, and a field filled once it has.
-function parseResume(late) {
+// The dropdown ignores scripted events, as react-select does: only trusted input filters or picks. Like React, it keeps
+// an option's element while the option stays listed, so a uid read while the rest is typed still names it.
+cb.addEventListener('input', (e) => {
+  if (!e.isTrusted) return;
+  setTimeout(() => {  // late, like a real search
+    const listed = ['Never held a clearance', 'Currently hold a "Secret" clearance', 'Level "3" or above']
+      .filter(t => cb.value && t.toLowerCase().includes(cb.value.toLowerCase()));
+    for (const o of [...list.children]) if (!listed.includes(o.textContent)) o.remove();
+    for (const text of listed.filter(t => ![...list.children].some(o => o.textContent === t))) {
+      const o = document.createElement('div');
+      o.setAttribute('role', 'option');
+      o.textContent = text;
+      o.addEventListener('click', (ev) => { if (ev.isTrusted) { shown.textContent = text; cb.value = ''; list.hidden = true; } });
+      list.appendChild(o);
+    }
+    list.hidden = false;
+  }, 100);
+});
+// Like a resume parser: a status that changes for 1s, then goes, and a field filled once it has.
+function parseResume() {
   city.value = '';
-  setTimeout(() => {
-    parsing.textContent = 'Parsing your resume';
-    let ticks = 0;
-    const timer = setInterval(() => { parsing.textContent = 'Parsing your resume' + '.'.repeat(++ticks % 4); }, 200);
-    setTimeout(() => { clearInterval(timer); parsing.textContent = ''; city.value = 'Los Angeles'; }, 4000);
-  }, late);
+  parsing.textContent = 'Parsing your resume';
+  let ticks = 0;
+  const timer = setInterval(() => { parsing.textContent = 'Parsing your resume' + '.'.repeat(++ticks % 4); }, 200);
+  setTimeout(() => { clearInterval(timer); parsing.textContent = ''; city.value = 'Los Angeles'; }, 1000);
 }
 // Like React, keeps its own copy of the value and puts it back after any input event that is not trusted.
 let letterKept = letter.value;
 letter.addEventListener('input', (e) => { if (e.isTrusted) letterKept = letter.value; else letter.value = letterKept; });
 // Like Slides, curls each quote as it is typed; a paste goes in as it is.
 quoted.addEventListener('keydown', (e) => {
-  if (e.key === '"' || e.key === "'") { e.preventDefault(); document.execCommand('insertText', false, e.key === '"' ? '\u201c' : '\u2019'); }
+  if (e.key === '"' || e.key === "'") { e.preventDefault(); document.execCommand('insertText', false, e.key === '"' ? '“' : '’'); }
 });
 // Like Slides, puts a paste's text in itself and stops the paste there, without cancelling Chrome's own insert.
 stopper.addEventListener('paste', (e) => { e.stopPropagation(); document.execCommand('insertText', false, e.clipboardData.getData('text/plain')); });
@@ -251,133 +233,99 @@ window.addEventListener('beforeinput', (e) => {
 </script>"""
 
 
+# checked's scripts over each element given, in one call once the page's states are set by script: what READ_JS, FILL_JS
+# and SELECT_JS make of it, and FOCUS_JS of the focus once it is moved there.
+KINDS_JS = """(...els) => {
+  nm.value = 'Joshua Jenkins'; bio.textContent = 'A bio'; agree.checked = true; yes.setAttribute('aria-pressed', 'true');
+  auth.value = 'US Citizen'; langs.options[1].selected = true;
+  return els.map((el) => {
+    document.activeElement.blur();
+    el.focus();
+    const focus = (%s)();
+    return {read: (%s)(el), fill: (%s)(el, 'x'), focus, select: (%s)(el)};
+  });
+}""" % (checked.FOCUS_JS, checked.READ_JS, checked.FILL_JS, checked.SELECT_JS)
+
+
 def checked_live(httpd, tabs, opened, session):
-    """The checked steps over the queue tool, against widgets that take only trusted input and a stand-in resume parser."""
+    """The checked steps over the queue tool where only Chrome can say: checked's scripts over each kind of element
+    they treat differently, and pick, type, paste, a dialog, fills and a wait on widgets that take only trusted input
+    and a stand-in resume parser. steps.checked_offline has the rest of their logic."""
     text, _ = call(httpd, "tab_open", session=session, url="data:text/html," + urllib.parse.quote(WIDGETS))
     tab = text.split()[0]
     opened.append(tab)
     snapshot, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "take_snapshot"}])
     field = lambda role, label: uid(snapshot, role, label) or uid(snapshot, role, " " + label)
     check("a native select is one line in a view", 'combobox "Auth" = "Select" (2 options)' in snapshot, snapshot)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "take_snapshot", "under": field("combobox", "Auth")}])
-    check("and take_snapshot under its uid lists its options", not is_error and 'option "US Citizen"' in text, text)
 
+    kinds = [("textbox", "Name"), ("textbox", "Cover letter"), ("textbox", "Bio"), ("checkbox", "I agree"),
+             ("button", "Yes"), ("combobox", "Auth"), ("listbox", "Languages known"), ("combobox", "Ethnicity"),
+             ("textbox", "Locked"), ("textbox", "Off"), ("button", "Warn me")]
+    text, _ = call(httpd, "queue", session=session, tab=tab, steps=[
+        {"tool": "evaluate_script", "function": KINDS_JS, "args": [field(*kind) for kind in kinds]}])
+    found = returned(text) if isinstance(returned(text), list) else []
+    named = lambda answer: " ".join(next(iter(answer.items())))  # {"focused": "text"} as "focused text"
+    check("READ_JS reads each kind of element as expect does, its state set by script: a box's value, an editor's "
+          "text, a checkbox's tick, a pressed button, a select's option, what a dropdown shows beside its box in whole "
+          "pieces, and a plain button's text",
+          [[element["read"]["kind"], element["read"]["value"]] for element in found] == [
+              ["value", "Joshua Jenkins"], ["value", "Old letter"], ["text", "A bio"], ["checked", "true"],
+              ["aria-pressed", "true"], ["select", "US Citizen"], ["select", "Go"],
+              ["shown", "White (Not Hispanic or Latino)"], ["value", "fixed"], ["value", "off"], ["text", "Warn me"]]
+          and set(found[7]["read"]["parts"]) == {"White (Not Hispanic or Latino)"}, text)
+    check("SELECT_JS focuses a text box, a textarea and a contenteditable, and refuses a checkbox, a dropdown's text "
+          "box, a read-only box, a disabled one, and what holds no text box",
+          [named(element["select"]) for element in found] == [
+              "focused text", "focused textarea", "focused editable", "refused checkbox", "refused none",
+              "refused none", "refused none", "refused combobox", "refused readonly", "refused disabled",
+              "refused none"], text)
+    check("FILL_JS reads a text input, a textarea and a contenteditable as boxes, read-only or disabled as they are, a "
+          "checkbox as a toggle, a select by its options, and a multiple select, a combobox input and a button as "
+          "others",
+          [" ".join([element["fill"]["kind"]] + [flag for flag in ("readonly", "disabled") if element["fill"].get(flag)])
+           for element in found] == ["box", "box", "box", "toggle", "other", "select", "other", "other",
+                                     "box readonly", "box disabled", "other"]
+          and found[5]["fill"]["options"] == ["Select", "US Citizen"], text)
+    check("FOCUS_JS finds the focus in a text box, a textarea or a contenteditable, and refuses it in a checkbox, a "
+          "button, a select, a read-only box, and the page itself, which keeps it from a disabled box",
+          [named(element["focus"]) for element in found] == [
+              "focused text", "focused textarea", "focused editable", "refused input", "refused button",
+              "refused select", "refused select", "focused text", "refused input", "refused body",
+              "refused button"], text)
+
+    clearance = field("combobox", "Clearance")
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "pick", "uid": field("combobox", "Clearance"), "text": 'Currently hold a "Secret" clearance'},
-        {"tool": "expect", "uid": field("combobox", "Clearance"), "value": 'Currently hold a "Secret" clearance'}])
+        {"tool": "pick", "uid": clearance, "text": 'Currently hold a "Secret" clearance'},
+        {"tool": "expect", "uid": clearance, "value": 'Currently hold a "Secret" clearance'}])
     check("pick chooses an option by exact text in a widget that takes only real input, and expect reads it back",
           not is_error and "--- 1 pick ok" in text and "--- 2 expect ok" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "pick", "uid": field("combobox", "Clearance"), "text": 'Level "3" or above', "search": "Level"}])
-    check("pick chooses an option whose name holds quotes and words after them", not is_error, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "pick", "uid": field("combobox", "Location"), "text": "Los Angeles, California, United States",
-         "search": "Los Angeles"}])
-    check("pick types search and chooses the exact option among near matches", not is_error and "the field holds" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "pick", "uid": field("combobox", "Country"), "text": "United States +1"}])
-    check("pick accepts a field that shows a short form of the choice, and says what it shows",
-          not is_error and "now shows \"+1\"" in text, text)
-
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "pick", "uid": field("combobox", "Location"), "text": "Nowhere, At All", "wait": 2},
-        {"tool": "expect", "uid": field("checkbox", "I agree"), "value": "false"}])
-    check("a pick with no exact option fails the queue and says what typing showed", is_error and "no option is exactly" in text, text)
-    check("and the steps after it do not run", "--- not run: 2 expect" in text, text)
-    text, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": field("combobox", "Location"), "value": "Nowhere, At All"}])
-    check("a failed pick leaves no typed text behind to pass for an answer", "FAILED" in text and "Nowhere" not in text.split("holds")[-1].split("(")[0], text)
-
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "pick", "uid": field("combobox", "Dud"), "text": "Python", "wait": 3}])
-    check("a pick whose option click takes nothing fails, though the box holds the typed text", is_error and "only what was typed" in text, text)
-    text, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "evaluate_script", "function": "() => document.getElementById('dud').value"}])
-    check("and the typed text is cleared", returned(text) == "", text)
-
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "pick", "uid": field("combobox", "Language"), "text": "Python"},
-        {"tool": "evaluate_script", "function": "() => [...document.getElementById('langs').selectedOptions].length"}])
-    check("pick chooses in its own dropdown, not an option with the same words elsewhere on the page",
-          not is_error and "the field holds \"Python\"" in text and returned(text.split("--- 2")[-1]) == 0, text)
-
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "expect", "uid": field("combobox", "Ethnicity"), "value": "Hispanic or Latino"}])
-    check("expect does not pass on a value that is only part of what a dropdown shows", is_error, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "expect", "uid": field("combobox", "Ethnicity"), "value": "White (Not Hispanic or Latino)"}])
-    check("expect passes on the whole of what a dropdown shows", not is_error, text)
-
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "expect", "uid": field("checkbox", "I agree"), "value": "false"},
-        {"tool": "click", "uid": field("checkbox", "I agree")},
-        {"tool": "expect", "uid": field("checkbox", "I agree"), "value": "true"},
-        {"tool": "click", "uid": field("button", "Yes")},
-        {"tool": "expect", "uid": field("button", "Yes"), "value": "true"},
-        {"tool": "expect", "uid": field("combobox", "Auth"), "value": "Select"},
-        {"tool": "fill", "uid": field("textbox", "Name"), "value": "Joshua Jenkins"},
-        {"tool": "expect", "uid": field("textbox", "Name"), "value": "Joshua Jenkins"}])
-    check("expect reads a checkbox, a pressed button, a select and a text box", not is_error, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": field("textbox", "Name"), "value": "Someone Else"}])
-    check("expect fails on a value the field does not hold, naming what it holds",
-          is_error and "expected \"Someone Else\", but the field holds \"Joshua Jenkins\"" in text, text)
 
     letter = "Dear team,\n" + "I would like to build forms that fill themselves. " * 3
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Cover letter"), "text": letter}])
-    check("type replaces a long text with real keys, in a field that ignores scripted changes, and reads it back",
-          not is_error and "typed %d characters; the field holds" % len(letter) in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Name"), "text": "J. Jenkins"}])
-    check("type replaces all of what a field held", not is_error and "the field holds \"J. Jenkins\"" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Zip"), "text": "902101234"}])
-    check("type fails when the field does not end up holding exactly the text, saying the field cut it",
-          is_error and "expected \"902101234\", but the field holds \"90210\"" in text
-          and "keeps only its first 5 characters" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Phone"), "text": "3105550100"}])
-    check("type into a masked field passes, naming what it shows, when only spacing and punctuation changed",
-          not is_error and "the field shows them as \"(310) 555-0100\"" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Locked"), "text": "x"}])
-    check("type into a read-only box fails without typing", is_error and "is a read-only text box" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "pick", "uid": field("textbox", "Zip"), "text": "90210", "wait": 1}])
-    check("pick on a field that lists nothing as you type says to fill or type it", is_error and "fill or type it" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("button", "Yes"), "text": "x"}])
-    check("type into something that is not a text box fails without typing", is_error and "nothing was typed" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("checkbox", "I agree"), "text": " "}])
-    held, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": field("checkbox", "I agree"), "value": "true"}])
-    check("type into a checkbox fails without typing, saying why, so a space does not untick it",
-          is_error and "is a checkbox input, not a text box" in text and "--- 1 expect ok" in held, text + held)
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "pick", "uid": field("combobox", "Auth"), "text": "US Citizen"}, {"tool": "expect", "uid": field("combobox", "Auth"), "value": "Select"}])
-    held, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": field("combobox", "Auth"), "value": "Select"}])
-    check("pick refuses a native select before typing into it, and leaves its choice alone",
-          is_error and "native select" in text and "--- 1 expect ok" in held, text + held)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Name"), "text": "a\nb"}])
-    check("type refuses a line break for a one-line box, where it would press Enter", is_error and "one-line" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
-    check("type into a contenteditable element takes a line break and reads the text back", not is_error, text)
+        {"tool": "type", "uid": field("textbox", "Cover letter"), "text": letter},
+        {"tool": "type", "uid": field("textbox", "Bio"), "text": "Line one\nLine two"}])
+    check("type replaces a long text with real keys, in a field that ignores scripted changes, and reads it back",
+          "--- 1 type ok" in text and "typed %d characters; the field holds" % len(letter) in text, text)
+    check("type into a contenteditable element takes a line break and reads the text back",
+          not is_error and "--- 2 type ok" in text, text)
 
     changes = system.clipboard_changes
     changed_before = changes()
-    said = 'It\'s "exact"'
-    quoted = field("textbox", "Quoted")
-    text, _ = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "click", "uid": quoted}, {"tool": "type_text", "text": said},
-        {"tool": "evaluate_script", "function": "() => { const t = quoted.textContent; quoted.textContent = ''; return t; }"}])
-    check("the stand-in editor curls quotes as they are typed", returned(text.split("--- 3")[-1]) == "It\u2019s \u201cexact\u201c", text)
+    said, pasted = 'It\'s "exact"', 'Dear "team",\nit\'s me'
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "click", "uid": quoted}, {"tool": "paste", "text": said}, {"tool": "expect", "uid": quoted, "value": said}])
-    check("paste without a uid puts text in where the focus is, as it is, quotes straight", not is_error
-          and "pasted %d characters where the focus is" % len(said) in text, text)
-    pasted = 'Dear "team",\nit\'s me'
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "paste", "uid": field("textbox", "Cover letter"), "text": pasted}])
-    check("paste with a uid replaces a text box's text, in a field that ignores scripted changes, and reads it back",
-          not is_error and "pasted %d characters; the field holds" % len(pasted) in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "click", "uid": field("button", "Yes")}, {"tool": "paste", "text": "x"}])
-    check("paste without a uid refuses when nothing that takes text has the focus", is_error
-          and "nothing that takes text has the focus" in text and "so nothing was pasted" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "click", "uid": field("textbox", "Stopper")}, {"tool": "paste", "text": said},
+        {"tool": "evaluate_script", "function": "() => { quoted.focus() }"}, {"tool": "paste", "text": said},
+        {"tool": "expect", "uid": field("textbox", "Quoted"), "value": said},
+        {"tool": "paste", "uid": field("textbox", "Cover letter"), "text": pasted},
+        {"tool": "evaluate_script", "function": "() => { stopper.focus() }"}, {"tool": "paste", "text": said},
         {"tool": "evaluate_script", "function": "() => [stopper.textContent, stopper.dataset.chrome]"}])
+    check("paste without a uid puts text in where the focus is, as it is, quotes straight",
+          "--- 2 paste ok" in text and "pasted %d characters where the focus is" % len(said) in text
+          and "--- 3 expect ok" in text, text)
+    check("paste with a uid replaces a text box's text, in a field that ignores scripted changes, and reads it back",
+          "--- 4 paste ok" in text and "pasted %d characters; the field holds" % len(pasted) in text, text)
     check("an editor that puts a paste in itself, and stops it without cancelling Chrome's own insert, gets the text, "
           "and Chrome's insert of the real clipboard is cancelled",
-          not is_error and returned(text.split("--- 3")[-1]) == [said, "cancelled"], text)
+          not is_error and returned(text.split("--- 7")[-1]) == [said, "cancelled"], text)
     check("and the clipboard was never written: its change count is what it was before the pastes",
           changes() == changed_before, str(changed_before))
 
@@ -389,70 +337,23 @@ def checked_live(httpd, tabs, opened, session):
           not is_error and took is not None and float(took.group(1)) < 3 + FRAME_WAIT
           and 'the confirm "Sure?" was accepted as it opened' in text and returned(text.split("--- 3")[-1]) == "confirmed"
           and "## Pages" not in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "click", "uid": field("button", "Warn later")}, {"tool": "handle_dialog", "action": "dismiss"}, warned])
-    check("a confirm that opens after its click is still answered by the handle_dialog step after it",
-          not is_error and "was dismissed as it opened" in text and returned(text.split("--- 3")[-1]) == "cancelled", text)
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "click", "uid": field("button", "Warn me")}])
     answered, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "handle_dialog", "action": "accept"}, warned])
     check("a confirm no handle_dialog step waits on counts its click done, and the next queue answers it",
           not is_error and "counts as done" in text and "--- 1 handle_dialog ok" in answered
           and returned(answered.split("--- 2")[-1]) == "confirmed", text + answered)
 
-    locked, auth = field("textbox", "Locked"), field("combobox", "Auth")
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "fill", "uid": locked, "value": "x"}])
-    held, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": locked, "value": "fixed"}])
-    check("fill refuses a read-only box, which it would empty, and the box keeps its value",
-          is_error and "is read-only, and fill would empty it, so nothing was filled" in text and "--- 1 expect ok" in held,
-          text + held)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "fill", "uid": field("textbox", "Off"), "value": "x"}])
-    check("fill refuses a disabled box at once, naming why", is_error and "is disabled, so nothing was filled" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "fill_form", "elements": [
-        {"uid": field("textbox", "Name"), "value": "Changed Name"}, {"uid": auth, "value": "Atlantis"}]}])
-    held, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": field("textbox", "Name"), "value": "Changed Name"}])
-    check("fill_form refuses a select given text none of its options has, before filling any element",
-          is_error and 'no option of the select %s is exactly "Atlantis"' % auth in text and "--- 1 expect FAILED" in held,
-          text + held)
-    kinds = [field("textbox", "Name"), field("textbox", "Cover letter"), field("textbox", "Bio"),
-             field("listbox", "Languages known"), field("combobox", "Dud"), auth]
-    text, _ = call(httpd, "queue", session=session, tab=tab, steps=[{
-        "tool": "evaluate_script", "function": "(...els) => els.map(el => (%s)(el, 'x').kind)" % checked.FILL_JS,
-        "args": kinds}])
-    check("FILL_JS reads a text input, a textarea and a contenteditable as boxes, a multiple select and a combobox "
-          "input as others", returned(text) == ["box", "box", "box", "other", "other", "select"], repr(kinds) + text)
-    name, zip_code, letter = field("textbox", "Name"), field("textbox", "Zip"), field("textbox", "Cover letter")
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "fill", "uid": name, "value": "Grace Hopper"}, {"tool": "fill", "uid": zip_code, "value": "10001"},
-        {"tool": "fill", "uid": letter, "value": "A new letter"}, {"tool": "expect", "uid": name, "value": "Grace Hopper"},
-        {"tool": "expect", "uid": zip_code, "value": "10001"}, {"tool": "expect", "uid": letter, "value": "A new letter"}])
-    check("fills in a row, judged by one read, fill each box", not is_error and text.count(" ok ") == 6, text)
+        {"tool": "fill", "uid": field("textbox", "Name"), "value": "Grace Hopper"},
+        {"tool": "fill", "uid": field("textbox", "Cover letter"), "value": "A new letter"},
+        {"tool": "evaluate_script", "function": "() => [nm.value, letter.value]"}])
+    check("fills in a row, judged by one read, fill each box",
+          not is_error and returned(text.split("--- 3")[-1]) == ["Grace Hopper", "A new letter"], text)
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "fill", "uid": name, "value": "Ada Lovelace"}, {"tool": "fill", "uid": locked, "value": "x"},
-        {"tool": "fill", "uid": field("textbox", "City"), "value": "London"}])
-    held, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "expect", "uid": name, "value": "Ada Lovelace"},
-                                                                     {"tool": "expect", "uid": locked, "value": "fixed"}])
-    check("and a read-only box in the run is refused at its own step, the fills before it done",
-          is_error and "--- 1 fill ok" in text and "--- 2 fill FAILED" in text and "is read-only" in text
-          and "--- not run: 3 fill" in text and "--- 1 expect ok" in held and "--- 2 expect ok" in held, text + held)
-    parse, city = field("button", "Parse resume"), field("textbox", "City")
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "click", "uid": parse}, {"tool": "wait", "gone": "Parsing your resume", "timeout": 10000},
-        {"tool": "expect", "uid": city, "value": "Los Angeles"}])
+        {"tool": "evaluate_script", "function": "() => { parseResume() }"},
+        {"tool": "wait", "gone": "Parsing your resume", "timeout": 10000},
+        {"tool": "expect", "uid": field("textbox", "City"), "value": "Los Angeles"}])
     check("wait for text to go waits out a parser, and the field it fills is then filled", not is_error, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "click", "uid": parse}, {"tool": "wait", "uid": city, "value": "Los Angeles", "timeout": 10000}])
-    check("wait for a value waits until the field holds it", not is_error and "the field holds \"Los Angeles\"" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "click", "uid": parse}, {"tool": "wait", "still": 1000, "timeout": 10000}])
-    took = re.search(r"^--- 2 wait ok ([\d.]+)s$", text, re.M)
-    check("wait for the page to stop changing waits out the changes, then still ms more",
-          not is_error and took is not None and float(took.group(1)) >= 4.0, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "click", "uid": parse}, {"tool": "wait", "gone": "Parsing your resume", "timeout": 500}])
-    check("a wait whose condition does not come fails at its timeout", is_error and "still on the page" in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "click", "uid": field("button", "Parse later")}, {"tool": "wait", "gone": "Parsing your resume", "timeout": 10000}])
-    check("wait for text to go waits for a status that shows a moment after the click", not is_error and "is off the page" in text, text)
 
 
 def windows_live(profile, state):
