@@ -314,7 +314,8 @@ def chrome_owner(folder):
 def launch_chrome(args):
     # Chrome is started off the user's focus: no window at first (--no-startup-window), and each window then asked
     # minimized (opens.window's), and each the user opens (Ctrl+N), shown minimized from the start, never on screen
-    # first, which Chrome takes from how it was started (measured; README.md, "Agent Gotchas"); opens._by_user
+    # first, which Chrome takes from how it was started (measured: with both, no window came on screen in any trial: the
+    # first window, a second, and one in a Chrome whose windows had all been closed); opens._by_user
     # un-minimizes the user's. DETACHED_PROCESS and a group of its own keep it running past the server.
     startup = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=7)  # SW_SHOWMINNOACTIVE
     try:

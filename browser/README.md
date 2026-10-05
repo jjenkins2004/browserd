@@ -25,8 +25,7 @@ run `npm ci`).
 
 A folder per domain. A package imports only those above it in this list; tools.py and server.py import any of them,
 server.py tools.py, and cli/ server.py too, which it starts and stops. Each folder's `__init__.py` is empty. A bare
-"README.md" in a module's docstring means the nearest one up the tree: this one, or dashboard/ui/'s for the page's
-parts.
+"README.md" in a module's docstring means the nearest one up the tree.
 
     browser/
       server.py      the server process (`python -m browser.server`, how browserd finds it running): serves the tools
@@ -39,13 +38,7 @@ parts.
       protocol/      wire protocols, knowing nothing of browserd
         ws.py        RFC 6455 cut down to one local, trusted, text-only connection
         mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch; mcp.log, the server's log
-      chrome/        each profile's Chrome
-        cdp.py       which Chrome, port proof, one websocket to it
-        launch.py    starts a profile's Chrome, or adopts one already up
-        chromes.py   each profile's Chrome: started on first use, what its pages open put back, quit from the page or at stop
-        opens.py     every new window and tab, minimized and off the focus; what a page opens put back; Show
-        profiles.py  Profile (name, folder, port); what a new profile is given; deleting one
-        downloads.py each profile's downloads folder (Folder), and a tab's downloads and where each went (Watcher)
+      chrome/        each profile's Chrome; its own README
       records/       what browserd keeps in the records folder
         state.py     .run/state.db: the profiles, sessions, tabs and their `needs_input` marks
         record.py    one queue call's numbered files in a folder
@@ -116,53 +109,11 @@ of its own, which reads the new ports as it starts; and prints `service.CONNECT`
 agent, which registers browserd itself. browserd never edits an agent's settings: an agent keeps the address it
 registered, so after the MCP port changes its registration needs that line again and its open sessions a reconnect.
 
-**`cdp.require(profile)`** is the proof that a profile's port is that profile's Chrome, and every connection
-goes through it: `cdp.Browser(profile)` and `launch.launch(profile)` both call it. It checks against the
-profile's port and folder (never Chrome's default folder, where Chrome refuses a debugging port), the one
-Chrome profile `cdp.PROFILE` (`Default`), and Chrome's binary path. A Chrome not running at all is
-`cdp.NotRunning`, found before the folder's `Local State` is read, since a new profile's folder stays empty until its Chrome
-first starts. **`cdp.Browser`** is one browser-wide websocket; a command carries a CDP session id (`Target.attachToTarget`'s `sessionId`) to reach a tab,
-`pid` is that Chrome's, as `SystemInfo.getProcessInfo` gave it, and `profile` is whose it is; `call`'s `wait` gives
-one command a timeout of its own in place of `cdp.CALL_WAIT` (a pointer step's 5s).
-
-**`chromes.Chromes`** is where the server starts and quits each profile's Chrome; it keeps no list of running
-ones, asking `cdp.owner` each time. `ensure(profile)` starts a profile's
-Chrome with `launch.launch` unless it is up, one start at a time per folder, and sends SIGTERM to a Chrome
-it launched but never saw answer. It then runs `opens.watch` for that Chrome on a connection of its own: a
-thread that ends when the Chrome quits and starts again with it; and a `downloads.Folder` beside it, which saves
-that Chrome's downloads in `downloads/<profile>/` in the records folder (`server.DOWNLOADS`); `ensure` waits up to
-`downloads.READY_WAIT` (2s) for a new one to take, outside the start lock, so a tab handed out after it is saved
-there, and a Folder that has not taken by then keeps trying, logged once. `adopt` starts every one first and then
-waits for them together; `downloads(profile)` starts one, not waited on, for a Chrome that runs without one, and
-gives a running one's Folder to each tab's `Worker`. `adopt` does the same for every profile's
-Chrome already running as the server starts, `window` is the page's Open Chrome (it brings a running Chrome to the
-front through `opens.show`, opening a window on `opens.PLACEHOLDER` first only when it has no page open), `quit` (the page's Quit Chrome, and `profiles.delete`) quits one once any start of it under way has
-finished, raising a `CdpError` when it is still running after, and `quit_all` quits every running one that way when the
-server stops, logging that error rather than raising it; no Chrome starts after it.
-
-**`profiles.Profile`** is one Chrome: a name, its folder (`--user-data-dir`) and its debugging port.
-**`state.State`** keeps them in `../.run/state.db`, with the sessions, the tabs and the tabs' marks of needing the
-user's input (`needs_input`: a note and since when; closing a tab clears its mark), one SQLite connection shared by
-the server's threads; the file is gitignored, so each person's profiles stay theirs, and a name is taken
-whatever its case. Not a Chrome
-profile: a folder taken over must hold no Chrome profile but Chrome's `Default` one.
-**`profiles.make`**, which the page's New profile and the `profile_new` tool call, adds one: either a new folder,
-`<system.CHROME_DATA>/Chrome-<name>` (`~/Library/Application Support/Google/Chrome-<name>` on a Mac,
-`%LOCALAPPDATA%\Google\Chrome-<name>` on Windows), made empty, or one of `profiles.free_folders` (a
-`Chrome-*` folder there that no profile uses) taken over with its logins, once `cdp.check_folder` passes.
-Its port is the one that folder's Chrome already runs with, when no profile has it; otherwise the lowest from 9223
-to 9299 that no profile has, the server does not hold (`ports.MCP`, `ports.PAGE`), and nothing listens on, on any address. A
-name Windows keeps for a device (`CON`, `NUL`, `COM1`...) is refused on every OS, since it names a folder of
-`.run/calls`. **`profiles.delete`**, which the
-page's Delete profile and the `profile_delete` tool call, removes one from `state.db` first, so no `session_start` or `tab_open` finds it meanwhile, then quits its Chrome, so a
-queue running on one of its tabs fails at once rather than holding that tab's Worker; a Chrome still running after puts
-the profile back and refuses. Only then does it close its open sessions and every tab of it. Its folder is kept, logins and all, and so becomes one of
-`profiles.free_folders`, and its sessions' and tabs' rows and record folders are kept too. An empty folder, one whose
-Chrome never ran, is removed: it holds no logins, and `profiles.make` could neither make it new (it is there) nor take it
-over (it has no `Local State` for `cdp.check_folder` to read). `profile_new` takes over `Chrome-<name>` when it is one
-of `profiles.free_folders`, whatever its case, so a deleted profile whose folder is `Chrome-<its name>` comes back with its logins; `profile_delete`
-passes `close_sessions=False`, and is refused while the profile has an open session (no agent ends one, below),
-checked once the profile is removed.
+**`state.State`** keeps the profiles (`profiles.Profile`: a name, its folder and its debugging port) in
+`../.run/state.db`, with the sessions, the tabs and the tabs' marks of needing the user's input (`needs_input`: a
+note and since when; closing a tab clears its mark), one SQLite connection shared by the server's threads; the file
+is gitignored, so each person's profiles stay theirs, and a name is taken whatever its case. `profiles.make`
+and `profiles.delete` (`chrome/profiles.py`) make and delete one.
 
 **`page.Page`** serves the page on `ports.PAGE` on a thread of the server's own. `GET /` is `page.assemble()`: `ui/page.html` with
 `ui/page.css` and the scripts of `page.PARTS` put in, read again on every load. `GET /state` gives
@@ -170,7 +121,7 @@ every profile with its Chrome's pid (or `null`, not running), `error` when its C
 listed, its open sessions (active or paused) with their
 tabs (one needing the user's input with `needs_input: {note, since}`), the tabs no session owns, and its last `page.CLOSED_SHOWN` (10) closed sessions (no part draws them), from one
 `Tabs.listing` per profile, which also keeps `state.db` in step with each Chrome; and the folders a new profile
-may take over. Each button POSTs: `/profiles` a new profile, `/delete-profile` a profile (above), `/open` a profile's Chrome in front,
+may take over. Each button POSTs: `/profiles` a new profile, `/delete-profile` a profile (`profiles.delete`), `/open` a profile's Chrome in front,
 `/quit-chrome` a profile's Chrome (refused when it is still running after; its sessions stay open, and the next listing
 marks its tabs closed), `/show` and `/close-tab` any tab, and `/close-session` a session and every tab of it; `/handover` (a tab no
 session owns to an open session of its profile) and `/close-paused` (every paused session and its tabs) are still
@@ -188,7 +139,7 @@ and `close` take the asking session, and a tab of any other session is "no tab o
 as `None`, and reaches every tab. It opens a new `cdp.Browser` for every
 operation, through its `connect`, so every tab tool re-proves the Chrome; `open` first calls its `start`, which
 starts the profile's Chrome, and a Chrome not running lists no tabs. Each listing (`_sync`) marks closed every
-tab whose page is gone, and gives each new page but the placeholder (below) a tab: the session of the page that opened it (its
+tab whose page is gone, and gives each new page but the placeholder (`opens.PLACEHOLDER`) a tab: the session of the page that opened it (its
 `openerId`, followed through a popup's own popups and through an opener since closed), or no session's.
 
 **`mcp.Server`** takes tools as dicts (`name`, `description`, `inputSchema`, `run(arguments)`).
@@ -263,19 +214,6 @@ same tabs under the same ids. A crash leaves the same.
 
 ## Agent Gotchas & Invariants (⚠️)
 
-- **An answer on a profile's port proves nothing by itself.** `require` stops with a `CdpError` naming what is
-  wrong and what to do when:
-  - nothing listens on the port and no Chrome holds the folder (`cdp.NotRunning`);
-  - the folder's `Local State` is unreadable or lists any Chrome profile but `Default` (a Chrome that has
-    not yet shown a tab lists none, which passes);
-  - the profile's Chrome runs without its port (Chrome reads the port only at startup);
-  - more than one process listens, since `127.0.0.1` may reach the unchecked one;
-  - the listener is not the profile's Chrome;
-  - the profile's Chrome was started without `cdp.INPUT_FLAG`;
-  - no DevTools answer comes back;
-  - the OS cannot say who listens or what a process is (`lsof` or `ps` cannot run, hangs past 10s, or
-    prints an error, since a blocked `lsof` reads like an empty port; Windows will not let this user read the
-    process).
 - **A profile's Chrome is whoever holds its folder as Chrome itself tells.** On a Mac that is `SingletonLock` in
   the folder: that symlink ends in the owning pid, and `ps` must show that pid's command line starting with
   Chrome's binary, so a lock left by a crash is not trusted. A command line alone never is: `ps` joins arguments
@@ -285,81 +223,7 @@ same tabs under the same ids. A crash leaves the same.
   matches the title whatever its case, but only as the folder was spelled at launch, so a profile's folder is
   always given in one spelling, long and resolved; a Chrome given another (an 8.3 name) exits 21, which `launch`
   names. Chrome makes no `SingletonLock` there, and its `lockfile` is never opened: an open at the moment a Chrome
-  starts would make that Chrome fail. `Browser()` also asks the browser that answered for its own pid
-  (`SystemInfo.getProcessInfo`), because `lsof` sees only this user's processes, and Windows lets a process bind a
-  port on another address beside Chrome's.
-- **`require` proves the browser, not the tab.** An Incognito, Guest or other Chrome profile's window is
-  another browser context, and `Tabs` neither lists such a tab nor gives it an id, only counting
-  it. Chrome's default context is its last-used Chrome profile, and `Local State` reaches disk seconds
-  after a Chrome profile is added, so for those seconds a new Chrome profile's tab would pass. No Chrome
-  profile is ever to be added to a profile's folder.
-- **A Chrome with no window open has no Chrome profile loaded.** Chrome keeps running after its last window
-  closes (macOS keeps every app running; on Windows the debugging port keeps it, measured), and Chrome then
-  unloads its Chrome profile, so `Target.getBrowserContexts` names
-  no default context. With no page open either, `Tabs` lists no tabs rather than refusing, and
-  `tab_open`'s `Target.createTarget` loads it again. No default context beside open pages
-  is still refused, since those tabs cannot be told apart.
-- **Every window and tab is opened in `opens.py`, and nothing but the page's Open Chrome and Show brings one
-  forward.** browserd and its pages get one three ways: `opens.window` (a new window), `opens.tab` (a new tab)
-  and a page opening one (a `target=_blank` link, `window.open`), which `opens.from_page` puts back; `opens.show`,
-  called by Open Chrome and Show alone, is the one way one comes to the front. No tool an agent has calls it, nor
-  does a check or an experiment open a window or tab any other way.
-  A window an agent's work opens stays minimized. `opens.window` asks `Target.createTarget` for `windowState:
-  minimized`, and on Windows never `background` (`system.BACKGROUND_WINDOWS`): Chrome shows a background window, or
-  a window asked minimized of a Chrome started without `SW_SHOWMINNOACTIVE`, on screen first and minimizes it after,
-  about 10ms on screen (measured with `tests/popups.py`); on a Mac it asks `background` too, as a tab does. On Windows, `launch` starts Chrome detached with `--no-startup-window` and
-  `SW_SHOWMINNOACTIVE`, which Chrome takes for every window it opens minimized: with both, 0 windows came on screen in
-  every trial, the first window, a second, and one in a Chrome whose windows had all been closed. A window the user
-  opens (Ctrl+N) then opens minimized too, so `opens.watch` un-minimizes the window of a new page with no opener that
-  opens while that Chrome has the focus, unless `opens.window` or `opens.tab` opened it. Chrome does not draw a tab in
-  a minimized window; the screenshot gotcha below says how a queue has it drawn. `bring` tries `SetForegroundWindow`, then with
-  its input joined to the app in front, then `SwitchToThisWindow`, and never presses a key (a stray Alt would reach
-  the app in front). On a Mac: Chrome raises itself over the app in front each time it shows a window. macOS lets
-  it at launch, even under `open -g`, and after that only once Chrome has been in front at least once. So `launch`
-  starts it with `open -g` and `--no-startup-window`: with no window, the tabs it had open when it last quit do not
-  come back, and the first `tab_open` makes one.
-  Nothing stops Chrome showing a tab a page opens: a `target=_blank` link un-minimizes its window and takes the
-  focus, and a `window.open` popup opens a window of its own with it. So `opens.watch` hears its
-  `Target.targetCreated` (a page with an `openerId`) and `from_page` puts back what it did: it minimizes each window
-  of that Chrome it un-minimized, at once through the OS, and the new window it showed, through Chrome, and gives
-  the focus back to the app that had it, watching for `opens.TAKE_WAIT` (0.5s). On
-  Windows, Chrome takes the focus 10 to 55ms before it tells of the tab (measured), so asking which app is in front
-  when the event comes finds Chrome itself; `system.happened` keeps what each window did as Windows tells of it, so
-  `from_page` reads which app had the focus before Chrome took it, `opens.LOOK_BACK` (0.25s) before the event. On
-  a Mac, the event comes 10 to 30ms after the click and Chrome takes the focus 50 to 90ms after it, so the app in
-  front when the event comes is the one; `system.happened` keeps nothing there, so on a Mac `from_page` minimizes
-  nothing and only gives the focus back. With that Chrome in front before, or the focus taken with no window
-  un-minimized or shown in a tab browserd did not open, as after Joshua's own click, it leaves everything as it is,
-  and nothing Open Chrome or Show did is put back. Measured on Windows: a popup
-  window on screen 75ms and in front 22ms, a link's window on screen 54ms and in front 8ms, each then minimized
-  with the focus back where it was; it logs a line for each such tab.
-- **Every profile's Chrome starts with `--allow-pre-commit-input` (`cdp.INPUT_FLAG`).** Once a page
-  loads, Chrome holds its input until it first draws (paint holding), dropping every key press and
-  click while `Input.dispatchKeyEvent` and `Input.dispatchMouseEvent`, and so chrome-devtools-mcp, report success. The hold ends
-  only when Chrome draws the page, and it never draws a background tab by itself, so without the flag
-  such a tab drops input indefinitely (measured: 40 of 40 first key presses on fresh background tabs dropped). `launch`
-  `cdp.require` refuses a profile's Chrome whose command line lacks the flag, naming its pid to quit, so no tool,
-  listing or window uses one, a Chrome kept through `browserd restart` from before the flag included.
-- **Tabs open in the background.** `opens.tab` creates the tab with `background: true`, so the
-  Mac's focus never moves; without it, `Target.createTarget` brings Chrome to the front. Opening
-  goes `about:blank`, attach, `Page.enable`, then navigate: Chrome can finish a load before a later
-  `Page.enable` would hear it. A navigation the site has not answered by the websocket's 20s
-  (`cdp.Late`) leaves the tab open and loading; a URL Chrome refuses is `could not open <url>: <why>`.
-  For the page's Show (`Tabs.show`), `opens.show` brings the tab's Chrome to the front by pid (`system.bring`), which
-  `Target.activateTarget` alone does not do for a Chrome never yet in front; when macOS refuses, Show fails. Open
-  Chrome picks no tab (`pick=False`): the first page Chrome lists can be an agent's newest background tab.
-- **`tab_open` never opens its tab in a window of its own.** A tab opened in a new window (as `Target.createTarget`
-  opens one in a Chrome with no window open) holds a Google search page Chrome's omnibox prerenders there
-  (`warmup.html`), and when Puppeteer attaches that hidden page before the tab's own, Puppeteer finishes connecting
-  without the tab's page, so a new chrome-devtools-mcp lists no page for the tab and its queues cannot pair it
-  (measured in two runs: 6 and 8 of 25 tabs opened in new windows, each failing for over 60s with a new process per
-  queue). So `opens.tab`, in a Chrome with no page of its Chrome profile open,
-  first opens `opens.PLACEHOLDER` with `opens.window`, a `data:` page that no listing includes and so gets no tab id
-  (the page's Open Chrome opens it too, in a Chrome with no page open); the new window's
-  prerender goes to the placeholder, and the tab goes into that window beside it (measured: 0 of 25 failed, each opened
-  in a Chrome with no window open). A lock per Chrome folder, in `opens._placing`, covers looking for a page and opening the
-  placeholder, so two opens at once make one placeholder. The placeholder stays open until its Chrome quits or it is
-  closed by hand, and the next `tab_open` with no window open opens another.
+  starts would make that Chrome fail.
 - **No agent ends a session.** An agent would end one while its task still needed it, so only Joshua
   closes one: on the page (Close session, or Delete profile for every one of its profile's) or with `browserd stop`;
   `profile_delete` is refused while its profile has one open. `Tabs.close_session` marks the
@@ -437,37 +301,12 @@ same tabs under the same ids. A crash leaves the same.
   `dialogAction`, `navigate_page`'s `handleBeforeUnload`, and `handle_dialog`), which answer their own.
   When a queue stops before its `handle_dialog` step runs, the report still says what the answerer
   answered.
-- **Each profile's downloads go in its own folder, `downloads/<profile>/` in the records folder, with no window
-  or prompt.** Left to its own settings, a Chrome saves in `~/Downloads` (the Downloads known folder on Windows),
-  opens a Save As window no tool can answer when the profile asks where to save each file, and holds back all but
-  the first of the files a page begins at once behind a "download multiple files" prompt: the download sits
-  `inProgress` for good (all measured). `Browser.setDownloadBehavior` with `behavior: allow` and a `downloadPath`
-  saves every one there, silently. Chrome keeps one such behaviour per browser, not per connection: the last
-  connection to set it wins, and when that connection closes Chrome goes back to its own settings, not to the one
-  set before (measured). So one `downloads.Folder` per Chrome, on a connection of the server's own, is the only
-  thing that sets it; it sets it again on a new connection when its own drops or fails while that Chrome runs
-  (every `downloads.RETRY`, 0.5s, logged once), again every `downloads.AGAIN` (30s) on the same connection, which
-  takes it back from any other program on the port that set its own (a script's `connectOverCDP`), and ends when
-  the Chrome quits. chrome-devtools-mcp never sets it (its Puppeteer only does when given `downloadBehavior`). A download
-  a person begins in that Chrome by hand goes there too while the server runs; through `../restart`, which keeps
-  every Chrome, it goes where the Chrome's own settings say until the new server's `adopt` sets it again.
 - **A step that begins a download says where it went.** chrome-devtools-mcp's reply never names it; an agent told
   nothing failed WebGames' combination-lock task in a benchmark, hunting for the file through `file://` listings.
-  So a tab's `Worker` runs a `downloads.Watcher` from `ensure` until `stop` or `pause`, on a connection of its own
-  to the tab: `Page.enable` for `Page.downloadWillBegin`, which only the tab's own downloads send, and
-  `Target.setDiscoverTargets`, to follow the popups it opens, whose downloads send only `Browser.downloadWillBegin`,
-  naming the popup. Only the connection that set the behaviour hears the `Browser` events, and only
-  `Browser.downloadProgress` names where a file went, so the `Watcher` asks the profile's `Folder` for each
-  download's state and path, and for those begun in its popups' frames; one the tab's own `Page.downloadProgress`
-  says has ended waits, as still downloading, up to `downloads.BEHIND` (2s) for the `Folder` to hear where it went;
-  one the `Folder` never heard (begun while it was reconnecting) or a tab with no `Folder` (a check's) then reports
-  that it went where Chrome's own settings say. Chrome need not name the path; when it does not, the `Folder`'s
-  file of that name is where it went. After each step, `steps.run` waits up to `steps.DOWNLOAD_WAIT` (5s, or
-  the queue's time left) for a download the step began to end, and its report says `downloaded <name> to <path>`,
-  that it was canceled or failed, or that it is still downloading; the first step on the tab after it ends then
-  says where it went, in this queue or a later one, unless the tab's `Watcher` was stopped or started again
-  meanwhile. A download heard only after a step's reply came back lands in the next step's report, the next
-  queue's first when that step was the last.
+  So a tab's `downloads.Watcher` (`chrome/README.md`) hears each download the tab begins. After each step, `steps.run`
+  waits up to `steps.DOWNLOAD_WAIT` (5s, or the queue's time left) for a download the step began to end, and its
+  report says `downloaded <name> to <path>`, that it was canceled or failed, or that it is still downloading
+  (`Watcher.take` says which later step reports where it went).
 - **A step that opens a dialog nothing waits on counts as done.** chrome-devtools-mcp fails it after
   about 5s, with an `# Open dialog` section in its reply; `steps.run` counts it as done, so a
   `handle_dialog` step in the next queue answers it. A reply that also holds `A dialog is open (`,
@@ -620,7 +459,7 @@ same tabs under the same ids. A crash leaves the same.
     saying to reload the tab. A page script that reads the paste, or Chrome's insert, before them can
     still read the real clipboard. The focus in a frame from another site, where they cannot go, is
     refused, and so is the focus moving where they are not before the key is pressed. The key is
-    pressed once, since `cdp.INPUT_FLAG` (above) keeps Chrome from dropping
+    pressed once, since `cdp.INPUT_FLAG` (`chrome/README.md`) keeps Chrome from dropping
     it: a press the page did not take fails the step, and one it took whose paste a page script had first
     fails it saying the field may hold the Mac's clipboard. Three other ways were measured to fail: `Input.insertText` gets closed brackets and
     curled quotes as typing does, a synthetic `paste` event puts nothing in a box with no paste handler,

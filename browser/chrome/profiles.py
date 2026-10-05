@@ -1,7 +1,5 @@
 """Profiles: each one Chrome, with a folder and a debugging port of its own; what a new profile is given, and what
 deleting one does.
-
-README.md, "Core Abstractions & Shared Pieces", has the contract.
 """
 
 import os
@@ -16,8 +14,10 @@ from .. import system
 from ..protocol import mcp
 from . import cdp
 
-GOOGLE = system.CHROME_DATA  # the folder of Chrome's own folder: README.md says where that is on each OS
-PREFIX = "Chrome-"  # every profile's folder is GOOGLE/Chrome-*, beside Chrome's own GOOGLE/Chrome; a new one is Chrome-<profile name>
+GOOGLE = system.CHROME_DATA  # the folder holding Chrome's own folder: ../README.md says where on each OS
+# Every profile's folder is GOOGLE/Chrome-*, beside Chrome's own GOOGLE/Chrome, where Chrome refuses a debugging port; a
+# new one is Chrome-<profile name>.
+PREFIX = "Chrome-"
 FIRST_PORT, LAST_PORT = 9223, 9299
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9-]{0,23}")
 NAME_RULE = "a profile's name is a letter, then up to 23 letters, digits or dashes"
@@ -72,7 +72,7 @@ def _free(port):
 
 
 def _port(profiles, reserved, running):
-    """The port a new profile's Chrome gets; README.md says which."""
+    """The port a new profile's Chrome gets."""
     taken = {profile.port for profile in profiles} | set(reserved)
     if running is not None and running not in taken:
         return running
@@ -133,8 +133,16 @@ def make(state, name, folder=None, reserved=()):
 
 
 def delete(state, chromes, tabs, workers, name, *, close_sessions):
-    """Remove a profile, quit its Chrome, and close its open sessions and every tab of it; README.md, "Core Abstractions
-    & Shared Pieces", gives the order and what is kept. Returns the profile removed.
+    """Remove a profile, quit its Chrome, and close its open sessions and every tab of it. Returns the profile removed.
+
+    In this order:
+    - removed from state.db first, so no session_start or tab_open finds it meanwhile;
+    - refused, and put back, while it has an open session and close_sessions is False;
+    - its Chrome quit, so a queue running on one of its tabs fails at once rather than holding that tab's Worker;
+      refused, and put back, when that Chrome is still running after;
+    - then its open sessions and every tab of it closed.
+    Its folder is kept, logins and all, and so becomes one of free_folders (an empty one is removed); its sessions' and
+    tabs' rows and record folders are kept.
 
     Args:
         state (State): where profiles are kept.
@@ -159,12 +167,14 @@ def delete(state, chromes, tabs, workers, name, *, close_sessions):
         state.add_profile(profile)
         raise
     try:
-        os.rmdir(profile.folder)  # empty only if its Chrome never ran; README.md says why it is removed
+        # Empty only if its Chrome never ran: no logins to keep, and left there, make could neither make it new (it is
+        # there) nor take it over (no Local State).
+        os.rmdir(profile.folder)
     except OSError:
         pass  # kept, logins and all
     for session in state.open_sessions():  # again: a session_start that found the profile before it went may add one
         if session.profile.lower() == profile.name.lower():
-            for tab in tabs.close_session(session):  # closing each in Chrome fails, the profile gone: only marked closed
+            for tab in tabs.close_session(session):  # the profile is gone, so each tab is only marked closed
                 workers.drop(tab)
             mcp.log("closed session %s (%s), its profile %s deleted" % (session.id, session.label, profile.name))
     for row in state.open_tabs(profile.name):  # the tabs opened by hand

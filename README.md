@@ -79,8 +79,8 @@ A git checkout runs as it is, and keeps its records in `.run/` beside the code: 
     experiments/            what measures browserd: bench/, the benchmarks against other browser MCP servers; long-tasks/, the demo tasks; findings/, what each found
     .claude/skills/         benchmark: a rerun's steps, for an agent
 
-`browser/README.md` is the one to read before changing any of it: the Chrome proof, the tab ids, the
-queue's checked steps, and what each tool refuses. Agents connect over HTTP at `http://127.0.0.1:9230/mcp`, or the port `browserd setup` chose.
+Before changing `browser/`, read `browser/README.md` and the README of the folder you change. Agents connect over HTTP
+at `http://127.0.0.1:9230/mcp`, or the port `browserd setup` chose.
 After a restart that changed the tools, a Claude Code session already open lists them again at its next
 browserd call and has them from its next turn; one that connected to a browserd from before
 `tools.listChanged` needs `/mcp` to reconnect once. `browser/README.md` says why.

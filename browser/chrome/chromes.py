@@ -1,7 +1,5 @@
 """Each profile's Chrome: started on its first use, kept off the user's focus, its downloads saved in a folder of its
-own, and quit from the page or when the server stops.
-
-README.md, "Core Abstractions & Shared Pieces", has the contract.
+own, and quit from the browserd page or when the server stops.
 """
 
 import os
@@ -50,6 +48,9 @@ def _put_back(profile):
 
 
 class Chromes:
+    """The server's one keeper of each profile's Chrome. Make only one: its per-folder start locks, its opens.watch threads
+    and its downloads.Folders hold only within one instance. It keeps no list of running Chromes: cdp.owner says."""
+
     def __init__(self, downloads_root=None):
         """
         Args:
@@ -208,8 +209,8 @@ class Chromes:
                     % (folder.name, folder.folder))
 
     def _stop_started(self, profile):
-        """Stop a Chrome this start launched but never saw answer, so the next start begins afresh rather than refusing it
-        as running without its port."""
+        """Stop a Chrome this start launched that never passed require, so the next start begins afresh rather than
+        refusing it as running without its port."""
         try:
             pid = cdp.owner(profile.folder)
         except cdp.CdpError as exc:

@@ -1,15 +1,12 @@
-"""Every way a profile's Chrome gets a new window or tab, and the one way one comes to the front: nothing else in
-browserd, its checks or its experiments makes or shows one. A window an agent's work opens stays minimized and off the
-user's focus, but for one a page opens on a Mac, which stays shown behind the app in front; only the page's Open Chrome
-and Show bring one forward.
+"""Every way a profile's Chrome gets a new window or tab, and the one way one comes to the front.
 
     window(browser, url)              a new window, minimized, off the user's focus
     tab(browser, url)                 a new background tab, in a window open already, or in one window opens
     from_page(browser, info, heard)   a tab or window a page opened (a target=_blank link, window.open): put back
     show(browser, target)             a tab, its window and its Chrome in front: the page's Open Chrome and Show only
 
-watch(browser) hears each tab a page opens and hands it to from_page. README.md, "Agent Gotchas & Invariants", says why
-each is opened as it is.
+watch(browser) hears each tab a page opens and hands it to from_page. README.md, "Agent Gotchas & Invariants", says who
+must open windows and tabs only through these, and why each is opened as it is.
 """
 
 import collections
@@ -34,7 +31,9 @@ POLL = 0.01
 _placing = {}  # Chrome folder -> its lock: one tab at a time looks for a page, so two make one placeholder
 _placing_lock = threading.Lock()
 _shown = {}  # Chrome pid -> until when from_page leaves alone what show did on screen
-_opened = collections.deque(maxlen=256)  # the targets window and tab opened, newest last: never a window the user's
+# The targets window() and tab() opened, newest last, never the user's: from_page counts a tab opened from one as an
+# agent's link, and _by_user never un-minimizes one.
+_opened = collections.deque(maxlen=256)
 
 
 def window(browser, url, context=None):
@@ -45,7 +44,7 @@ def window(browser, url, context=None):
         url (str): what the window's one tab loads.
         context (str | None): the browser context to open it in; the Chrome profile's own when None.
     """
-    # Minimized from the start; background only where the OS needs it (system.BACKGROUND_WINDOWS, README.md).
+    # Minimized from the start; background only where the OS needs it (system.BACKGROUND_WINDOWS says why).
     params = {"url": url, "newWindow": True, "windowState": "minimized"}
     if system.BACKGROUND_WINDOWS:
         params["background"] = True
@@ -64,7 +63,8 @@ def tab(browser, url="about:blank"):
         browser (cdp.Browser): a connection to the Chrome.
         url (str): what the tab loads.
     """
-    # A tab Chrome opens in a window of its own fails to pair with chrome-devtools-mcp; README.md, "Agent Gotchas".
+    # A tab Chrome opens in a window of its own fails to pair with chrome-devtools-mcp; README.md, "Agent Gotchas &
+    # Invariants".
     with _placing_lock:
         placing = _placing.setdefault(browser.profile.folder, threading.Lock())
     with placing:
@@ -91,7 +91,7 @@ def show(browser, target, pick=True):
         _set_minimized(browser, target, False)
         if pick:
             browser.call("Target.activateTarget", targetId=target)
-        # activateTarget alone does not raise a Chrome never yet in front; README.md, "Agent Gotchas".
+        # activateTarget alone does not raise a Chrome never yet in front; README.md, "Agent Gotchas & Invariants".
         return system.bring(browser.pid)
     finally:
         _shown[browser.pid] = time.monotonic() + LOOK_BACK  # past what show did on screen, which Windows tells of late
@@ -104,21 +104,27 @@ def from_page(browser, info, heard):
     watched and nothing moved.
 
     Chrome shows a tab a target=_blank link or window.open opens, un-minimizing its window and taking the focus,
-    whatever browserd asks. A Chrome the user was in already, as after their own click, is left as it is.
+    whatever browserd asks. A Chrome the user was in already, as after their own click, is left as it is. Measured on
+    Windows: a popup window on screen 75ms and in front 22ms, a link's window on screen 54ms and in front 8ms, before
+    this minimized each and gave the focus back.
 
     Args:
         browser (cdp.Browser): a connection to the Chrome.
         info (dict): the new tab's target info.
-        heard (float): the time.monotonic() Chrome told of it, or of the tab before it, whose watch it came during.
+        heard (float): when Chrome told of this tab (time.monotonic()), or the last tab's heard if it was told of
+            while that tab was watched.
     """
     opened = info.get("url") or "a tab"
     since = max(heard - LOOK_BACK, _shown.get(browser.pid, 0.0))
     events = system.happened(browser.pid, since)
-    # The focus Chrome took with a window it un-minimized or showed, or from a tab window or tab opened, as an agent's
-    # link in a window on screen takes it; taken alone in any other tab, it was the user's own click.
+    # Chrome taking the focus is this tab's doing when the same window was also un-minimized or shown, or when the tab's
+    # opener is one window() or tab() opened (an agent's link, in a window already on screen, moves no window).
+    # Otherwise it was the user's own click.
     moved = {window for kind, window, _ in events if kind != "front"}
     took = [before for kind, window, before in events
             if kind == "front" and (window in moved or info["openerId"] in _opened)]
+    # On a Mac Chrome tells of the tab 10 to 30ms after the click and takes the focus 50 to 90ms after it (measured), and
+    # system.happened keeps nothing, so the app in front now is the one that had the focus.
     before = took[0] if took else system.front()
     if before is None:
         return "could not tell which app had the focus when a page opened %s" % opened
@@ -141,8 +147,8 @@ def from_page(browser, info, heard):
                 minimized.append(window)
                 system.minimize(window)
             elif kind == "shown" and popup:
-                # Minimized through Chrome: a window Chrome is still showing, if the OS minimizes it, Chrome shows again
-                # where a minimized window sits, off every screen and not minimized (measured).
+                # Minimized through Chrome, not the OS: if the OS minimizes a window Chrome is still showing, Chrome
+                # shows it again where a minimized window sits, off every screen and not minimized (measured).
                 minimized.append(window)
                 _minimize(browser, info["targetId"])
         if system.front() == browser.pid:
@@ -215,12 +221,12 @@ def watch(browser):
         if info["targetId"] in known or info.get("type") != "page":
             continue
         if info.get("openerId"):
-            # A page a link or a script opened. One read just as from_page returned came while it watched, as two
-            # popups at once do, so what it did on screen is as old as the tab before it.
+            # A page a link or a script opened. Read within LOOK_BACK of from_page's last return, it was told of while
+            # from_page watched the tab before (two popups at once), so it takes that tab's heard.
             heard = began if time.monotonic() - ended < LOOK_BACK else time.monotonic()
             line = from_page(browser, info, heard)
             began, ended = heard, time.monotonic()
         else:
-            line = _by_user(browser, info)  # tab's tabs, and the user's own, have no opener
+            line = _by_user(browser, info)  # tabs window() and tab() opened, and the user's own, have no opener
         if line:
             yield line

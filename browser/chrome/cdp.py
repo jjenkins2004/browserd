@@ -17,7 +17,7 @@ from ..protocol.ws import Timeout, WebSocket
 
 CHROME = system.CHROME
 PROFILE = "Default"  # the one Chrome profile in every profile's folder
-# Lets key presses and clicks reach a page before it first draws; README.md, "Agent Gotchas", says why.
+# Lets key presses and clicks reach a page before it first draws; README.md, "Agent Gotchas & Invariants", says why.
 INPUT_FLAG = "--allow-pre-commit-input"
 # Every address asked here is 127.0.0.1, which a proxy the OS is set to use must never see.
 LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -131,7 +131,8 @@ def check_folder(folder):
 
 
 def require(profile):
-    """A profile's Chrome's /json/version, or a CdpError that says what is wrong and what to do.
+    """A profile's Chrome's /json/version. NotRunning when nothing listens on its port and no Chrome holds its folder;
+    otherwise a CdpError that says what is wrong and what to do.
 
     Args:
         profile (Profile): whose Chrome must be what answers on its port.
@@ -172,7 +173,8 @@ def require(profile):
 
 
 class Browser:
-    """A profile's browser-wide connection. Commands carry a session id to reach a tab."""
+    """A profile's browser-wide connection. Commands carry a session id to reach a tab. Not shared: it has no lock, and
+    keeps the events it reads while it waits for an answer, so code that listens for events opens one of its own."""
 
     def __init__(self, profile):
         """
@@ -184,8 +186,8 @@ class Browser:
         self._last = 0
         self._events = []
         self._unanswered = set()  # ids of commands whose answers are no longer waited for
-        # The OS may not show every process's port (lsof sees only this user's), so the browser that answered says which
-        # process it is.
+        # The OS may not show every process's port (lsof sees only this user's, and Windows lets a process bind the port on
+        # another address beside Chrome's), so the browser that answered says which process it is.
         answered = [p["id"] for p in self.call("SystemInfo.getProcessInfo")["processInfo"] if p.get("type") == "browser"]
         if answered != [owner(profile.folder)]:
             self.close()
@@ -240,6 +242,9 @@ class Browser:
             return answer.get("result", {})
 
     def wait_for(self, event, session=None, timeout=20.0):
+        """The params of the first `event` (on session, if given): one already read and kept, else one read within
+        timeout seconds (each read's timeout is at least 0.5s, so it can end up to 0.5s late); CdpError if none comes. Events read
+        meanwhile are kept for later calls. timeout 0 checks only the events already kept."""
         for n, message in enumerate(self._events):
             if message.get("method") == event and (session is None or message.get("sessionId") == session):
                 return self._events.pop(n).get("params", {})

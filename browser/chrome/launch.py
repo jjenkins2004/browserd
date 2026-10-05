@@ -1,5 +1,5 @@
-"""Start a profile's Chrome, or say why it cannot be started. Called by chromes.Chromes.ensure before each tab_open and
-Open Chrome."""
+"""Start a profile's Chrome, or say why it cannot be started. chromes.Chromes.ensure calls it before each tab_open and
+Open Chrome; README.md names its other callers."""
 
 import os
 import time
@@ -11,8 +11,8 @@ IN_USE = 21  # chrome.exe's exit code when another Chrome holds the folder under
 
 
 def _open(profile, flags=()):
-    """Start the profile's Chrome off the user's focus, with no window: README.md, "Agent Gotchas". The Popen of it, or
-    None where the OS hands Chrome off (macOS's open)."""
+    """Start the profile's Chrome off the user's focus, with no window: README.md, "Agent Gotchas & Invariants". The Popen
+    of it, or None where the OS hands Chrome off (macOS's open)."""
     try:
         return system.launch_chrome([
             "--remote-debugging-port=%d" % profile.port,
@@ -51,9 +51,9 @@ def launch(profile, wait=15.0, flags=()):
             cdp.require(profile)
             return "running: %s" % profile.endpoint
         except cdp.CdpError as exc:
-            # A Chrome of its own exits at once when it cannot be one: 0 once it has handed its launch to a Chrome
-            # already on the folder (which require then names), IN_USE when that Chrome was given the folder spelled
-            # another way.
+            # The Chrome just launched exits at once if another Chrome has the folder: with 0 once it has handed its
+            # launch over to that Chrome (which require then names), with IN_USE when that Chrome was given the folder
+            # spelled another way.
             if started is not None and started.poll() == IN_USE:
                 raise cdp.CdpError("Chrome would not start on %s: another Chrome has that folder open, given it "
                                    "spelled another way. Quit that Chrome" % profile.folder)

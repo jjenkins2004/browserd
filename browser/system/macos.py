@@ -72,8 +72,9 @@ def chrome_owner(folder):
 
 
 def launch_chrome(args):
-    # -n starts a Chrome of its own, even beside one already open on another folder. -g keeps the Mac's focus where it
-    # is; README.md, "Agent Gotchas".
+    # -n starts a Chrome of its own, even beside one already open on another folder. -g opens it in the background, but
+    # Chrome may still raise its first window over the app in front, so launch gives it none; ../chrome/README.md,
+    # "Agent Gotchas & Invariants".
     done = subprocess.run(["/usr/bin/open", "-gna", APP, "--args", *args], capture_output=True, text=True)
     if done.returncode != 0:
         raise Unanswered("could not start Chrome: %s" % (done.stderr.strip() or "open exited %d" % done.returncode))
@@ -112,7 +113,7 @@ def bring(pid):
 
 
 def happened(pid, since):
-    return []  # macOS keeps no such record; Chrome tells of a tab before it takes the focus here (README.md)
+    return []  # macOS keeps no such record; Chrome tells of a tab before it takes the focus here (opens.from_page)
 
 
 def minimize(window):

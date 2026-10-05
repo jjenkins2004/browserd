@@ -1,6 +1,5 @@
-"""Each profile's downloads: saved in a folder of its own, and heard so the step that began one can say where it went.
-
-README.md, "Agent Gotchas & Invariants", says why and how steps.run reports them.
+"""Each profile's downloads: saved in a folder of its own, and heard so the step that began one can say where it went
+(chrome-devtools-mcp's reply never names it). steps.run reports them after each step.
 """
 
 import collections
@@ -24,12 +23,16 @@ class Folder(threading.Thread):
     """Where a profile's Chrome saves its downloads, set on a connection of the server's own that stays open as long as
     that Chrome runs, and every download heard on it.
 
-    Chrome keeps one download behaviour per browser: the last connection to set it wins, and when that connection
-    closes Chrome goes back to its own settings (measured). So only this sets it, `allow` into the folder, which saves
-    with no Save As window, whatever the profile's "Ask where to save each file" says, and saves every file of a page
-    that begins several at once, with no "download multiple files" prompt. It sets it again on a new connection when
-    its own drops while that Chrome runs, and ends once that Chrome has quit. Only the connection that set it hears
-    Browser.downloadProgress, which names where each file went, so each tab's Watcher asks this for it.
+    Left to its own settings, a Chrome saves in the user's Downloads, opens a Save As window no tool can answer when the
+    profile asks where to save each file, and holds back all but the first of several files a page begins at once, for
+    good (measured). Chrome keeps one download behaviour per browser: the last connection to set it wins, and when that
+    connection closes Chrome goes back to its own settings (measured). So only this sets it, `allow` into the folder,
+    which does neither, whatever the profile's "Ask where to save each file" says. chrome-devtools-mcp never sets it
+    (its Puppeteer does only when given downloadBehavior). It sets it again on a new connection when its own drops while
+    that Chrome runs, and ends once that Chrome has quit. A download the user begins by hand goes here too while the
+    server runs; across a browserd restart it goes where Chrome's own settings say until the new server's
+    Chromes.adopt sets it again. Only the connection that set it hears Browser.downloadProgress, which names where each
+    file went, so each tab's Watcher asks this for it.
     """
 
     def __init__(self, name, folder, connect, running, stopping=lambda: False):
@@ -158,8 +161,9 @@ class Watcher(threading.Thread):
         self._ready = threading.Event()
         self._lock = threading.Lock()
         self._popups = set()  # target ids of pages this tab opened, and pages those opened
-        # {guid, name, state and path as the tab's own events say, taken: the state last taken, or None}, in the order
-        # they began
+        # In the order heard, each {guid, name, state as the tab's own events say (a popup's, added from the Folder, stays
+        # inProgress here), path (None here: only the Folder hears where a file went), taken (the state last taken, or
+        # None), ended (the time.monotonic() the tab said it ended, or None)}
         self._heard = []
 
     def start_listening(self):
@@ -235,7 +239,9 @@ class Watcher(threading.Thread):
             wait (float): seconds at most to wait while a download not yet taken is in progress.
 
         Returns [{name, state, path}]: state is completed, canceled or inProgress; path is None until it completes,
-        and when it completed with no Folder to say where.
+        and when it completed with no Folder to say where. A download still in progress when taken, or heard only after
+        a take, comes back from the next take, which may be a later queue's; not if this Watcher ended meanwhile
+        (stopped, or its connection lost), since the tab's Worker then starts a new one, which never heard of it.
         """
         deadline = time.monotonic() + wait
         folder = self._folder()  # once a take: finding it can ask the OS

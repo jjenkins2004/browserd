@@ -64,7 +64,8 @@ class Tabs:
         ]
         if not default:
             if not pages:
-                return [], 0, asked  # no window open, so Chrome unloaded its Chrome profile; README.md, "Agent Gotchas"
+                # No window open, so Chrome unloaded its Chrome profile; ../chrome/README.md, "Agent Gotchas & Invariants".
+                return [], 0, asked
             raise cdp.CdpError("the %s Chrome did not say which browser context is its Chrome profile" % profile.name)
         own = [info for info in pages if info.get("browserContextId") == default]
         return own, len(pages) - len(own), asked
