@@ -1153,12 +1153,14 @@ class Hand:
     unanswered in time (cdp.Late), and with a dialog, that dialog's event is heard; with held, a dialog open already
     leaves Page.enable unanswered. Every point holds the element whose backend node id is hit, in the tree nodes (GO
     by default); with hit None, none, as off the page; the page is scrolled by scroll, and frame is a frame's src.
-    With unread, the tree is never given."""
+    With unread, the tree is never given. dom is the words the page's own DOM gives an element (hit.DOM_WORDS's), and
+    resolved the backend node ids it was asked them for."""
 
-    def __init__(self, dialog=None, late=False, held=False, nodes=GO, hit=7, scroll=(0, 0), frame=None, unread=False):
+    def __init__(self, dialog=None, late=False, held=False, nodes=GO, hit=7, scroll=(0, 0), frame=None, unread=False,
+                 dom=()):
         self.events, self.dialog, self.late, self.held = [], dialog, late or dialog is not None, held
         self.nodes, self.hit, self.scroll, self.frame, self.asked = nodes, hit, scroll, frame, []
-        self.unread = unread
+        self.unread, self.dom, self.resolved = unread, list(dom), []
 
     def call(self, method, session=None, wait=None, **params):
         if method == "Target.attachToTarget":
@@ -1178,6 +1180,11 @@ class Hand:
             return {"nodes": self.nodes}
         if method == "DOM.describeNode":
             return {"node": {"nodeName": "IFRAME", "attributes": ["src", self.frame] if self.frame else []}}
+        if method == "DOM.resolveNode":
+            self.resolved.append(params["backendNodeId"])
+            return {"object": {"objectId": "O%d" % params["backendNodeId"]}}
+        if method == "Runtime.callFunctionOn":
+            return {"result": {"type": "object", "value": self.dom}}
         if method == "Input.dispatchMouseEvent":
             self.events.append(params)
             if self.late:
@@ -1298,6 +1305,22 @@ def hit_offline():
           landed([ax("RootWebArea", "page", 1), ax("Iframe", "", 2, 1, backend=7)], frame="https://consent.example/x")
           == "a frame from consent.example, which browserd cannot read into")
     check("a point off the page lands on nothing", landed(GO, None) == "nothing browserd could name")
+    tile = [ax("RootWebArea", "page", 1), ax("generic", "", 2, 1), ax("none", "", 3, 2, backend=7, ignored=True)]
+    hand = Hand(nodes=tile, dom=["Segment"])
+    read = hit.read(hand, "S1", 1, 2)
+    check("an element the tree names nothing, like a tool tile drawn as plain divs or a dialog under aria-hidden, is "
+          "named by the page's own words for it", hit.described(read) == 'text "Segment"' and hit.carries(read, "Segment")
+          and hand.resolved == [7], "%r %r" % (read, hand.resolved))
+    thumb = [ax("RootWebArea", "page", 1), ax("link", "", 2, 1, backend=9), ax("none", "", 3, 2, backend=7, ignored=True)]
+    hand = Hand(nodes=thumb, dom=["Rectangle"])
+    read = hit.read(hand, "S1", 1, 2)
+    check("and so is a control the tree names nothing, by its own element's words",
+          hit.described(read) == 'link "Rectangle"' and hand.resolved == [9], "%r %r" % (read, hand.resolved))
+    hand = Hand(dom=["Never asked"])
+    hit.read(hand, "S1", 1, 2)
+    check("a control the tree names is never asked of the DOM", hand.resolved == [], repr(hand.resolved))
+    check("and a canvas, with no words in the DOM either, still has none",
+          landed([ax("RootWebArea", "page", 1), ax("Canvas", "", 2, 1, backend=7)]) == "canvas, which has no words")
     hand = Hand(scroll=(0, 500))
     hit.read(hand, "S1", 10.4, 20.6)
     check("a scrolled page's point is read at its place in the document, in whole pixels", hand.asked == [(10, 521)],

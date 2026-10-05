@@ -30,6 +30,27 @@ HOLDERS = {"menu", "menubar", "listbox", "toolbar", "tablist", "tree", "treegrid
 # content Chrome keeps in another process, which no read reaches into, or None.
 What = collections.namedtuple("What", "role name words control disabled frame")
 NOTHING = What(None, "", [], False, False, None)
+SHORT = 80  # characters of an element's text the DOM's words keep; a longer text is a holder's, like a menu's
+# The DOM's own words for an element the tree gives none for (a tile drawn as plain divs, a dialog under aria-hidden):
+# its label, title, alt, placeholder or tooltip, and its text if short, then the same of each element around it, up to
+# the first one a click acts on that has words (GeoGebra's tile is an img, focusable but wordless, in a button that holds
+# its name), or one whose text is too long to be a single control's.
+DOM_WORDS = r"""function () {
+  const out = [];
+  let e = this.nodeType === 1 ? this : this.parentElement;
+  for (let depth = 0; e && e !== document.body && depth < 4; depth++) {
+    for (const key of ['aria-label', 'title', 'alt', 'placeholder', 'data-tooltip']) {
+      const value = (e.getAttribute && e.getAttribute(key) || '').trim();
+      if (value) out.push(value);
+    }
+    const text = ((e.innerText !== undefined ? e.innerText : e.textContent) || '').trim();
+    if (text.length > %d) break;
+    if (text) out.push(text);
+    if (out.length && e.matches && e.matches('a, button, input, select, textarea, label, summary, [role], [onclick], [tabindex]')) break;
+    e = e.parentElement || (e.getRootNode && e.getRootNode().host);
+  }
+  return out;
+}""" % SHORT
 
 
 def read(browser, session, x, y):
@@ -70,13 +91,18 @@ def read(browser, session, x, y):
         if _role(node) in CONTROLS:
             disabled = any(prop["name"] == "disabled" and prop.get("value", {}).get("value") for prop in
                            node.get("properties", []))
-            return What(_role(node), name or said, words, True, disabled, None)
+            if not words:  # a control the tree names nothing, like a shape thumbnail with only a tooltip
+                words = _dom_words(browser, session, node.get("backendDOMNodeId") or hit["backendNodeId"])
+            return What(_role(node), name or said or (words[0] if words else ""), words, True, disabled, None)
         node = by_id.get(node.get("parentId"))
     if _role(first) == "iframe":
         return What("iframe", "", [], False, False, _origin(browser, session, hit["backendNodeId"]))
     if said:
         return What(_role(first), said, words, False, False, None)
     role, name = shown or (_role(first) if not first.get("ignored") else None, "")
+    if not words:
+        words = _dom_words(browser, session, hit["backendNodeId"])
+        name = words[0] if words else name
     return What(role, name, words, False, False, None)
 
 
@@ -121,6 +147,18 @@ def _role(node):
 
 def _name(node):
     return str((node.get("name") or {}).get("value") or "").strip()
+
+
+def _dom_words(browser, session, backend):
+    """The DOM's own words for an element the tree gives none for (DOM_WORDS), or none if it will not say."""
+    try:
+        target = browser.call("DOM.resolveNode", session, WAIT, backendNodeId=backend)["object"]["objectId"]
+        found = browser.call("Runtime.callFunctionOn", session, WAIT, objectId=target, functionDeclaration=DOM_WORDS,
+                             returnByValue=True)
+    except (cdp.CdpError, KeyError):
+        return []
+    value = (found.get("result") or {}).get("value")
+    return [str(each) for each in value] if isinstance(value, list) else []
 
 
 def _origin(browser, session, backend):

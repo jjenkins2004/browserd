@@ -526,7 +526,12 @@ same tabs under the same ids. A crash leaves the same.
   climbs from the element hit to the first control (`hit.CONTROLS`) and names it; it stops below an element that holds
   controls (`hit.HOLDERS`: a menu, a toolbar, a list, a dialog, the page), so a press in a menu between its items
   names the menu, with no words of its items'. With no control, it names the text drawn right in the element hit (a
-  paragraph's, a clickable div's, an SVG text's), else its role (a canvas). A frame from another site, which Chrome
+  paragraph's, a clickable div's, an SVG text's), else its role (a canvas). Where the tree gives no words at all, the
+  read asks the page's own DOM (`hit.DOM_WORDS`, by `DOM.resolveNode` and `Runtime.callFunctionOn`): the element's
+  label, title, alt, placeholder or tooltip, and its text if under `hit.SHORT` (80) characters, then the same of each
+  element around it up to the first one a click acts on. GeoGebra draws its tool tiles as plain divs the tree leaves
+  out, and CNN puts its consent dialog under `aria-hidden`, so both read as nothing named until then (seen on
+  2026-10-04 through browserd: `on: "Segment"` refused on GeoGebra's tile). A frame from another site, which Chrome
   keeps in another process, is named only by where it is from. The read takes about 2 ms (measured: each call 1 ms
   or less on Windows). A `click_down` names what it presses in `on`, a few words as the screenshot shows them, and a
   queue with one of count 1 that has none is refused before any step runs; `hit.carries` checks them against what
