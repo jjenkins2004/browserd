@@ -22,6 +22,7 @@ The suites, each `--suite` of `run.py`:
 | `popups` | first-visit consent banners, welcome dialogs and look-alike buttons on 7 live sites (Forbes, HubSpot, Kayak, CNN, BBC, the Guardian, Sephora) | 7 | the popup seen, the press on the right button or the page's state after, and no press on its look-alike |
 | `slides` | edits to a new, blank Google Slides deck per run, on the `experiments` arm's profile signed in to Google | 6 | the deck's own pptx export, read in the run's tab after the run |
 | `traps` | clicks an agent never meant: a fake editor whose timed traps go up over its next target | 12 seeds | the page's own log of every trusted click and key |
+| `pagenow` | what a stopped queue's reply should show of the page now: replicas of real pages where a queue step fails early (`../findings/page-now.md`) | 5 | the app's own log and the answer; export and consent by the answer alone |
 
 The last run of the other servers' arms (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`.
 `miniwob` (drills) and `botwall` have not been run in full.
@@ -71,10 +72,17 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
       clickserver.py  the clicks page on 4395
       hayserver.py    the haystack pages on 4396
       trapserver.py   the trap editor (trapapp.html) on 4397, each run's log under results/trap-logs/
+      pagenow.py      suite pagenow: its apps (pagenow/) are served by pnserver.py on 4398, each run's log under
+                      results/pn-logs/
+      pnbatch.py      one page-now batch on the pn arms, with each scenario's k and the hashes of what it runs
+      pnfork.py       forks each page-now run at its stops, 5 times per reply at its first stop and once at a later
+                      one; pnhook.py (the fork's PreToolUse hook) and stubmcp.py (its browserd, answering from the
+                      page at the stop) serve each fork
       assets/         sample.pdf, which setup.py copies to the data folder's assets/
       tools/          analyze.py (tool use by arm), paired.py (sign tests), miscalls.py, cheats.py, ffmap.py,
                       trapcheck.py (traps' scoring on synthetic logs; a real run's log against its layout history),
-                      represses.py (an experiment's presses read again off its transcripts)
+                      represses.py (an experiment's presses read again off its transcripts),
+                      pnreport.py (the page-now experiment's numbers and decision)
       probes/         the pairing bug's replays and probes (../findings/benchmark.md, "The pairing bug")
 
     <data folder>/    paths.DATA: ../../../browserd-bench beside the repo, or $BROWSERD_BENCH_DATA
@@ -82,6 +90,9 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
                       collect and cleanup are done), scores.json
       results/<exp>.log, results/chain.log      each run's line; each chain's starts, stops and ends
       results/_invalid/<exp>-<why>/             runs set aside (a broken setup, an outage), never deleted
+      forks/<exp>/, sessions/<exp>/             pnfork.py's forks, and the Claude Code sessions they were cut from
+      pn-tools/                                 each pn arm's initialize and tools/list, which pnfork.py capture records
+                                                for the stub
       MCP-Universe/, formfactory/, webgames/, miniwob-plusplus/    the benchmarks' repos, from setup.py
       webgames-data/hf-test.jsonl, .venv/, *.log
       assets/sample.pdf                         formfactory.UPLOAD, from setup.py
@@ -90,7 +101,8 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
 
 - **A suite** is a module giving `SYSTEM`, `MAX_TURNS`, `load()` ({task name: task}), `prompt(task, token)` and
   `score(task, answer, token)`, and optionally `check()`, which refuses to start while its site is down, and
-  `RECORDS`, the folder where each run leaves `<token>.*` files its score reads. On an arm with
+  `RECORDS`, the folder where each run leaves `<token>.*` files its score reads, and `SESSIONS`, which keeps each
+  run's Claude Code session, its id in `<task>-r<n>.session` beside the transcript, for `pnfork.py`. On an arm with
   a `profile`, a suite may also give `prepare(task, mcp_url, session, token)`, which sets its page up before the run in
   a browserd session of the runner's own, and `collect(task, token, transcript, mcp_url)`, which reads what the run
   left on its tabs before the runner closes its sessions, both through `browserd_call.py`. `token` (`run.token`) names
@@ -121,11 +133,15 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   - `trap-on`, `trap-none`, `trap-guard`: the text-check experiment's arms (`../findings/text-check.md`), worktrees of
     their own served by `nextserver.py` on 9250, 9260 and 9270.
   - `browserd` (the main server on 9230, profile research), `cap` and `nocap` are earlier experiments' arms.
-- **A run** is `run.run_one`: `claude -p` with the arm's servers only (`--strict-mcp-config`), the model (`--model`,
-  default `claude-sonnet-5`), the suite's max turns, and its transcript streamed to
-  `results/<exp>/<arm>/<task>-r<n>.part`, renamed `.jsonl` once its collect and cleanup are done. Arms interleave task
-  by task, so each sees a live site at about the same time. A run whose `.jsonl` ends in a result is done, so running an
-  experiment again runs only what is missing, a run cut off before its cleanup included.
+  - `pn-a`, `pn-b`, `pn-c`: the page-now experiment's arms, the worktrees `browserd-pn-<letter>` served by
+    `nextserver.py` on 9310, 9320 and 9330. Which stop reply each holds is in the data folder's `arms.json`, never in
+    what the agent sees.
+- **A run** is `run.run_one`: `claude -p` (PATH's, or `$BROWSERD_BENCH_CLAUDE`) with the arm's servers only
+  (`--strict-mcp-config`), the model (`--model`, default `claude-sonnet-5`), the suite's max turns, and its transcript
+  streamed to `results/<exp>/<arm>/<task>-r<n>.part`, each line stamped `_t` (when it arrived), renamed `.jsonl` once
+  its collect and cleanup are done. Arms interleave task by task, so each sees a live site at about the same time. A
+  run whose `.jsonl` ends in a result is done, so running an experiment again runs only what is missing, a run cut off
+  before its cleanup included.
 - **Scoring** is `report.py`, through each suite's `score`. For MCP-Universe it gives the benchmark's own strict score
   and `tasks.lenient`, which forgives formatting alone:
   - the JSON is taken from any text around it, unless the text holds several JSON values that differ;

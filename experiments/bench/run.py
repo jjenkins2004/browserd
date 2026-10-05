@@ -19,6 +19,7 @@ import concurrent.futures
 import contextlib
 import hashlib
 import io
+import uuid
 import json
 import os
 import re
@@ -39,6 +40,7 @@ import procs
 import canvas
 import clicks
 import miniwob
+import pagenow
 import popups
 import slides
 import traps
@@ -48,7 +50,7 @@ import webgames
 SUITES = {"mcpuniverse": tasks, "webgames": webgames, "formfactory": formfactory, "botwall": botwall, "miniwob": miniwob,
           "clicks": clicks, "haystack": haystack, "canvas": canvas,
           "popups": popups, "slides": slides,
-          "traps": traps}
+          "traps": traps, "pagenow": pagenow}
 
 
 
@@ -73,6 +75,12 @@ ARMS = {
     "trap-on": _browserd(9250, "BenchA"),
     "trap-none": _browserd(9260, "BenchB"),
     "trap-guard": _browserd(9270, "BenchC"),
+    # The page-now experiment's three arms (../findings/page-now.md): each a worktree of its own (browserd-pn-<letter>)
+    # served by nextserver.py; which stop reply each gives is in the data folder's arms.json, never in what the agent
+    # sees.
+    "pn-a": _browserd(9310, "PnA"),
+    "pn-b": _browserd(9320, "PnB"),
+    "pn-c": _browserd(9330, "PnC"),
     # benchmark-fixes before the view cap (the browserd-nocap worktree), on 9260, on a Chrome of its own.
     "nocap": _browserd(9260, "Bench2"),
     "playwright": {
@@ -112,6 +120,7 @@ ARMS = {
     },
 }
 
+CLAUDE = os.environ.get("BROWSERD_BENCH_CLAUDE", "claude")  # the Claude Code to run: a pinned binary, or PATH's
 TIMEOUT = 900  # seconds a run may take before it is killed and counted as timed out
 # Lines in a run's transcript that mean every run after it would fail the same way. claude -p's own line is "Not
 # logged in · Please run /login"; "Not logged in" alone also turns up when an agent reports a site it is logged out of.
@@ -132,6 +141,7 @@ def _env():
     # for its MCP server (Playwright's npx start takes seconds) begins its first turn with no browser tools.
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "MCP_CONNECTION"))}
     env["MCP_CONNECTION_NONBLOCKING"] = "false"
+    env["DISABLE_AUTOUPDATER"] = "1"  # one Claude Code version for a whole batch
     return env
 
 
@@ -195,6 +205,20 @@ def reached_browser(text):
                     return True
                 tried = True
     return not tried
+
+
+def _stamped(source, sink):
+    """Copy claude -p's stream-json lines from source to sink, each with _t, the time it arrived in epoch seconds."""
+    for line in source:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            event = None
+        if not isinstance(event, dict):
+            sink.write(line)
+            continue
+        sink.write(json.dumps(dict(event, _t=time.time()), ensure_ascii=False) + "\n")
+        sink.flush()
 
 
 def token(exp, arm_name, task_name, rep):
@@ -284,15 +308,22 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
     servers = arm["mcp"]
     if "session_env" in arm:
         servers = {name: dict(server, env={arm["session_env"]: run_token}) for name, server in servers.items()}
-    cmd = procs.command(["claude", "-p",
+    cmd = procs.command([CLAUDE, "-p",
            "--model", model,
            "--output-format", "stream-json", "--verbose",
            "--mcp-config", json.dumps({"mcpServers": servers}), "--strict-mcp-config",
            "--tools", "",
            "--permission-mode", "bypassPermissions",
            "--setting-sources", "project",
-           "--no-session-persistence",
            "--max-turns", str(max_turns)])
+    if getattr(suite, "SESSIONS", False):
+        # Kept, under an id of this launch's own written beside its transcript, so the run can be forked at a step of
+        # its own (pnfork.py); and each message's final usage, which only the partial messages carry.
+        session = str(uuid.uuid4())
+        path.with_suffix(".session").write_text(session, encoding="utf-8")
+        cmd += ["--session-id", session, "--include-partial-messages"]
+    else:
+        cmd += ["--no-session-persistence"]
     cmd += arm.get("flags", [])
     cmd += ["--append-system-prompt", " ".join(filter(None, [suite.SYSTEM, arm["system"]]))]
     started = time.time()
@@ -305,18 +336,29 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
             return "%s %s r%d: not run: could not prepare its page (%s)" % (arm_name, task_name, rep, problem)
     # The transcript's name until collect and cleanup are done, so a run cut off before them runs again.
     part = path.with_suffix(".part")
-    with part.open("wb") as stdout, path.with_suffix(".err").open("wb") as stderr:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr,
+    # backslashreplace writes back, as the same \uXXXX escape, a lone surrogate claude -p sent escaped (a page's text
+    # cut mid-emoji); strict utf-8 would stop the copier and leave claude blocked on a full pipe.
+    with (part.open("w", encoding="utf-8", errors="backslashreplace", newline="\n") as stdout,
+          path.with_suffix(".err").open("wb") as stderr):
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
                                 # The data folder, as a run loads the Claude Code settings of the folder it runs in.
                                 cwd=paths.DATA, env=_env(), **procs.TREE)
+        lines = io.TextIOWrapper(typing.cast(typing.IO[bytes], proc.stdout), encoding="utf-8", errors="replace")
+        copier = threading.Thread(target=_stamped, args=(lines, stdout), daemon=True)
+        copier.start()
         try:
-            # Bytes, so the prompt's line ends are the same on every OS.
-            proc.communicate(suite.prompt(task, run_token).encode("utf-8"), timeout=TIMEOUT)
+            # Bytes, so the prompt's line ends are the same on every OS. A claude that ended before reading it has
+            # closed the pipe, as communicate allowed; its exit code and .err say why.
+            with contextlib.suppress(OSError):
+                typing.cast(typing.IO[bytes], proc.stdin).write(suite.prompt(task, run_token).encode("utf-8"))
+                typing.cast(typing.IO[bytes], proc.stdin).close()
+            proc.wait(timeout=TIMEOUT)
         except subprocess.TimeoutExpired:
             timed_out = True
         finally:
             procs.stop_tree(proc.pid)
             proc.wait()
+            copier.join(timeout=30)  # a process outside the stopped tree may still hold claude's stdout
     out = part.read_text(encoding="utf-8", errors="replace")
     transcript = out + path.with_suffix(".err").read_text(encoding="utf-8", errors="replace")
     notes = []

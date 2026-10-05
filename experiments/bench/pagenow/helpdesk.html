@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tickets · Northwind Support</title>
+<style>
+  body { margin: 0; font: 13px/1.4 -apple-system, "Segoe UI", Roboto, sans-serif; color: #2f3941; background: #f8f9f9; }
+  header { display: flex; align-items: center; gap: 18px; background: #03363d; color: #fff; padding: 8px 16px; }
+  header a { color: #d1e8df; text-decoration: none; }
+  header .brand { font-weight: 700; font-size: 15px; color: #fff; }
+  header input { margin-left: auto; width: 240px; padding: 5px 8px; border-radius: 4px; border: 0; }
+  .layout { display: flex; }
+  nav.views { width: 220px; padding: 12px; border-right: 1px solid #d8dcde; background: #fff; min-height: 100vh; }
+  nav.views h2 { font-size: 12px; text-transform: uppercase; color: #68737d; margin: 8px 0; }
+  nav.views a { display: flex; justify-content: space-between; padding: 5px 6px; color: #2f3941; text-decoration: none; border-radius: 3px; }
+  nav.views a.on { background: #e9ebed; font-weight: 600; }
+  main { flex: 1; padding: 12px 16px; }
+  .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+  .bar h1 { font-size: 18px; margin: 0 auto 0 0; }
+  table { width: 100%; border-collapse: collapse; background: #fff; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #e9ebed; vertical-align: middle; }
+  th { font-size: 12px; color: #68737d; font-weight: 600; }
+  td.subject { max-width: 340px; }
+  select { font: inherit; padding: 2px; }
+  #toast { position: fixed; right: 16px; bottom: 16px; background: #03363d; color: #fff; padding: 8px 14px; border-radius: 4px; display: none; }
+  #saving { margin-left: 8px; color: #68737d; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">Northwind Support</span>
+  <a href="#">Home</a><a href="#">Tickets</a><a href="#">Customers</a><a href="#">Knowledge base</a><a href="#">Reports</a><a href="#">Admin</a>
+  <input id="search" type="search" placeholder="Search tickets" aria-label="Search tickets">
+  <a href="#">Lena Fischer</a>
+</header>
+<div class="layout">
+  <nav class="views" aria-label="Views">
+    <h2>Views</h2>
+    <a href="#">Your unsolved tickets <span>7</span></a>
+    <a href="#">Unassigned tickets <span>12</span></a>
+    <a href="#" class="on">All unsolved tickets <span id="count-all">36</span></a>
+    <a href="#">Recently updated tickets <span>18</span></a>
+    <a href="#">Pending tickets <span>6</span></a>
+    <a href="#">Recently solved tickets <span>5</span></a>
+    <a href="#">Urgent tickets <span>2</span></a>
+    <h2>Groups</h2>
+    <a href="#">Billing <span>9</span></a>
+    <a href="#">Shipping <span>11</span></a>
+    <a href="#">Technical <span>10</span></a>
+    <a href="#">Accounts <span>6</span></a>
+  </nav>
+  <main>
+    <div class="bar">
+      <h1>All unsolved tickets</h1><span id="saving"></span>
+      <button type="button">Bulk edit</button>
+      <button type="button">Export</button>
+      <label>Sort by <select aria-label="Sort by"><option>Updated</option><option>Priority</option><option>Requester</option></select></label>
+    </div>
+    <table>
+      <thead><tr><th>Ticket</th><th>Subject</th><th>Requester</th><th>Status</th><th>Priority</th><th>Assignee</th><th>Updated</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </main>
+</div>
+<div id="toast" role="status"></div>
+<script>
+const SCENARIO = "helpdesk";
+const RUN = new URLSearchParams(location.search).get("run") || "none";
+const ATTEMPT = __ATTEMPT__;  // the server's, so a run started again starts from a fresh page
+const KEY = "pn-" + SCENARIO + "-" + RUN + "-" + ATTEMPT;
+const STATUSES = ["Open", "Pending", "On-hold", "Solved"];
+const PRIORITIES = ["Low", "Normal", "High", "Urgent"];
+const AGENTS = ["Unassigned", "Priya Shah", "Marco Diaz", "Lena Fischer", "Sam Okafor"];
+// [requester, subject, status, priority, assignee, updated]; newest first, numbered #4836 down to #4801.
+const SEED = [
+  ["Grace Liu", "Tracking number shows delivered but parcel never arrived", "Open", "High", "Marco Diaz", "4 minutes ago"],
+  ["Omar Haddad", "Can't reset password, reset email never comes", "Open", "Normal", "Unassigned", "11 minutes ago"],
+  ["Julia Novak", "Wrong size sent, need exchange for medium", "Pending", "Normal", "Sam Okafor", "18 minutes ago"],
+  ["Daniel Brooks", "App crashes when opening order history on Android", "Open", "High", "Unassigned", "25 minutes ago"],
+  ["Ana Ruiz", "Charged twice for the March invoice", "Open", "Normal", "Unassigned", "31 minutes ago"],
+  ["Kenji Watanabe", "How do I add a second shipping address?", "Open", "Low", "Lena Fischer", "38 minutes ago"],
+  ["Sofia Rossi", "Discount code SPRING15 not applying at checkout", "Open", "Normal", "Unassigned", "44 minutes ago"],
+  ["Liam O'Connor", "Package damaged in transit, photos attached", "Open", "High", "Marco Diaz", "52 minutes ago"],
+  ["Mei Lin", "Request to delete my account and data", "On-hold", "Normal", "Lena Fischer", "1 hour ago"],
+  ["Carlos Mendes", "Two-factor codes arriving late by several minutes", "Open", "Normal", "Unassigned", "1 hour ago"],
+  ["Hannah Weber", "Order stuck in processing for 5 days", "Open", "High", "Sam Okafor", "1 hour ago"],
+  ["Ravi Patel", "Integration with Slack stopped posting updates", "Open", "Normal", "Unassigned", "2 hours ago"],
+  ["Emily Clarke", "Need a copy of last year's receipts for taxes", "Pending", "Low", "Priya Shah", "2 hours ago"],
+  ["Tom Becker", "Refund for cancelled annual plan not received", "Open", "High", "Marco Diaz", "2 hours ago"],
+  ["Aisha Bello", "Can I change the delivery date after ordering?", "Open", "Low", "Unassigned", "3 hours ago"],
+  ["Lucas Martin", "Login page shows a blank screen in Safari", "Open", "High", "Unassigned", "3 hours ago"],
+  ["Nina Petrova", "Item listed in stock but order was cancelled", "Open", "Normal", "Sam Okafor", "3 hours ago"],
+  ["George Adams", "Export to CSV leaves out the notes column", "On-hold", "Low", "Lena Fischer", "4 hours ago"],
+  ["Yuki Tanaka", "Courier left the parcel with a neighbour", "Open", "Low", "Unassigned", "4 hours ago"],
+  ["Pedro Alves", "Promo email links lead to a 404 page", "Open", "Normal", "Marco Diaz", "5 hours ago"],
+  ["Chloe Dubois", "Gift card balance shows zero after one use", "Open", "Normal", "Unassigned", "5 hours ago"],
+  ["Samir Khan", "Bulk order quote for 40 units", "Pending", "Normal", "Priya Shah", "6 hours ago"],
+  ["Wei Chen", "Invoice shows the wrong VAT number", "Open", "Normal", "Lena Fischer", "6 hours ago"],
+  ["Laura Schmidt", "Return label won't print from the portal", "Open", "Normal", "Unassigned", "7 hours ago"],
+  ["Ibrahim Yusuf", "Account locked after too many login attempts", "Open", "High", "Sam Okafor", "7 hours ago"],
+  ["Olivia Brown", "Subscription box arrived without the insert", "Open", "Low", "Unassigned", "8 hours ago"],
+  ["Mateo Garcia", "API rate limit errors since this morning", "Open", "High", "Marco Diaz", "8 hours ago"],
+  ["Elena Popescu", "Change the email address on my account", "Pending", "Low", "Lena Fischer", "9 hours ago"],
+  ["Jack Wilson", "Order confirmation email never arrived", "Open", "Normal", "Unassigned", "10 hours ago"],
+  ["Zara Ahmed", "Ordered blue, received green, need a swap", "Open", "Normal", "Sam Okafor", "11 hours ago"],
+  ["Fatima Noor", "Card declined but bank shows a pending charge", "Open", "Normal", "Unassigned", "12 hours ago"],
+  ["Noah Fischer", "Website search returns no results for 'kettle'", "Open", "Low", "Marco Diaz", "13 hours ago"],
+  ["Ines Costa", "Request for a bulk invoice for Q1 orders", "On-hold", "Low", "Priya Shah", "14 hours ago"],
+  ["Ben Carter", "Reward points missing from last purchase", "Open", "Normal", "Unassigned", "15 hours ago"],
+  ["Lea Moreau", "Delivery address autocomplete picks the wrong street", "Open", "Low", "Lena Fischer", "16 hours ago"],
+  ["Victor Ionescu", "Tablet stand arrived with a missing screw", "Open", "Low", "Unassigned", "18 hours ago"],
+];
+const ARRIVING = [
+  ["Priyanka Rao", "Checkout fails with error 502 on payment step", "Open", "High", "Unassigned", "just now"],
+  ["Felix Wagner", "Where is my order? No update for a week", "Open", "Normal", "Unassigned", "just now"],
+];
+
+function make(rows, first) {
+  return rows.map((r, i) => ({id: first - i, requester: r[0], subject: r[1], status: r[2], priority: r[3], assignee: r[4], updated: r[5]}));
+}
+let state = JSON.parse(localStorage.getItem(KEY) || "null") || {tickets: make(SEED, 4836), refreshed: false};
+const fresh = !localStorage.getItem(KEY);
+
+function log(kind, data) {
+  fetch("/log", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(Object.assign({run: RUN, scenario: SCENARIO, kind, t: Date.now()}, data || {}))}).catch(() => {});
+}
+function save() {
+  localStorage.setItem(KEY, JSON.stringify(state));
+  log("state", {tickets: state.tickets.map(t => ({id: t.id, requester: t.requester, status: t.status, priority: t.priority, assignee: t.assignee}))});
+}
+function options(list, chosen) {
+  return list.map(v => "<option" + (v === chosen ? " selected" : "") + ">" + v + "</option>").join("");
+}
+function render() {
+  const query = document.getElementById("search").value.trim().toLowerCase();
+  const shown = state.tickets.filter(t => !query || (t.requester + " " + t.subject + " #" + t.id).toLowerCase().includes(query));
+  document.getElementById("rows").innerHTML = shown.map(t =>
+    "<tr data-id='" + t.id + "'><td><a href='#t" + t.id + "'>#" + t.id + "</a></td>" +
+    "<td class='subject'>" + t.subject + "</td><td>" + t.requester + "</td>" +
+    "<td><select data-field='status' aria-label='Status for #" + t.id + "'>" + options(STATUSES, t.status) + "</select></td>" +
+    "<td><select data-field='priority' aria-label='Priority for #" + t.id + "'>" + options(PRIORITIES, t.priority) + "</select></td>" +
+    "<td><select data-field='assignee' aria-label='Assignee for #" + t.id + "'>" + options(AGENTS, t.assignee) + "</select></td>" +
+    "<td>" + t.updated + "</td></tr>").join("");
+  document.getElementById("count-all").textContent = state.tickets.length;
+}
+function toast(text) {
+  const el = document.getElementById("toast");
+  el.textContent = text;
+  el.style.display = "block";
+  setTimeout(() => { el.style.display = "none"; }, 4000);
+}
+document.getElementById("rows").addEventListener("change", event => {
+  const select = event.target.closest("select");
+  if (!select) return;
+  const id = Number(select.closest("tr").dataset.id);
+  const ticket = state.tickets.find(t => t.id === id);
+  ticket[select.dataset.field] = select.value;
+  ticket.updated = "just now";
+  log("change", {id, field: select.dataset.field, value: select.value});
+  save();
+  document.getElementById("saving").textContent = "Saving…";
+  // Each save's reply brings the list back from the server and every row is built anew; with the first, two tickets
+  // that arrived meanwhile.
+  const arrived = !state.refreshed;
+  state.refreshed = true;
+  setTimeout(() => {
+    if (arrived) state.tickets = make(ARRIVING, 4838).concat(state.tickets);
+    save();
+    render();
+    log("refresh", {});
+    document.getElementById("saving").textContent = "Saved";
+    if (arrived) toast("2 new tickets · list updated");
+  }, 300);
+});
+document.getElementById("search").addEventListener("input", render);
+render();
+if (fresh) { save(); log("load", {}); }
+</script>
+</body>
+</html>
