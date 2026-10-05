@@ -85,8 +85,9 @@ same logged-in Chrome, to compare them.
   `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p` (the judge's Claude Code) with run.sh's flags, the arm's server
   alone (claudechrome's tools are Claude in Chrome's, from `--chrome`), `TIMEOUT` (2 hours), and `record.py` beside it
   (browserd's by `--transcript`, the others' by `--cdp`); then the files the task's final message must link (`FILES`,
-  found by `LINKS`), the deck's PDF and one PNG per slide (`pdftoppm`) for a task with a deck, then the grade. trip's is
-  the judge, given the Doc, in `<data>/<exp>/judging/<random id>/`, so neither its folder nor its request names the arm;
+  found by `LINKS`; parks' map may come from Drive, see the gotchas), the deck's PDF and one PNG per slide
+  (`pdftoppm`) for a task with a deck, then the grade. trip's is the judge, given the Doc, in
+  `<data>/<exp>/judging/<random id>/`, so neither its folder nor its request names the arm;
   capex's and parks' are `grade.GRADERS` on `judge.PROFILE`, and no judge. `result.json` has the task, the files' URLs
   (`doc`, `deck`, `sheet`, `map`), the run's numbers and scores: trip's `correct`, `polish` and `looks`; capex's and
   parks' `score` (checks passed, checks made) and `checks` (each check's ok/BAD line); `passed` when every correct item
@@ -169,9 +170,14 @@ same logged-in Chrome, to compare them.
   `list_connected_browsers` with that profile's Chrome alone running). Two runs on two profiles' extensions run at once
   (checked). Claude Code also asks before acting on each new site, whatever the permission mode, which the bench's
   `allow.py` answers.
+- Claude in Chrome shows the model some URL parameters redacted (`mid=REDACTED`, `slide=REDACTED`), so a claudechrome
+  run can make parks' map and not link it (full1's did). A parks run whose final message links no map is graded on
+  the one map of the task's title in Drive, with the note "map not linked, found in Drive"; after `clean_start` that
+  map can only be the run's own. Docs, Sheets and Slides links hold their ids in the path, which Claude in Chrome
+  leaves alone.
 - Every run shares the account's Drive and Google Flights' recent searches. capex and parks title their files, which
   My Maps, Sheets and Slides' Insert > Chart list, and agents that found an earlier run's map there reported it as
-  their own; so `clean_start` moves every file of the task's title (`TITLES`) to the Trash first (`grade.trash`). A
+  their own; so `clean_start` moves every file of the task's title (`TITLES`) to the Trash first (`grade.titled`). A
   file a run titles otherwise stays, as does trip's Doc, which its prompt leaves untitled. A run that reports a file an
   earlier run made is not graded ("an earlier run's doc", "... deck", "... sheet" or "... map").
 - An experiment holds one task: a run's folder is `<arm>-r<n>` whatever the task, and one with a `result.json` is done,

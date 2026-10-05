@@ -54,7 +54,8 @@ TITLES = {"capex": "Tech capex", "parks": grade.MAP_NAME}  # what the prompt tit
 LINKS = {"doc": re.compile(r"https://docs\.google\.com/document/d/[\w-]+"),
          "deck": re.compile(r"https://docs\.google\.com/presentation/d/[\w-]+"),
          "sheet": re.compile(r"https://docs\.google\.com/spreadsheets/d/[\w-]+"),
-         "map": re.compile(r"https://(?:www|mymaps)\.google\.com/maps/d/\S*?mid=[\w-]+")}
+         "map": re.compile(r"https://(?:www|mymaps)\.google\.com/maps/d/\S*?mid=(?!REDACTED\b)[\w-]+")}
+MAP_LINK = "https://www.google.com/maps/d/edit?mid="  # the one form a map's link is kept in, so runs' links compare
 
 
 def prompt(task, arm):
@@ -133,7 +134,8 @@ def clean_start(state, browser, task):
         time.sleep(60)
     grade.forget_yelp(PROFILE)
     if task in TITLES:
-        print("trashed %d earlier files titled %s" % (grade.trash(PROFILE, TITLES[task]), TITLES[task]), flush=True)
+        trashed = grade.titled(PROFILE, TITLES[task], trash=True)
+        print("trashed %d earlier files titled %s" % (len(trashed), TITLES[task]), flush=True)
     fresh = opens.window(browser, "about:blank")
     clear_tabs(state, browser, keep=[fresh])
     return fresh
@@ -288,12 +290,22 @@ def run_one(out, task, arm, rep, stopped):
     final = measured.pop("final")
     # A map's link in one form, whatever page of it the message gives (edit, viewer, u/0), so an earlier run's map is
     # known again; a Doc's, deck's or Sheet's link is one form already.
-    links = {name: re.sub(r"^\S*?mid=", "https://www.google.com/maps/d/edit?mid=", found.group(0))
+    links = {name: re.sub(r"^\S*?mid=", MAP_LINK, found.group(0))
              for name, shape in LINKS.items() if (found := shape.search(final))}
+    note = None
+    # A map the final message does not link (Claude in Chrome redacts its mid: README) is the one of its title in Drive.
+    if task == "parks" and "map" not in links:
+        try:
+            maps = grade.titled(PROFILE, TITLES[task])
+        except (Exception, SystemExit):  # Drive unread: the run stays one that links no map
+            maps = []
+        if len(maps) == 1:
+            links["map"] = MAP_LINK + maps[0]
+            note = "map not linked, found in Drive"
     missing = [name for name in FILES[task] if name not in links]
     earlier = [json.loads(path.read_text()) for path in out.glob("*/result.json")]
     reused = [name for name in FILES[task] if name not in missing and links[name] in [r.get(name) for r in earlier]]
-    note, grades = None, {}
+    grades = {}
     if missing:
         note = "no %s URL in the final message" % " or ".join(missing)
     elif reused:

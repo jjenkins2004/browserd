@@ -49,7 +49,7 @@ FETCH = """(async () => {
 })()"""
 # Drive's web API as drive.google.com calls it: with a copy of its page's own public key, and the profile's cookies
 # authorized by a SAPISIDHASH (a SHA-1 of the time, the SAPISID cookie and the page's origin).
-TRASH = """(async (title) => {
+TITLED = """(async (title, trash) => {
   const key = 'AIzaSyD_InbmSFufIEps5UAt2NmB_3LvBH3Sz_8';
   const sapisid = document.cookie.split('; ').find(c => c.startsWith('SAPISID=')).slice(8);
   const time = Math.floor(Date.now() / 1000);
@@ -61,14 +61,14 @@ TRASH = """(async (title) => {
                                        {method, headers, credentials: 'include'});
   const query = "title = '" + title + "' and 'me' in owners and trashed = false";
   const found = await call('GET', 'files?fields=items(id)&q=' + encodeURIComponent(query));
-  if (!found.ok) return [found.status, 0];
+  if (!found.ok) return [found.status, []];
   const ids = (await found.json()).items.map(item => item.id);
-  for (const id of ids) {
+  for (const id of trash ? ids : []) {
     const trashed = await call('POST', 'files/' + id + '/trash?fields=id');
-    if (!trashed.ok) return [trashed.status, 0];
+    if (!trashed.ok) return [trashed.status, []];
   }
-  return [200, ids.length];
-})(%s)"""
+  return [200, ids];
+})(%s, %s)"""
 # Google Flights' own encoding of the search trip/prompt.md asks for (round trip LAX to SEA, 2026-11-13 to 2026-11-15,
 # 1 adult, economy, nonstop only), copied from its address bar; another city's search swaps its airport in for SEA.
 FLIGHTS_SEARCH = ("CBwQAhogEgoyMDI2LTExLTEzKABqBwgBEgNMQVhyBwgBEgNTRUEaIBIKMjAyNi0xMS0xNSgAagcIARIDU0VBcgcIARIDTEFYQAFIA"
@@ -156,18 +156,18 @@ def fetch(profile, url):
     return base64.b64decode(data)
 
 
-def trash(profile, title):
-    """Move every file of the profile's own Drive titled title to the Trash, through Drive's web API from a background
-    tab on drive.google.com; returns how many."""
+def titled(profile, title, trash=False):
+    """The ids of the files titled title in the profile's own Drive, not in the Trash, found through Drive's web API
+    from a background tab on drive.google.com; with trash, each is moved to the Trash."""
     with background_tab(profile, "https://drive.google.com/robots.txt", "drive.google.com") as (browser, session):
-        reply = browser.call("Runtime.evaluate", session=session, expression=TRASH % json.dumps(title),
-                             awaitPromise=True, returnByValue=True, wait=90)
+        reply = browser.call("Runtime.evaluate", session=session, awaitPromise=True, returnByValue=True, wait=90,
+                             expression=TITLED % (json.dumps(title), json.dumps(trash)))
     if "exceptionDetails" in reply:
-        raise SystemExit("trashing %s failed: %s" % (title, reply["exceptionDetails"].get("text")))
-    status, count = reply["result"]["value"]
+        raise SystemExit("finding the files titled %s failed: %s" % (title, reply["exceptionDetails"].get("text")))
+    status, ids = reply["result"]["value"]
     if status != 200:
-        raise SystemExit("trashing %s: HTTP %d" % (title, status))
-    return count
+        raise SystemExit("finding the files titled %s: HTTP %d" % (title, status))
+    return ids
 
 
 def flights_url(airport):
