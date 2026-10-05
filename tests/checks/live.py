@@ -375,9 +375,12 @@ def confirm_live(served, open_tab):
 
 # A button that opens a menu 300ms after its click, as an editor's menus do: two items and a field, each named as
 # Slides names its own; and a toolbar button named "Table", which fits the click's name better than the first item
-# does, as Slides' Text box button does.
+# does, as Slides' Text box button does. Beside them, a disabled button, as Slides' Import is before a chart is ticked,
+# and a title box whose value, not its name, is the title it shows, as the Google editors' is.
 MENU = """<title>names scratch</title><button onclick="setTimeout(show, 300)">Open menu</button><p id=out></p>
 <div role=toolbar><button onclick="out.textContent = 'clicked the toolbar'">Table</button></div>
+<button disabled>Import</button>
+<input aria-label=Rename value="Untitled presentation">
 <script>function show() {
   const menu = document.createElement('div'); menu.setAttribute('role', 'menu');
   for (const name of ['Table b >', 'Image i >']) {
@@ -390,17 +393,33 @@ MENU = """<title>names scratch</title><button onclick="setTimeout(show, 300)">Op
 
 
 def names_live(served, open_tab):
-    """Steps given name, not uid, in one queue: a click that opens a menu, then a fill of its field and a click on its
+    """Steps given name, not uid: in one queue, a click that opens a menu, then a fill of its field and a click on its
     item, each found in a snapshot taken as the step runs; the click lands on the menu's item though a toolbar button's
-    name is exactly the click's name."""
+    name is exactly the click's name. Then a fill of a text box named by its value, and a click by name on a disabled
+    button, which fails once the page is still rather than after chrome-devtools-mcp's 5s wait."""
     queue, tab = served.queue, open_tab(MENU)
     text, is_error = queue(tab, {"tool": "click", "name": "Open menu"}, {"tool": "fill", "name": "Width", "value": "9"},
                            {"tool": "click", "name": "Table"},
-                           {"tool": "evaluate_script", "function": "() => out.textContent + ' ' + document.querySelector('input').value"})
+                           {"tool": "evaluate_script",
+                            "function": "() => out.textContent + ' ' "
+                                        "+ document.querySelector('[role=menu] input').value"})
     check("a click by name, then a fill and a click by name on what it opened, run in one queue, the click on the "
           "open menu's item rather than the toolbar's button",
           not is_error and re.search(r'^name "Table" is uid=\S+ menuitem "Table b >"$', text, re.M)
           and returned(text.split("--- 4")[-1]) == "clicked Table b > 9", text)
+    text, is_error = queue(tab, {"tool": "fill", "name": "Untitled presentation", "value": "Capex deck"},
+                           {"tool": "evaluate_script",
+                            "function": "() => document.querySelector('[aria-label=Rename]').value"})
+    check("a fill by name finds a text box whose value, not its name, the name is, and fills it",
+          not is_error and re.search(r'^name "Untitled presentation" fits the value of uid=\S+ textbox "Rename" '
+                                     r'value="Untitled presentation"$', text, re.M)
+          and returned(text.split("--- 2")[-1]) == "Capex deck", text)
+    text, is_error = queue(tab, {"tool": "click", "name": "Import"}, {"tool": "take_snapshot"})
+    took = re.search(r"^--- 1 click FAILED ([\d.]+)s$", text, re.M)
+    check("a click by name on a disabled button fails, saying it is disabled, well before NAME_WAIT",
+          is_error and took is not None and float(took.group(1)) < steps.NAME_WAIT - 1
+          and re.search(r'^name "Import" is uid=\S+ button "Import", which is disabled', text, re.M)
+          and "not run: 2 take_snapshot" in text, text)
 
 
 # A row of boxes, as a sheet's cells, that Tab moves between.

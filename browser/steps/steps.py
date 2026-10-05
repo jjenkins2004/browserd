@@ -39,7 +39,13 @@ WORD_RUN_LEAST = 3  # one-word lines a run needs before a view joins it; two nei
 # Seconds a step given name, not uid, waits for a control that name fits well to show (_named): the step before it
 # may have just opened the menu or dialog it is in.
 NAME_WAIT = 5.0
+# Seconds the page must stay unchanged before that wait ends early: a dialog a server's answer opens, or a button a
+# page enables after a debounce, shows after a pause with nothing changing before it.
+NAME_STILL = 1.0
 NAMES_SHOWN = 8  # elements a name's failure lists
+POPUP_CONTROLS = 4  # controls of each open popup a name's failure lists
+# Whose value a step's name may fit, when no control's name does: agents name what they see, and a box shows its value.
+TEXT_BOXES = {"textbox", "searchbox", "combobox"}
 # chrome-devtools-mcp's reply sections: a dialog a step left open, its refusal when one was open before the step,
 # and the list of every page in Chrome, which names other tabs and is no use inside one tab's queue.
 OPEN_DIALOG = "# Open dialog"
@@ -770,7 +776,7 @@ def _step(devtools, page_id, step, left, answerer, target, connect, read=None):
     if "name" in step:
         began = time.monotonic()
         try:
-            said, uid = _named(devtools, page_id, step["name"], min(NAME_WAIT, left))
+            said, uid = _named(devtools, page_id, step["name"], min(NAME_WAIT, left), step["tool"] != "hover")
         except cdp.CdpError as exc:
             return [{"type": "text", "text": str(exc)}], True
         if uid is None:
@@ -838,51 +844,97 @@ def _tabbed(devtools, page_id, step, left):
     return [{"type": "text", "text": "\n".join(said)}], True
 
 
-def _named(devtools, page_id, name, wait):
+def _named(devtools, page_id, name, wait, enabled):
     """(its line, uid) for the control (CONTROLS) whose name fits a step's name best, as hit.fit ranks them: the one
-    whose name is those words, or else begins with them, or else carries them further in. Only the controls inside an
-    open popup (POPUPS) are ranked when any of them fits, since the step before most likely opened it; the page's
-    otherwise. Snapshots are taken until the controls ranked hold one whose name is or begins with them, or wait
-    seconds pass, so a control already on the page that carries them further in does not win over the one the step
-    before is still opening. Of controls that fit equally well, a combobox gives way to a text box inside it, as Slides'
-    combobox "Font size" does to its textbox "Font size". (why not, None) when none fits, or several still fit equally
-    well, so a step never acts on a guess."""
-    took, fits, controls = 0.0, [], []
+    whose name is those words, or else begins with them, or else carries them further in. When no control's name fits,
+    a text box (TEXT_BOXES) whose value is or begins with them will do; not one whose value carries them further in, as
+    an editor's long value can. Only the controls inside an open popup (POPUPS) are ranked when any of them fits, since
+    the step before most likely opened it; the page's otherwise. Of controls that fit equally well, a combobox gives way
+    to a textbox or searchbox inside it, as Slides' combobox "Font size" does to its textbox "Font size".
+
+    Snapshots are taken until the best fit, the controls ranked first, is usable and its name is or begins with them, or
+    wait seconds pass, so a control already on the page that carries them further in does not win over the one the step
+    before is still opening; or until the page has stayed unchanged NAME_STILL seconds while the best fit is not usable,
+    since a page that has stopped changing is unlikely to show or enable one. Usable means a control whose name fits,
+    not its value, and an enabled one when enabled says the step needs that, as every step but a hover does:
+    chrome-devtools-mcp's click and fill wait 5s for a control to be enabled, then fail, while a hover may be for a
+    disabled control's tooltip.
+
+    (why not, None) when none fits, when several still fit equally well, so a step never acts on a guess, or when the
+    one that fits is not usable; the first two name the popups open over the page (_popups_note), unless the controls
+    ranked are in one."""
+    took, snapshot, last, changed, least, fits, controls, by_value = 0.0, "", None, 0.0, None, [], [], False
     for took, snapshot in checked.snapshots(devtools, page_id, wait):
-        fits = []
+        fits, values = [], []
         for node, said, popup in _names(snapshot):
             rank = hit.fit(said, name)
             if rank is not None:
                 fits.append((rank, node, said, popup))
+            value = _attribute(node, "value") if node["role"] in TEXT_BOXES else None
+            rank = hit.fit(value, name) if value else None
+            if rank is not None and rank < 2:
+                values.append((rank, node, said, popup))
         controls = [(rank, node, said, popup) for rank, node, said, popup in fits if node["role"] in CONTROLS]
+        by_value = not controls
+        controls = controls or values
         controls = [(rank, node, said, popup) for rank, node, said, popup in controls if popup] or controls
-        if any(rank < 2 for rank, _, _, _ in controls):
+        least = min((rank for rank, _, _, _ in controls), default=None)
+        usable = any(rank == least and not by_value and not (enabled and _attribute(node, "disabled") is not None)
+                     for rank, node, _, _ in controls)
+        if snapshot != last:
+            last, changed = snapshot, took
+        if (usable and least is not None and least < 2) or (not usable and took - changed >= NAME_STILL):
             break
     if not controls:
         others = "; lines that carry them but are not controls: %s" % ", ".join(
             _named_line(node, said) for _, node, said, _ in fits[:NAMES_SHOWN]) if fits else ""
         return ('no control\'s name carries the words of name "%s", after %.1fs%s. Give a uid, or take_snapshot to see '
-                "the names" % (name, took, others)), None
-    least = min(rank for rank, _, _, _ in controls)
+                "the names" % (name, took, others)) + _popups_note(snapshot), None
+    key = "value" if by_value else None
     best = [(node, said) for rank, node, said, _ in controls if rank == least]
     boxes = {node["uid"] for node, _ in best if node["role"] in ("textbox", "searchbox")}
     best = [(node, said) for node, said in best
             if not (node["role"] == "combobox" and any(below["uid"] in boxes for below in _below(node)))]
     if best[1:]:
-        return ('%d controls fit name "%s" equally well: %s. Give its uid, or more of its name\'s words'
-                % (len(best), name, ", ".join(_named_line(node, said) for node, said in best[:NAMES_SHOWN]))), None
+        # A tie inside a popup needs no note on it: the step already means one of its controls.
+        note = "" if any(popup for _, _, _, popup in controls) else _popups_note(snapshot)
+        return ('%d controls fit name "%s" equally well: %s. Give its uid, or more of its %s\'s words'
+                % (len(best), name, ", ".join(_named_line(node, said, key) for node, said in best[:NAMES_SHOWN]),
+                   "value" if by_value else "name")) + note, None
     node, said = best[0]
-    return 'name "%s" is %s' % (name, _named_line(node, said)), node["uid"]
+    found = 'name "%s" %s %s' % (name, "fits the value of" if by_value else "is", _named_line(node, said, key))
+    if enabled and _attribute(node, "disabled") is not None:
+        return found + ", which is disabled: do first what enables it", None
+    return found, node["uid"]
+
+
+def _popups_note(snapshot):
+    """A failed name's note on each popup open over the page (_names), so the agent learns what may be in its way: the
+    popup's line with its description (an alert's message), and up to POPUP_CONTROLS of its named controls."""
+    held = {}
+    for node, said, popup in _names(snapshot):
+        if popup is not None:
+            controls = held.setdefault(popup["uid"], (popup, []))[1]
+            if node["role"] in CONTROLS and said:
+                controls.append(_named_line(node, said))
+    if not held:
+        return ""
+    return ". Open over the page: %s" % "; ".join(
+        _named_line(popup, _name(popup), "description") + (", holding " + ", ".join(controls[:POPUP_CONTROLS])
+                                                          if controls else "")
+        for popup, controls in held.values())
 
 
 def _names(text):
-    """(node, its name, whether it sits inside an open popup) for each element a snapshot in a tool's reply names.
+    """(node, its name or "", the open popup it sits inside or None) for each element a snapshot in a tool's reply
+    holds.
 
-    A POPUPS element counts as an open popup only when it was first seen in a later snapshot than the oldest element
-    directly under the page's root: one there since then, like the Guardian's navigation menus or Excalidraw's color
-    pickers, is part of the page. Not the root's own number: chrome-devtools-mcp keeps an element's uid only while
-    every snapshot sees it, so the page a modal dialog hid comes back under a new number, its menus with it, while the
-    root keeps its own."""
+    A POPUPS element counts as an open popup when it is marked modal, or when it was first seen in a later snapshot
+    than the oldest element directly under the page's root: one there since then, like the Guardian's navigation menus
+    or Excalidraw's color pickers, is part of the page. Not the root's own number: chrome-devtools-mcp keeps an
+    element's uid only while every snapshot sees it, so the page a modal dialog hid comes back under a new number, its
+    menus with it, while the root keeps its own. A modal one counts however old: a native modal dialog hides the whole
+    page, leaving itself the oldest element under the root."""
     lines = text.split("\n")
     span = _snapshot_span(lines)
     if span is None:
@@ -890,16 +942,28 @@ def _names(text):
     start, end = span
     for top in _tree(lines[start:end])[0]:
         page_seen = min((_first_seen(child) for child in top["children"]), default=_first_seen(top))
-        yield from _named_nodes([top], page_seen, False)
+        yield from _named_nodes([top], page_seen, None)
 
 
 def _named_nodes(nodes, page_seen, popup):
     for node in nodes:
-        name = NAME.match(node["rest"])
-        if name and name.group(1).strip():
-            yield node, name.group(1), popup
-        opened = node["role"] in POPUPS and _first_seen(node) > page_seen
-        yield from _named_nodes(node["children"], page_seen, popup or opened)
+        yield node, _name(node), popup
+        opened = node["role"] in POPUPS and (_first_seen(node) > page_seen or _attribute(node, "modal") is not None)
+        yield from _named_nodes(node["children"], page_seen, popup or (node if opened else None))
+
+
+def _name(node):
+    """An element's name, or "" when it has none but spaces and line breaks."""
+    name = NAME.match(node["rest"])
+    return name.group(1) if name and name.group(1).strip() else ""
+
+
+def _attribute(node, key):
+    """An attribute's value on an element's snapshot line, "" for one with none (disabled, modal), or None when the
+    line lacks it."""
+    name = NAME.match(node["rest"])
+    rest = node["rest"][name.end():] if name else node["rest"]
+    return next((found.group(2) or "" for found in ATTRIBUTE.finditer(rest) if found.group(1) == key), None)
 
 
 def _first_seen(node):
@@ -909,10 +973,18 @@ def _first_seen(node):
     return int(found.group(1)) if found else 0
 
 
-def _named_line(node, said):
-    """An element as a view line names it, its name cut to hit.SHOWN characters."""
-    shown = said if len(said) <= hit.SHOWN else said[:hit.SHOWN - 1].rstrip() + "…"
-    return 'uid=%s %s "%s"' % (node["uid"], node["role"], shown)
+def _named_line(node, said, key=None):
+    """An element as a view line names it, with the attribute key names when its line carries it; its name and that
+    attribute's value cut to hit.SHOWN characters."""
+    parts = ["uid=%s %s" % (node["uid"], node["role"])] + (['"%s"' % _shown(said)] if said else [])
+    value = _attribute(node, key) if key else None
+    if value:
+        parts.append('%s="%s"' % (key, _shown(value)))
+    return " ".join(parts)
+
+
+def _shown(text):
+    return text if len(text) <= hit.SHOWN else text[:hit.SHOWN - 1].rstrip() + "…"
 
 
 class _Fills:

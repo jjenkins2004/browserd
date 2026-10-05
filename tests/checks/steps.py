@@ -1562,9 +1562,11 @@ def names_offline():
                       "--- 1 click FAILED" in report and '2 controls fit name "Month" equally '
                       'well: uid=%s ' % listed[0] in report and ', uid=%s ' % listed[1] in report, report)
             fake, report = run([{"tool": "click", "name": "Copy"}], [DIALOG])
-            check("and neither are two in an open dialog, though a page control's name is the name",
+            check("and neither are two in an open dialog, though a page control's name is the name; the failure, "
+                  "already about the dialog, does not name it again",
                   "--- 1 click FAILED" in report and '2 controls fit name "Copy" equally well: uid=3_2 button "Copy link", '
-                                                    'uid=3_3 button "Copy image"' in report, report)
+                                                    'uid=3_3 button "Copy image"' in report
+                  and "Open over the page" not in report, report)
             fake, report = run([{"tool": "click", "name": "Copy"}], [
                 'uid=1_0 RootWebArea "Deck"\n  uid=1_1 button "Copy"\n  uid=1_2 dialog "Share"\n    uid=1_3 button "Copy link"'])
             check("but a dialog there since the page's first snapshot, its uid of the root's, is part of the page: a page "
@@ -1590,10 +1592,90 @@ def names_offline():
                   "them is still opening", ("click", {"uid": "2_3", "pageId": 7}) in fake.calls, repr(fake.calls))
             began = clock.now
             fake, report = run([{"tool": "click", "name": "Tables"}], [MENU])
-            check("a name only a line that is no control carries fails once NAME_WAIT passes, naming that line",
+            check("a name only a line that is no control carries fails once the page has stayed unchanged NAME_STILL, "
+                  "well before NAME_WAIT, naming that line",
                   "--- 1 click FAILED" in report and 'no control\'s name carries the words of name "Tables"' in report
                   and 'not controls: uid=2_8 heading "Tables"' in report
-                  and steps.NAME_WAIT <= clock.now - began < steps.NAME_WAIT + 1, report)
+                  and steps.NAME_STILL <= clock.now - began < steps.NAME_STILL + 1, report)
+            check("and its failure names the menu open over the page, with its controls",
+                  'to see the names. Open over the page: uid=2_0 menu, holding uid=2_1 menuitem "Table b ►", '
+                  'uid=2_3 menuitem "Image i ►", uid=2_4 menuitem "Format options"\n' in report, report)
+            began = clock.now
+            ticking = ['uid=1_0 RootWebArea "Deck"\n  uid=1_1 StaticText "12:00:%02d"' % second for second in range(60)]
+            fake, report = run([{"tool": "click", "name": "Tables"}], ticking)
+            check("while on a page that keeps changing, as a clock does, it waits NAME_WAIT out",
+                  "--- 1 click FAILED" in report and steps.NAME_WAIT <= clock.now - began < steps.NAME_WAIT + 1, report)
+            # Sheets' own, from a real run: its dialog hid the page but a live region.
+            problem = ('uid=2_0 RootWebArea "Capex - Google Sheets"\n  uid=2_77 generic atomic live="assertive"\n'
+                       '    uid=2_78 StaticText "To enable screen reader support, press Ctrl+Alt+Z"\n'
+                       '  uid=18_0 alertdialog "There was a problem" description="The name given to this range is '
+                       'invalid." focusable focused\n    uid=18_1 heading "There was a problem" level="2"\n'
+                       '    uid=18_2 button "Close"\n'
+                       '    uid=18_3 StaticText "The name given to this range is invalid."\n    uid=18_4 button "OK"')
+            fake, report = run([{"tool": "click", "name": "Insert chart"}], [problem])
+            check("a name that fits nothing while a dialog is open fails naming the dialog, its message and controls",
+                  "--- 1 click FAILED" in report and '. Open over the page: uid=18_0 alertdialog "There was a problem" '
+                  'description="The name given to this range is invalid.", holding uid=18_2 button "Close", uid=18_4 '
+                  'button "OK"\n' in report, report)
+            fake, report = run([{"tool": "click", "name": "Insert chart"}], [
+                'uid=1_0 RootWebArea "Deck"\n  uid=1_1 dialog modal\n    uid=1_2 StaticText "Saved"\n'
+                '    uid=1_3 button "Close" focusable focused'])
+            check("and so does a native modal dialog, which hides the whole page, so it is the oldest element left",
+                  '. Open over the page: uid=1_1 dialog, holding uid=1_3 button "Close"\n' in report, report)
+            began = clock.now
+            imports = 'uid=1_0 RootWebArea "Deck"\n  uid=1_1 button "Import" disableable%s\n  uid=1_2 button "Cancel"'
+            fake, report = run([{"tool": "click", "name": "Import"}], [imports % " disabled"])
+            check("a name that fits a disabled control fails once the page is still, saying so, and never clicks it",
+                  "--- 1 click FAILED" in report and not [call for call in fake.calls if call[0] == "click"]
+                  and 'name "Import" is uid=1_1 button "Import", which is disabled: do first what enables it' in report
+                  and steps.NAME_STILL <= clock.now - began < steps.NAME_STILL + 1, report)
+            fake, report = run([{"tool": "click", "name": "Import"}], [imports % " disabled", imports % ""])
+            check("but one the page enables while it changes is clicked",
+                  ("click", {"uid": "1_1", "pageId": 7}) in fake.calls and "--- 1 click ok" in report, report)
+            saves = 'uid=1_0 RootWebArea "Form"\n  uid=1_1 button "Save" disableable%s\n  uid=1_2 link "Save as copy"'
+            fake, report = run([{"tool": "click", "name": "Save"}], [saves % " disabled", saves % ""])
+            check("as is a disabled best fit beside an enabled weaker one, which does not end the wait",
+                  [call for call in fake.calls if call[0] == "click"] == [("click", {"uid": "1_1", "pageId": 7})],
+                  report)
+            began = clock.now
+            fake, report = run([{"tool": "click", "name": "Import"}],
+                               [(imports % " disabled") + '\n  uid=1_3 link "Help on Import"'])
+            check("and on a still page a disabled best fit fails once NAME_STILL passes, though a weaker fit is "
+                  "enabled",
+                  "which is disabled" in report and not [call for call in fake.calls if call[0] == "click"]
+                  and clock.now - began < steps.NAME_STILL + 1, report)
+            base = 'uid=1_0 RootWebArea "Deck"\n  uid=1_1 button "Insert"'
+            fake, report = run([{"tool": "click", "name": "Upload"}],
+                               [base, base, base + '\n  uid=2_0 dialog "Insert image"\n    uid=2_1 button "Upload"'])
+            check("a dialog that opens after a pause shorter than NAME_STILL, the page unchanged till then, is waited "
+                  "for",
+                  ("click", {"uid": "2_1", "pageId": 7}) in fake.calls, report)
+            fake, report = run([{"tool": "hover", "name": "Import"}], [imports % " disabled"])
+            check("and a hover, which may be for a disabled control's tooltip, goes to the disabled one",
+                  ("hover", {"uid": "1_1", "pageId": 7}) in fake.calls and "--- 1 hover ok" in report, report)
+            title = 'uid=1_0 RootWebArea "Deck"\n  uid=1_1 textbox "Rename" value="Untitled presentation"'
+            fake, report = run([{"tool": "click", "name": "Untitled presentation"}], [title])
+            check("a name no control's name carries fits a text box whose value it is, and the line says so",
+                  ("click", {"uid": "1_1", "pageId": 7}) in fake.calls
+                  and 'name "Untitled presentation" fits the value of uid=1_1 textbox "Rename" '
+                      'value="Untitled presentation"\nSuccessfully clicked' in report, report)
+            fake, report = run([{"tool": "click", "name": "Untitled presentation"}],
+                               [title + '\n  uid=1_2 link "Untitled presentation - Google Slides"'])
+            check("though a control whose name only begins with it wins over a value that is it",
+                  ("click", {"uid": "1_2", "pageId": 7}) in fake.calls, repr(fake.calls))
+            fake, report = run([{"tool": "click", "name": "presentation"}], [title])
+            check("and a value that carries a name only further in, as an editor's long value does, is no fit",
+                  "--- 1 click FAILED" in report and 'no control\'s name carries' in report, report)
+            fake, report = run([{"tool": "click", "name": "Untitled"}],
+                               [title + '\n  uid=1_2 searchbox "Find" value="Untitled"'])
+            check("value fits are ranked as names are, the one that is the name's words first",
+                  ("click", {"uid": "1_2", "pageId": 7}) in fake.calls, repr(fake.calls))
+            fake, report = run([{"tool": "click", "name": "Untitled"}],
+                               [title + '\n  uid=1_2 searchbox "Find" value="Untitled presentation"'])
+            check("and two that fit equally well fail as a tie, listing their values",
+                  "--- 1 click FAILED" in report and '2 controls fit name "Untitled" equally well: uid=1_1 textbox '
+                  '"Rename" value="Untitled presentation", uid=1_2 searchbox "Find" value="Untitled presentation". '
+                  "Give its uid, or more of its value's words" in report, report)
             fake, report = run([{"tool": "fill", "uid": "1_9", "value": "a"}, {"tool": "fill", "name": "Width", "value": "9"},
                                 {"tool": "fill", "uid": "1_8", "value": "b"}], [MENU], answers=3)
             check("a fill by name joins no run of fills: it reads its own element once its uid is found, and fills that uid",
