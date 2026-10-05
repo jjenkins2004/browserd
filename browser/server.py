@@ -1,7 +1,7 @@
 """The browser MCP server: serves the tools, from tools.py, and the browserd page; each profile's Chrome starts on its
 first use and quits when the server stops.
 
-Run in the background by cli/service.py (browserd start). README.md covers the lifecycle and the tools.
+Run in the background by cli/service.py (browserd start). README.md covers the lifecycle.
 """
 
 import os

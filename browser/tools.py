@@ -1,5 +1,5 @@
 """The tools agents call: session_start, the tab tools, the queue, profile_new and profile_delete. server.py serves
-them; README.md, "Core Abstractions & Shared Pieces", has the contract.
+them; README.md, "Core Abstractions & Shared Pieces", has the path a call takes.
 """
 
 import os
@@ -54,8 +54,8 @@ def _closed(state, tab):
 
 
 def _in_session(state, run):
-    """A tool body run(session, arguments) for the open session its session argument names; README.md, "Core
-    Abstractions & Shared Pieces", has the rest."""
+    """A tool body run(session, arguments) for the open session its session argument names. It moves the session's
+    last call to now as the call starts and as it ends, so a session at work never counts as paused."""
     def wrapped(arguments):
         given = arguments.get("session")
         if not isinstance(given, str) or not given:
@@ -150,6 +150,8 @@ def tab_tools(state, tabs, workers, queue=None):
         return "\n".join(lines)
 
     def tab_close(session, arguments):
+        # A list, closed in one call: one call per tab was 21 to 27% of agents' calls in two benchmark runs
+        # (../experiments/findings/benchmark.md, "What was fixed").
         wanted = arguments.get("tabs")
         if not isinstance(wanted, list) or not wanted or not all(isinstance(tab, str) and tab for tab in wanted):
             raise mcp.ToolError("tabs must be a list of one or more tab ids, like [\"k3f9\", \"m2x7\"]")
@@ -194,6 +196,8 @@ def tab_tools(state, tabs, workers, queue=None):
 
     session_argument = {"type": "string", "description": "your session id, from session_start"}
     opening = {"session": session_argument, "url": {"type": "string"}}
+    # Agents read a new tab right after opening it: 7 of 11 calls of a step's name as a tool came right after a tab_open
+    # (../experiments/findings/benchmark.md, "What was fixed").
     if queue is not None:
         opening["steps"] = {"type": "array", "items": {"type": "object"},
                             "description": "steps to run on the new tab as tab_open returns it, loaded or still "
@@ -385,7 +389,7 @@ def _recorded(call, run):
 
 def queue_steps(state, tabs, workers, allowed, calls=CALLS):
     """The queue's body, queue(session, arguments, began=None): run a list of steps on a session's tab through that
-    tab's own process, and record the call in the tab's record folder; began is steps.run's.
+    tab's own process, and record the call in the tab's record folder; began is passed to steps.run.
 
     Args:
         state (State): the sessions and tabs.
@@ -421,6 +425,7 @@ def queue_steps(state, tabs, workers, allowed, calls=CALLS):
             except steps.StepError as exc:
                 raise mcp.ToolError(str(exc))
             planned = steps.place_screenshots(planned, call.path)
+            # Once checked, what was asked is rewritten as the steps it runs, screenshots' filePaths placed.
             call.asked({"session": session.id, "tab": tab, "steps": planned})
             worker = _worker(state, tabs, workers, session, tab)
             with worker.lock:

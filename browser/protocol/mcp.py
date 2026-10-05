@@ -4,7 +4,7 @@ Only the slice Claude Code uses is here: initialize, ping, tools/list, tools/cal
 notifications. There is no standing event stream (GET answers 405); the one exception to plain JSON
 is the first answer to a session id this process did not give, an event stream that also says the
 tool list changed.
-README.md, "Agent Gotchas", says why, and why a request carrying an Origin header is refused.
+README.md, "Agent Gotchas & Invariants", says why, and why a request carrying an Origin header is refused.
 """
 
 import json
@@ -66,7 +66,8 @@ class Server(Exclusive):
         Args:
             host (str): address to bind; only 127.0.0.1 is meant.
             port (int): port to bind; 0 picks a free one.
-            tools (list[dict]): each has name, description, inputSchema, and run(arguments) -> str | list | dict.
+            tools (list[dict]): each has name, description, inputSchema, and run(arguments) -> str | list | dict, which
+                may raise ToolError.
             name (str): serverInfo name, which browserd start reads to tell this server from another program.
             version (str): serverInfo version.
         """

@@ -35,8 +35,8 @@ class Install:
 
 
 def find(root):
-    """The install root, browserd's code folder, is part of; SystemExit for a git checkout or a folder no installer
-    makes."""
+    """The Install that root (browserd's code folder) belongs to; SystemExit for a git checkout or a folder no
+    installer makes."""
     if os.path.exists(os.path.join(root, ".git")):  # as paths finds a checkout: a folder in a clone, a file in a worktree
         raise SystemExit("this browserd is a git checkout, not an install: run browserd stop, then delete %s yourself"
                          % root)

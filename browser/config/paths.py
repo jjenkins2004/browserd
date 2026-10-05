@@ -1,6 +1,6 @@
 """Where browserd's code is, and where it keeps its records: the state, the log, the pid file and the record folders.
 
-A git checkout keeps its records in .run beside the code, as it always has. An installed copy (Homebrew, install.sh or
+A git checkout keeps its records in .run beside the code. An installed copy (Homebrew, install.sh or
 install.ps1) keeps them in the user's own folder, system.DATA, since a new version replaces the code's folder and
 Homebrew's is not the user's to write in. BROWSERD_HOME, when set, names the folder over either.
 """

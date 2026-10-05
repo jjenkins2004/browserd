@@ -1,6 +1,6 @@
 """One browser tool call's record: its numbered files in the folder the caller names.
 
-README.md, "Core Abstractions & Shared Pieces", says which folder the queue records into.
+tools.queue_steps says which folder the queue records into.
 """
 
 import json

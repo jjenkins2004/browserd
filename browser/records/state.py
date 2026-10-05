@@ -1,7 +1,5 @@
-"""browserd's own records, in one SQLite file, .run/state.db: the profiles, the sessions, their tabs and which tabs
-need the user's input.
-
-README.md, "Core Abstractions & Shared Pieces", has the contract.
+"""browserd's own records, in one SQLite file, state.db in the records folder: the profiles, the sessions, their tabs
+and which tabs need the user's input.
 """
 
 import sqlite3

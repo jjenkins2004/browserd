@@ -2,46 +2,31 @@
 
 ## Module TL;DR
 
-The browser MCP server: it starts and owns one Chrome per profile and serves tools to Claude Code agents
-over HTTP on `127.0.0.1:9230` (`ports.MCP`), so pages are read and driven with that profile's logins. An agent first calls `session_start {profile, label}`, and passes the session id it
-gets to every other tool but `profile_new` and `profile_delete`, which make and delete a profile. `tab_open`, `tab_list` and `tab_close` manage the session's own tabs by
-short tab ids, and `tab_needs_input` marks one as needing the user's input, for the page to show, until its agent clears the mark
-or the tab closes; `queue` runs a list of steps on one tab through that tab's own chrome-devtools-mcp process, and
-records every call in that tab's record folder, `calls/<profile>/<session>-<label>/<tab>/` in the records folder
-(`paths.RUN`: `../.run/` in a checkout, the user's own folder in an installed copy). The
-browserd page (the dashboard, in what the command prints), at `http://127.0.0.1:9231/` (`ports.PAGE`), lists the profiles kept in the records folder's `state.db` as a strip of
-profile tabs and shows one profile's sessions and tabs at a time; it makes and deletes profiles, opens and quits a profile's Chrome,
-shows and closes tabs, and closes sessions.
-Python standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`;
-run `npm ci`).
-
-    browserd setup      choose the two ports, and print the line that connects an agent
-    browserd start      start the server in the background; no Chrome starts with it
-    browserd stop       stop the server, which quits every profile's Chrome and closes every session
-    browserd restart    restart the server alone, leaving every Chrome and session as it is
-    browserd uninstall  stop the server and remove an installed browserd; its records and Chrome folders stay
+The browser MCP server: it starts and owns one Chrome per profile and serves tools to agents over HTTP on `ports.MCP`
+(9230 unless `browserd setup` chose another), so pages are read and driven with that profile's logins. An agent calls
+`session_start {profile, label}` first and passes the session id it gets to every other tool but `profile_new` and
+`profile_delete`. `tab_open`, `tab_list`, `tab_close` and `tab_needs_input` work on the session's own tabs by short tab
+ids; `queue` runs a list of steps on one tab, and records each call in that tab's record folder,
+`calls/<profile>/<session>-<label>/<tab>/` in the records folder. The browserd page (the dashboard the command
+prints), on `ports.PAGE` (9231), shows every profile's sessions and tabs, and makes and deletes profiles. Python's
+standard library, plus Node for chrome-devtools-mcp (pinned in `../package.json`; `npm ci`).
 
 ## Directory Layout
 
-A folder per domain. A package imports only those above it in this list; tools.py and server.py import any of them,
-server.py tools.py, and cli/ server.py too, which it starts and stops. Each folder's `__init__.py` is empty. A bare
+A folder per domain; each folder, and tools.py and server.py, imports only those above it in this list. A bare
 "README.md" in a module's docstring means the nearest one up the tree.
 
     browser/
-      server.py      the server process (`python -m browser.server`, how browserd finds it running): serves the tools
-                     and the page, keeps the pid file
-      tools.py       the tools agents call: session_start, the tab tools, the queue, profile_new and profile_delete
       system/        what differs by OS, behind one set of names; its own README
-      config/
-        paths.py     ROOT, this project's folder; RUN, the records folder; the version, from ../VERSION
-        ports.py     the MCP port and the page's: 9230 and 9231, or ports.json's
-      protocol/      wire protocols, knowing nothing of browserd
-        ws.py        RFC 6455 cut down to one local, trusted, text-only connection
-        mcp.py       MCP over HTTP: JSON-RPC per POST, tool dispatch; mcp.log, the server's log
+      config/        paths.py: ROOT, RUN (the records folder), the version; ports.py: the two ports
+      protocol/
+        ws.py        a websocket client for one local, trusted, text-only connection
+        mcp.py       MCP over HTTP: one JSON-RPC message per POST, tool dispatch; log, which writes one line of the
+                     server's log
       chrome/        each profile's Chrome; its own README
-      records/       what browserd keeps in the records folder
-        state.py     .run/state.db: the profiles, sessions, tabs and their `needs_input` marks
-        record.py    one queue call's numbered files in a folder
+      records/
+        state.py     state.db: the profiles, the sessions, the tabs and their needs_input marks
+        record.py    one queue call's numbered files in its record folder
       tabs/          sessions, tab ids, and each tab's chrome-devtools-mcp; its own README
       steps/         the queue tool's steps
         steps.py     the queue: load, check, run, report; snapshot views
@@ -50,126 +35,83 @@ server.py tools.py, and cli/ server.py too, which it starts and stops. Each fold
         hit.py       what a press lands on, off the accessibility tree or the page's DOM, and whether it carries the press's on
         screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image; keeps a queue's tab drawn
         dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
-      dashboard/     the browserd page
-        page.py      the browserd page on ports.PAGE: GET /state, and a POST per button
-        ui/          the page itself: one file per part, and each part's states; its own README
-      cli/           the browserd command (`python -m browser.cli.service`)
-        service.py   browserd start, stop, restart: background start, locked; stop and restart by pid; status, version, setup, uninstall
-        colors.py    the command's colors, for a terminal only
-        installs.py  what each installer put where, for browserd uninstall
-    ../browserd, ../browserd.cmd  the command, on macOS and Windows
-    ../.run/                    gitignored, a checkout's records folder: server.pid, server.log, start.lock, state.db, ports.json, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
-    ../package.json             chrome-devtools-mcp, pinned; node_modules/ is gitignored
+      dashboard/
+        page.py      the browserd page's server: GET /, GET /state, a POST per action
+        ui/          the browserd page itself; its own README
+      tools.py       the tools agents call, their descriptions, and the queue's body
+      server.py      the server process (`python -m browser.server`): serves the tools and the browserd page
+      cli/
+        service.py   the browserd command: start, stop, restart, status, version, setup, uninstall
+        installs.py  what each installer put where, for uninstall
 
 ## Core Abstractions & Shared Pieces
 
-**`installs.find`** is `browserd uninstall`'s map of what each installer put where (its docstring lists the three
-layouts); `service.uninstall` says what it removes and keeps, asks y/N, stops the server, then `installs.remove` runs
-`brew uninstall browserd` for Homebrew, or removes the code's folder and the command install.sh linked or install.ps1
-put on the PATH. A git checkout is refused. The records folder and every profile's Chrome folder are never touched,
-and neither is any agent's registration of browserd: uninstall prints a line for the user to paste to their agent.
-
-**`ports.MCP`** and **`ports.PAGE`** are the two ports the server binds, read from the records folder's `ports.json`
-as each process starts (9230 and 9231 without one, or with one that is not two different ports from 1024 to 65535).
-`browserd setup` asks for each, Enter keeping it, refusing a port a profile's Chrome has, the other port, or one
-another program listens on (the running server may keep its own); saves them; restarts a running server in a process
-of its own, which reads the new ports as it starts; and prints `service.CONNECT`, the line the user pastes to their
-agent, which registers browserd itself. browserd never edits an agent's settings: an agent keeps the address it
-registered, so after the MCP port changes its registration needs that line again and its open sessions a reconnect.
-
-**`state.State`** keeps the profiles (`profiles.Profile`: a name, its folder and its debugging port) in
-`../.run/state.db`, with the sessions, the tabs and the tabs' marks of needing the user's input (`needs_input`: a
-note and since when), one SQLite connection shared by the server's threads; the file
-is gitignored, so each person's profiles stay theirs, and a name is taken whatever its case. `profiles.make`
-and `profiles.delete` (`chrome/profiles.py`) make and delete one.
-
-**`page.Page`** serves the page on `ports.PAGE` on a thread of the server's own. `GET /` is `page.assemble()`: `ui/page.html` with
-`ui/page.css` and the scripts of `page.PARTS` put in, read again on every load. `GET /state` gives
-every profile with its Chrome's pid (or `null`, not running), `error` when its Chrome's tabs could not be
-listed, its open sessions (active or paused) with their
-tabs (one needing the user's input with `needs_input: {note, since}`), the tabs no session owns, and its last `page.CLOSED_SHOWN` (10) closed sessions (no part draws them), from one
-`Tabs.listing` per profile, which also keeps `state.db` in step with each Chrome; and the folders a new profile
-may take over. Each button POSTs: `/profiles` a new profile, `/delete-profile` a profile (`profiles.delete`), `/open` a profile's Chrome in front,
-`/quit-chrome` a profile's Chrome (refused when it is still running after; its sessions stay open, and the next listing
-marks its tabs closed), `/show` and `/close-tab` any tab, and `/close-session` a session and every tab of it; `/handover` (a tab no
-session owns to an open session of its profile) and `/close-paused` (every paused session and its tabs) are still
-served, though no button posts either. A tab of a session closed as it opened (a `tab_open` or popup under way) is shown with those by hand,
-so it can still be closed. A `ProfileError`,
-`page.Refused` or `cdp.CdpError` is answered as `{"error": ...}` for the page to show.
-
-**`mcp.Server`** takes tools as dicts (`name`, `description`, `inputSchema`, `run(arguments)`).
-`run` returns a string, a list of MCP content items, or a whole result dict, which is passed through
-as is. Raising `mcp.ToolError` sends the agent a readable error result; any other exception becomes
-an error result naming it, with the traceback in the log; a client dropping its connection is one
-log line. Every tool call is one log line; one a tool refuses (`ToolError`), one naming no such tool, and
-one whose params or arguments are not an object also name what they were given. `tools.tab_tools(state, tabs,
-workers, queue)` builds `session_start` and the five tab tools, `tools.queue_tool` the queue, `tools.profile_tools` `profile_new`
-and `profile_delete`;
-`tools.queue_steps` makes the queue's body, which the queue and `tab_open` share: `tab_open`, given `steps`, runs
-them on the new tab through it (recorded as that tab's queue call), `steps.QUEUE_MOST` counted from the start of
-`tab_open`, and answers with its tab id, title and URL, then the report, or those and why its steps did not run. Agents
-read a new tab right after opening it (measured in benchmarks: most with a lone `take_snapshot` queue, and 8 of 11
-calls of a queue step's name as a top-level tool came right after `tab_open`). Without `queue` (as most checks build
-them), `tab_open` lists no `steps` argument, and ignores one given. `tab_close` takes `tabs`, a list of tab ids, and closes each
-it can in one call, naming any it could not, and why, in an error result: agents told to close the browser close their tabs
-as they finish, and one call per tab was 21 to 27% of their calls in two benchmark runs. All turn `cdp.CdpError`
-into `ToolError`, and all but `session_start`, `profile_new` and `profile_delete` run through `_in_session`, which refuses a missing, malformed,
-unknown or closed session and moves its last call to now as the call starts and as it ends. The queue records
-into `tools.CALLS/<profile>/<session>-<label>/<tab>/`, so it refuses a tab argument not shaped like a tab id
-(`tabs.is_id`) before that reaches a path, and a tab not the session's before anything is written. It then
-makes a `record.Call` and writes what was asked as sent, so a queue refused for its other arguments or its
-steps is recorded too, with a `file`'s steps added once read; once they pass, what was asked is rewritten as
-the steps it runs, and what came back is written through `_recorded`, a refusal or raised error included.
-
-**`steps.place_screenshots`** first gives each `take_screenshot` without a `filePath` one among the
-call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added (and
-without take_snapshot's own `under`, `full`, `find` and `after`), hands each checked step to `checked.run`, passes
-every reply's text, less chrome-devtools-mcp's `## Pages` list of every tab in Chrome and its note on
-which page it now selects, and with a `Page navigated to <url>.` line cut to the url's query and fragment
-when the queue's navigation line before it named the same scheme, host and path and the url has a query
-(`navigate_page` starts over), through **`steps.view`**, and returns a whole MCP result: a text report,
-any images, and `isError` when a step failed or the queue stopped at `steps.QUEUE_MOST`. A reply
-longer than `steps.REPLY_MOST` (40,000 characters) is cut after its last whole line within that (mid-line
-when that line would leave less than half), the
-whole of it saved as `<n>-step<k>-reply.txt`. A failed queue's view of the page now, and its failed
-step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view saved as
-`<n>-page-now-reply.txt`.
-
-**Server lifecycle**, in `server.serve()`: open `.run/state.db`, ask a chrome-devtools-mcp process for its
-tool list (no browser needed), bind `ports.MCP` and the page's `ports.PAGE` (exclusively: on Windows `SO_REUSEADDR` would let a
-second server bind beside the first), listen for `browserd stop` and `restart` (`system.listen_for_stop`), write
-`.run/server.pid`, `chromes.adopt` every profile's Chrome already running, then serve the page on a thread and
-the tools. Record folders and devtools logs are never removed. Another thread looks every `server.PAUSE_POLL`
-(60s) for sessions paused, and `Workers.pause`s their tabs. No Chrome starts with the server, and one quitting
-leaves the server up. When the server stops, every tab's process is stopped, `chromes.quit_all` sends each
-running Chrome `Browser.close` and waits for it to exit (one not exited 15s later is logged, and the server
-stops anyway), and every open session and tab is marked closed. On a restart alone, which `browserd restart` asks for
-(SIGHUP on a Mac, the restart event on Windows), only the tabs' processes are stopped (a stop, SIGTERM or SIGINT
-at any point still quits everything): every Chrome keeps
-running and every session stays open for the server that `browserd restart` starts next, whose listings find the
-same tabs under the same ids. A crash leaves the same.
+- **A tool** is a dict that `mcp.Server` serves (its `__init__` gives the shape). tools.py wraps every tool in
+  `_refusing`, and every tool that takes a session in `_in_session` too; their docstrings say why.
+- **A queue call** checks its tab id and that the tab is the session's, opens a `record.Call` in the tab's record
+  folder, loads and checks its steps (`steps/`), proves the tab still open (`Tabs.target`), and runs the steps on the
+  tab's `Worker` (`tabs/`) with `steps.run`; `queue_steps`' comments say what is recorded when. `tab_open` given steps
+  runs them the same way on its new tab.
+- **`state.State`** is state.db's one SQLite connection, shared by the server's threads; a `Profile` is a profile's
+  row (`chrome/profiles.py` makes and deletes one), a `Session` one agent's task on one profile (`tabs/sessions.py` has
+  its rules), a `Tab` one page of a profile's Chrome (`tabs/tabs.py` gives out its ids).
+- **The records folder**, `paths.RUN` (`config/paths.py` says where), holds server.pid, server.log, start.lock,
+  state.db, ports.json, devtools-*.log, calls/ and downloads/<profile>/. Record folders and devtools logs are never
+  removed.
+- **The ports** change only through `browserd setup` (`service.setup`). browserd never edits an agent's settings, so
+  after the MCP port changes an agent needs `service.CONNECT`'s line again.
+- **The browserd page.** `page.Page` serves it on a thread of the server's own; `Page.snapshot`'s docstring says what
+  `GET /state` answers, `Page.act` what each POST does, and `dashboard/ui/README.md` the browserd page itself.
+- **`browserd uninstall`**: `service.uninstall` and `installs.py` say what it removes and keeps.
+- **`steps.place_screenshots`** first gives each `take_screenshot` without a `filePath` one among the
+  call's files. **`steps.run`** sends each chrome-devtools-mcp step with the page id added (and
+  without take_snapshot's own `under`, `full`, `find` and `after`), hands each checked step to `checked.run`, passes
+  every reply's text, less chrome-devtools-mcp's `## Pages` list of every tab in Chrome and its note on
+  which page it now selects, and with a `Page navigated to <url>.` line cut to the url's query and fragment
+  when the queue's navigation line before it named the same scheme, host and path and the url has a query
+  (`navigate_page` starts over), through **`steps.view`**, and returns a whole MCP result: a text report,
+  any images, and `isError` when a step failed or the queue stopped at `steps.QUEUE_MOST`. A reply
+  longer than `steps.REPLY_MOST` (40,000 characters) is cut after its last whole line within that (mid-line
+  when that line would leave less than half), the
+  whole of it saved as `<n>-step<k>-reply.txt`. A failed queue's view of the page now, and its failed
+  step's reply, are cut the same way to fit `steps.ERROR_MOST` (below), the view saved as
+  `<n>-page-now-reply.txt`.
+- **Server lifecycle**: `server.serve` starts the server in the order its comments explain; both ports are bound
+  exclusively (`mcp.Exclusive`), so a second server fails before it writes server.pid. A session counts as paused after
+  `sessions.PAUSE_AFTER` without a call, and another thread, every `server.PAUSE_POLL`, stops its tabs'
+  chrome-devtools-mcp processes. No Chrome starts with the server, and one quitting leaves it up. A stop (`browserd
+  stop`, Ctrl+C, and on a Mac SIGTERM) stops every tab's process, quits every running Chrome (`Chromes.quit_all`) and
+  closes every open session and tab. A restart alone (`browserd restart`) stops only the tabs' processes: every Chrome
+  keeps running and every session stays open for the next server, whose listings find the same tabs under the same
+  ids. A server killed outright leaves the same.
 
 ## Agent Gotchas & Invariants (⚠️)
 
-- **No agent ends a session.** An agent would end one while its task still needed it, so only Joshua
-  closes one: on the page (Close session, or Delete profile for every one of its profile's) or with `browserd stop`;
-  `profile_delete` is refused while its profile has one open. A session is paused after 30 minutes without a call,
-  which stops its tabs' chrome-devtools-mcp processes; any call resumes it. A closed session's id is refused, pointing at `session_start`. Every agent, a subagent
-  included, starts its own session; `SESSION_HELP` says so, and that only an agent carrying on the same task
-  in the same tabs is given another's id. Sessions of one profile share its logins and cookies: one signing
-  out of a site signs every one out.
-- **The MCP port, `ports.MCP`, refuses any request with an `Origin` header, a `Host` other than
-  `127.0.0.1:<that port>` or `localhost:<that port>`, or a body that is not `application/json`.** A web page
-  open in any Chrome could otherwise POST to it and drive the browser.
-- **The page has a port of its own, `ports.PAGE`,** so the MCP port keeps refusing every request with an `Origin`. Every
-  page request must carry a `Host` of `127.0.0.1:<that port>` or `localhost:<that port>`, and no `Origin` but the page's own;
-  a POST must carry that one. `GET /state` and every POST must also carry `X-Browserd-Token`, a random value
-  written into the page when it is served and new each start. A web page open in any Chrome
-  cannot read the token, since the page sends no CORS headers, and cannot frame the page to steer a click
-  (`frame-ancestors 'none'`).
-- **`browserd stop` and `restart` only signal a pid whose command line runs `-m browser.server`.** A stale pid file
-  can name a reused pid. `browserd start` holds `.run/start.lock` while it checks and spawns, and treats
-  anything answering on the MCP port under another server name as a refusal.
+- **Every folder's `__init__.py` is empty but system/'s**, which holds its names.
+- **No agent ends a session.** An agent would end one while its task still needed it, so only the user closes one,
+  on the browserd page (Close session, or Delete profile for every session of its profile) or with `browserd stop`.
+  No tool closes one, and `profile_delete` is refused while its profile has one open. Sessions of one profile share
+  its logins and cookies: one signing out of a site signs every one out.
+- **The MCP port refuses any request with an `Origin` header, a `Host` other than `127.0.0.1:<port>` or
+  `localhost:<port>`, or a Content-Type other than `application/json`**: a web page open in any Chrome could otherwise
+  POST to it and drive the browser.
+- **The browserd page has a port of its own, `ports.PAGE`,** so the MCP port can go on refusing every request with an
+  `Origin`. A request to the browserd page must carry its port's `Host` and no `Origin` but the browserd page's own,
+  which every POST must carry; `GET /state` and every POST must also carry `X-Browserd-Token`, written into the
+  browserd page as it is served and new each start. A web page cannot read the token, since the browserd page sends no
+  CORS headers.
+- **Claude Code cuts a tool's description at about 2,000 characters.** `tools.QUEUE_HELP` stays under it (a check
+  holds it there); `tools.STEPS_HELP` and the step catalog, `steps.describe`, make up the `steps` argument's
+  description, which Claude Code passes whole. `QUEUE_HELP` must still say the catalog's tools run only as steps:
+  without its "Never pass pageId", "every tool a step may name" and "never tools to call by themselves" lines, agents
+  call a step's name, like `navigate_page`, as a top-level tool (`../experiments/findings/queue-descriptions.md`, "What
+  the rewrites broke, and why").
+- **Claude Code reads the tool list when it connects, and again only when told it changed**, so the MCP server
+  declares `tools.listChanged` and tells a session from before a restart that the list changed (`protocol/mcp.py`
+  says how). Not the 404 the spec gives an unknown session id: Claude Code answers that by initializing again, without
+  listing the tools. A turn already running, a subagent's included, keeps the old list. A Claude Code session that
+  connected to a browserd from before `listChanged` never hears it, and needs `/mcp` to reconnect; the queue's refusal
+  of an argument it does not take says so.
 - **A queue's step is `{"tool": name, ...arguments}`, never with `pageId`.** `steps.check` refuses
   the whole queue before anything runs for a tool in `steps.LEFT_OUT` (opening, listing, choosing
   and closing tabs; lighthouse; heap snapshots), an unknown tool (the refusal names every tool a
@@ -179,22 +121,6 @@ same tabs under the same ids. A crash leaves the same.
   `uid=5_1..25`, as a view line shows it, is taken as `1_13`, or the run's first uid, `5_1`. The
   queue stops at the first failed step; the report names the steps not run and ends with a view of
   the page now. A relative `file` is read from the tab's record folder.
-- **Claude Code cuts a tool's description at about 2,000 characters.** `tools.QUEUE_HELP` stays
-  under it; `tools.STEPS_HELP` and the step catalog, `steps.describe`, make up the `steps` argument's
-  description, which Claude Code passes whole. `QUEUE_HELP` must still say that the catalog's tools run only as
-  steps: without its "Never pass pageId", "every tool a step may name" and "never tools to call by themselves"
-  lines, agents call a queue step's name, like `navigate_page`, as a top-level tool (measured in
-  `../experiments/findings/queue-descriptions.md`).
-- **Claude Code reads the tool list when a Claude Code session connects, and again only when told it changed.**
-  So `initialize` declares `tools.listChanged` and gives an `Mcp-Session-Id`, and a request under an `Mcp-Session-Id`
-  this process did not give (one from before a restart) is answered as an event stream:
-  `notifications/tools/list_changed`, then the answer, once per id; any other request is plain JSON. Not
-  the 404 the spec gives an unknown id: Claude Code answers that by initializing again, without listing
-  the tools.
-  Claude Code (2.1.181, seen with `claude -p`) then lists the tools again, and the model has the new
-  list from the Claude Code session's next turn; a turn already running, a subagent's included, keeps the old one.
-  A Claude Code session that connected to a browserd not yet declaring `listChanged` never hears it, and needs
-  `/mcp` to reconnect; the queue's refusal of an argument it does not take says so.
 - **Claude Code cuts an error result over about 10,000 characters out of its middle** (seen in a
   trace; a success of 17,593 came whole). So a failed queue's view of the page now is cut to keep the report
   under `steps.ERROR_MOST` (9,000), but never below `steps.PAGE_NOW_LEAST` (2,000), the whole of it
@@ -423,5 +349,5 @@ same tabs under the same ids. A crash leaves the same.
     a typed box's `change`, fired as the next fill takes the focus) or by work of its own (a reply or timer landing),
     is filled on the read from before: chrome-devtools-mcp's `fill` empties a read-only one and reports success, and
     fails a disabled one after 5s.
-- **No tool types a password safely.** A queue's chrome-devtools-mcp steps refuse nothing, and every
-  step's arguments are recorded in the tab's record folder, and a refused call's in `../.run/server.log` too.
+- **No tool types a password safely.** Every step's arguments are recorded in the tab's record folder, and a refused
+  call's in server.log too.

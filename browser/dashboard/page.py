@@ -1,8 +1,8 @@
 """The browserd page, the dashboard, on ports.PAGE (9231 unless browserd setup chose another): every profile, its Chrome, its sessions and their tabs, and the buttons
 that make or delete a profile, open or quit its Chrome, show or close a tab, and close sessions.
 
-One page, ui/page.html with ui/'s parts put in, that polls GET /state and POSTs its buttons. README.md, "Agent Gotchas & Invariants",
-says what each request must carry and why the page has a port of its own.
+One page, ui/page.html with ui/'s parts put in, that polls GET /state and POSTs its buttons. README.md, "Agent Gotchas &
+Invariants", says what each request must carry and why the page has a port of its own.
 """
 
 import json
@@ -64,13 +64,22 @@ class Page(mcp.Exclusive):
         super().handle_error(request, client_address)
 
     def snapshot(self):
-        """What GET /state answers; README.md, "Core Abstractions & Shared Pieces"."""
+        """What GET /state answers, from one Tabs.listing per profile, which also keeps state.db in step with each
+        Chrome:
+
+        profiles: each {name, folder, port; pid, or None when its Chrome is not running or the OS cannot say; error,
+            None unless its Chrome's tabs could not be listed; sessions, its open ones, each {id, label, last_call,
+            state (active or paused), tabs}; by_hand, its tabs no open session owns; closed, its last CLOSED_SHOWN
+            closed sessions, which no part of the page draws}. A tab is {id, title, url}, with needs_input {note, since} when
+            its agent marked it.
+        folders: profiles.free_folders, the folders a new profile may take over.
+        """
         known, now, needs = self.state.profiles(), time.time(), self.state.needs_input()
         return {"profiles": [self._shown(profile, now, needs) for profile in known],
                 "folders": profiles.free_folders(known)}
 
     def _shown(self, profile, now, needs):
-        """One profile of GET /state's answer; README.md, "Core Abstractions & Shared Pieces"."""
+        """One profile of GET /state's answer, as snapshot gives it."""
         shown = {"name": profile.name, "folder": profile.folder, "port": profile.port, "pid": _running(profile),
                  "error": None, "sessions": [], "by_hand": []}
         try:
@@ -117,7 +126,7 @@ class Page(mcp.Exclusive):
         return profile
 
     def act(self, path, body):
-        """Do what a POST asks, and return its answer, or None for a path no button posts to."""
+        """Do what a POST asks, and return its answer, or None for a path not served here."""
         if path == "/profiles":
             folder = body.get("folder") or None
             made = profiles.make(self.state, body.get("name"), folder, self.reserved)
@@ -156,6 +165,7 @@ class Page(mcp.Exclusive):
         if path == "/close-session":
             self._close_session(self._session(body))
             return {"closed": [body["session"]]}
+        # /close-paused and /handover are served, though no button of ui/ posts either.
         if path == "/close-paused":
             closed = []
             for listed in self.state.open_sessions():
@@ -174,7 +184,7 @@ class Page(mcp.Exclusive):
 
 
 def assemble():
-    """What GET / answers; README.md, "Core Abstractions & Shared Pieces"."""
+    """What GET / answers: ui/page.html with page.css and the scripts of PARTS put in, read again on every load."""
     def read(name):
         with open(os.path.join(UI, name), encoding="utf-8") as handle:
             return handle.read()
