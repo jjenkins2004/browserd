@@ -1040,6 +1040,7 @@ class Shots:
 
     def __init__(self, css=(1200, 792), ratio=2, fails=False, undrawn=False):
         self.calls, self.css, self.ratio, self.fails, self.undrawn = [], css, ratio, fails, undrawn
+        self.closed = False
 
     def call(self, method, session=None, wait=None, **params):
         self.calls.append((method, params))
@@ -1056,7 +1057,7 @@ class Shots:
         return {"data": base64.b64encode(b"img").decode()}
 
     def close(self):
-        pass
+        self.closed = True
 
 
 def screenshot_offline():
@@ -1072,18 +1073,18 @@ def screenshot_offline():
                   "nudge": None, "format": "jpeg", "quality": screenshot.QUALITY, "clip": {
                       "x": 0, "y": 300, "width": 1200, "height": 792, "scale": 0.5}}], repr(shots.calls))
         methods = [method for method, _ in shots.calls]
-        check("Chrome draws the tab for the capture's length, a screencast begun before it and ended after, so a tab in "
-              "a minimized window keeps its size", methods[-3:] == ["Page.startScreencast", "Page.captureScreenshot",
-                                                                     "Page.stopScreencast"]
-              and shots.calls[-3][1] == screenshot.DRAWN, repr(shots.calls))
+        check("Chrome draws the tab for the capture, a screencast begun before it that ends as its connection closes, "
+              "so a tab in a minimized window keeps its size",
+              methods[-2:] == ["Page.startScreencast", "Page.captureScreenshot"]
+              and shots.calls[-2][1] == screenshot.DRAWN and shots.closed, repr(shots.calls))
         check("it is saved to the step's filePath", open(path, "rb").read() == b"img")
         nudged = []
         for ratio in (1, 2):
             shots = Shots(ratio=ratio, undrawn=True)
             screenshot.viewport({"tool": "take_screenshot", "filePath": path}, "T1", lambda: shots)
             nudged += [params["nudge"] for method, params in shots.calls if method == "Page.captureScreenshot"]
-        check("where Chrome will not draw the tab, a capture at a device pixel a pixel is asked again while Chrome holds "
-              "it, but a scaled one only once, since one asked again can leave the tab laid out at its scale",
+        check("where Chrome will not draw the tab, a capture at one image pixel per device pixel is asked again while "
+              "Chrome holds it, but a scaled one only once, since one asked again can leave the tab laid out at its scale",
               nudged == [screenshot.NUDGE, None], repr(nudged))
         check("and sent back as an image after a line giving its size in CSS pixels and where it is saved",
               content[1:] == [{"type": "image", "data": base64.b64encode(b"img").decode(), "mimeType": "image/jpeg"}]

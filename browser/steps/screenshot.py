@@ -1,5 +1,6 @@
 """A queue's take_screenshot of the viewport, which browserd takes itself over its own connection to the tab: one
 image pixel per CSS pixel, the page's own coordinates, saved in the tab's record folder and sent back as an image.
+Also keeps a tab drawn: drawn for one capture, drawing for a queue's run.
 
 README.md, "Agent Gotchas & Invariants", says why chrome-devtools-mcp's own take_screenshot does not do for this.
 """
@@ -15,32 +16,26 @@ ANSWER_WAIT = 5.0  # seconds the page has to answer before a screenshot fails, a
 # Seconds a capture waits before asking again: Chrome on Windows can hold a background tab's capture for a frame that
 # only another capture brings (measured: every capture answered within 3s nudged, where one in two hung for 60s).
 NUDGE = 0.5
-# A screencast, so Chrome draws a tab it is not drawing (each in a minimized window, a background tab): smallest
+# A screencast, so Chrome draws a tab it is not drawing (a tab in a minimized window, or a background tab): smallest
 # frames, and few of them, which nothing reads; README.md, "Agent Gotchas & Invariants", says what drawing changes.
 DRAWN = {"format": "jpeg", "quality": 1, "maxWidth": 16, "maxHeight": 16, "everyNthFrame": 1000}
 LONGEST = 2000  # pixels on the image's longer side; Claude Code shrinks a larger image, moving every point read off it
 
 
-@contextlib.contextmanager
 def drawn(browser, session):
-    """A block in which Chrome draws the tab, through a screencast of it on session: True, or False when Chrome would
-    not start one."""
+    """Whether Chrome draws the tab until browser closes, through a screencast of it on session."""
     try:
         browser.call("Page.startScreencast", session, **DRAWN)
     except cdp.CdpError:
-        yield False
-        return
-    try:
-        yield True
-    finally:
-        with contextlib.suppress(cdp.CdpError, WebSocketError, OSError):
-            browser.call("Page.stopScreencast", session)
+        return False
+    return True
 
 
 @contextlib.contextmanager
 def drawing(target, connect):
     """A block, a queue, in which Chrome draws a tab, through a connection of its own whose screencast ends with it.
-    Nothing is drawn without a target, or when the tab cannot be reached; the block runs all the same.
+    Nothing is drawn without a target, or when the tab cannot be reached or Chrome will not start the screencast; the
+    block runs all the same.
 
     Args:
         target (str | None): the tab's target id.
@@ -53,9 +48,7 @@ def drawing(target, connect):
             session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
             browser.call("Page.startScreencast", session, **DRAWN)
         except (cdp.CdpError, WebSocketError, OSError):
-            if browser is not None:
-                browser.close()
-            browser = None
+            pass  # the queue runs on a tab Chrome may not draw
     try:
         yield
     finally:
@@ -127,13 +120,9 @@ def capture(browser, session, kind, quality, scale):
     clip = {"x": css["pageX"], "y": css["pageY"], "width": css["clientWidth"], "height": css["clientHeight"],
             "scale": fit * css["clientWidth"] / device["clientWidth"]}
     extra = {} if kind == "png" else {"quality": quality}
-    # Asked once, of a tab Chrome draws, which answers at once. A capture at a scale asked again while the first waits
-    # can leave the tab laid out at that scale, halving its viewport at 0.5 and moving every point read off a later
-    # screenshot (measured in minimized windows: 4 of 15 asked again every 1ms, 0 of 15 asked once), so only one at a
-    # device pixel a pixel is asked again, where Chrome would not draw the tab.
-    with drawn(browser, session) as drawing_it:
-        again = None if drawing_it or clip["scale"] != 1 else NUDGE
-        data = browser.call("Page.captureScreenshot", session, nudge=again, format=kind, clip=clip, **extra)["data"]
+    # A scaled capture, or one of a drawn tab, is asked once; README.md, "Agent Gotchas & Invariants", says why.
+    again = None if drawn(browser, session) or clip["scale"] != 1 else NUDGE
+    data = browser.call("Page.captureScreenshot", session, nudge=again, format=kind, clip=clip, **extra)["data"]
     return data, css, fit
 
 

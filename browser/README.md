@@ -60,7 +60,7 @@ parts.
         checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused, read_fills
         pointer.py   the queue's pointer steps: move_at, click_down, click_up
         hit.py       what a press lands on, read off the accessibility tree just before it goes out
-        screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
+        screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image; keeps a queue's tab drawn
         dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       dashboard/     the browserd page
         page.py      the browserd page on ports.PAGE: GET /state, and a POST per button
@@ -492,20 +492,19 @@ same tabs under the same ids. A crash leaves the same.
   answer `Page.getLayoutMetrics`, which it never does while a dialog is open, before the step fails saying to answer
   the dialog first. On Windows, Chrome draws a background tab about once a second, and a capture of one waits for a
   frame that, measured, sometimes never came (one in two clipped captures hung for 60s, and every capture after the
-  first to hang); a second capture brings it. So a capture is asked again every `screenshot.NUDGE` (0.5s) until one
-  answers (`cdp.Browser.call`'s `nudge`; answers to the others are dropped): 48 of 48 then answered, the longest in
-  2s, the median 0.2s. Chrome is made to draw the tab (`screenshot.drawn`, a screencast of 16px
-  frames nothing reads), for each capture and for each queue's whole length (`screenshot.drawing` in `steps.run`):
+  first to hang); a second capture brings it. Asked again every `screenshot.NUDGE` (0.5s) until one answered
+  (`cdp.Browser.call`'s `nudge`; answers to the others are dropped), 48 of 48 captures answered, the longest in 2s,
+  the median 0.2s. Chrome is made to draw the tab with a screencast of 16px frames nothing reads (`screenshot.DRAWN`),
+  for each capture (`screenshot.drawn`) and for each queue's whole length (`screenshot.drawing` in `steps.run`):
   every tab in a minimized window is one it does not draw. A click there waited out chrome-devtools-mcp's 3s for the
   page to settle (2.9s a click; drawn 0.2s), and a scaled capture asked again while the first waited could leave the
   tab laid out at its scale, halving its viewport at 0.5 and moving every point read off a later screenshot (4 of 15
   asked again every 1ms, on the research profile 1249x1277 to 313x320). So a capture of a drawn tab is asked once (0
-  of 15 shrank, a page taking 700ms a frame included); where Chrome will not draw it, only one at a device pixel a
-  pixel is asked again. A step that waits on a frame (a screenshot, chrome-devtools-mcp's wait
-  after a click) may so take up to about 2s more on Windows than on a Mac. Every profile's Chrome on Windows also
-  starts with overlay scrollbars (`system.CHROME_FLAGS`), as a Mac's are: Windows' own take 15px of the viewport, and
-  a background tab's viewport flipped between the two widths as it was laid out (1234 to 1219 CSS px), which moves a
-  centred page's content between a screenshot and a press read off it.
+  of 15 shrank, a page taking 700ms a frame included); where Chrome will not draw it, only one at one image pixel per
+  device pixel (a clip `scale` of 1) is asked again. Every profile's Chrome on Windows also starts with overlay
+  scrollbars (`system.CHROME_FLAGS`), as a Mac's are: Windows' own take 15px of the viewport, and a background tab's
+  viewport flipped between the two widths as it was laid out (1234 to 1219 CSS px), which moves a centred page's
+  content between a screenshot and a press read off it.
 - **The pointer steps are a hand's three moves: `move_at x,y`, `click_down` and `click_up`.** A click is the three
   in turn, a drag puts a second `move_at` between the press and the let-go, and a hover is a `move_at` alone, so no
   step repeats another's work. `pointer.run` sends each as one `Input.dispatchMouseEvent` on a connection of its own

@@ -611,77 +611,74 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
         steps (list[dict]): checked by load and check.
         path (callable): the full path for a file name, like record.Call.path; it names where each whole snapshot goes.
         restarted (bool): the process was started again after dying, so the report says old uids are gone.
-        target (str | None): the tab's target id, for answering a dialog the moment it opens, a paste's key press
-            and a screenshot of the viewport; None leaves every dialog to chrome-devtools-mcp and fails every paste
-            and screenshot of the viewport.
+        target (str | None): the tab's target id, for keeping the tab drawn while the queue runs, answering a dialog
+            the moment it opens, a paste's key press and a screenshot of the viewport; None leaves every dialog to
+            chrome-devtools-mcp and fails every paste and screenshot of the viewport.
         connect (callable | None): opens a proven connection to the tab's Chrome; given with target.
         began (float | None): time.monotonic() when the call began, if before this, so QUEUE_MOST counts from then:
             tab_open's steps count the time it took to open the tab.
         watcher (Watcher | None): the tab's downloads.Watcher, so each step's report says what it downloaded; None
             reports none.
     """
-    # Chrome draws the tab while its queue runs: a click on a tab it does not draw, as every tab in a minimized window
-    # is, waits out chrome-devtools-mcp's 3s for the page to settle (measured: 2.9s a click, drawn 0.2s).
-    with screenshot.drawing(target, connect):
-        return _run(devtools, page_id, steps, path, restarted, target, connect, began, watcher)
-
-
-def _run(devtools, page_id, steps, path, restarted, target, connect, began, watcher):
     report, images, failed = [], [], False
     if restarted:
         report.append(RESTARTED)
     started, answerer, navigated = began or time.monotonic(), None, None
     fills = _Fills(devtools, page_id, steps)
-    try:
-        for number, step in enumerate(steps, 1):
-            left = QUEUE_MOST - (time.monotonic() - started)
-            if left <= 0:
-                report.append("--- stopped before step %d: the queue has run %.0fs, and Claude Code drops a reply "
-                              "after about 60s; run the rest in a new queue" % (number, QUEUE_MOST - left))
-                report.extend(_after_stop(devtools, page_id, steps, number - 1, path, len("\n".join(report))))
-                failed = True
-                break
-            began = time.monotonic()
-            following = steps[number] if number < len(steps) else None
-            if target and following and following["tool"] == "handle_dialog" and step["tool"] not in OWN_DIALOGS:
-                answerer = dialogs.Answerer(target, following, connect)
-                answerer.start_listening()
-            content, failed = _step(devtools, page_id, step, left, answerer, target, connect,
-                                    fills.read(number) if step["tool"] == "fill" else None)
-            got = watcher.take(min(DOWNLOAD_WAIT, QUEUE_MOST - (time.monotonic() - started))) if watcher else []
-            if step["tool"] == "handle_dialog":
-                answerer = None
-            took = time.monotonic() - began
-            text, navigated = _short_navigations(SELECTION_NOTE.sub("", _without_pages(_text(content))),
-                                                 None if step["tool"] == "navigate_page" else navigated)
-            dialog = OPEN_DIALOG in text and DIALOG_BEFORE not in text
-            if failed and dialog and step["tool"] not in checked.STEPS and step["tool"] not in UNBLOCKED:
-                # The action opened a dialog, which blocks the page, so the action itself ran out its 5s timeout.
-                failed = False
-                text += ("\n(a dialog opened during this step and blocked the page, so the step counts as done; answer "
-                         "it with a handle_dialog step, and put one right after such a step to skip this 5s)")
-            if failed and step["tool"] == "wait_for" and WAIT_FOR_TIMEOUT.search(text):
-                text += WAIT_FOR_MISSED
-            view_options = {key: step[key] for key in VIEW_OPTIONS if key in step and step["tool"] == "take_snapshot"}
-            text, missing = view(text, path("step%d-snapshot.txt" % number), **view_options)
-            failed = failed or missing
-            report.append("--- %d %s %s %.1fs" % (number, step["tool"], "FAILED" if failed else "ok", took))
-            # A failed step's own reply is cut to half a failed report, so the view of the page now still fits.
-            report.append(_capped(text, path("step%d-reply.txt" % number), ERROR_MOST // 2 if failed else REPLY_MOST))
-            report.extend(_downloaded(download) for download in got)
-            images.extend(item for item in content if item.get("type") == "image")
-            if failed:
-                report.extend(_after_stop(devtools, page_id, steps, number, path, len("\n".join(report))))
-                break
-            # No GAP between two fills; README.md, "Agent Gotchas & Invariants", says why.
-            if number < len(steps) and (step["tool"], steps[number]["tool"]) != ("fill", "fill"):
-                time.sleep(GAP)
-    finally:
-        if answerer is not None:
-            # Its step failed or the queue stopped, but it may have answered a dialog all the same.
-            answered = answerer.answered(0)
-            if answered is not None:
-                report.append("--- %s, though its handle_dialog step did not run" % answered)
+    # Keeps the tab drawn while its queue runs; README.md, "Agent Gotchas & Invariants", says why.
+    with screenshot.drawing(target, connect):
+        try:
+            for number, step in enumerate(steps, 1):
+                left = QUEUE_MOST - (time.monotonic() - started)
+                if left <= 0:
+                    report.append("--- stopped before step %d: the queue has run %.0fs, and Claude Code drops a reply "
+                                  "after about 60s; run the rest in a new queue" % (number, QUEUE_MOST - left))
+                    report.extend(_after_stop(devtools, page_id, steps, number - 1, path, len("\n".join(report))))
+                    failed = True
+                    break
+                began = time.monotonic()
+                following = steps[number] if number < len(steps) else None
+                if target and following and following["tool"] == "handle_dialog" and step["tool"] not in OWN_DIALOGS:
+                    answerer = dialogs.Answerer(target, following, connect)
+                    answerer.start_listening()
+                content, failed = _step(devtools, page_id, step, left, answerer, target, connect,
+                                        fills.read(number) if step["tool"] == "fill" else None)
+                got = watcher.take(min(DOWNLOAD_WAIT, QUEUE_MOST - (time.monotonic() - started))) if watcher else []
+                if step["tool"] == "handle_dialog":
+                    answerer = None
+                took = time.monotonic() - began
+                text, navigated = _short_navigations(SELECTION_NOTE.sub("", _without_pages(_text(content))),
+                                                     None if step["tool"] == "navigate_page" else navigated)
+                dialog = OPEN_DIALOG in text and DIALOG_BEFORE not in text
+                if failed and dialog and step["tool"] not in checked.STEPS and step["tool"] not in UNBLOCKED:
+                    # The action opened a dialog, which blocks the page, so the action itself ran out its 5s timeout.
+                    failed = False
+                    text += ("\n(a dialog opened during this step and blocked the page, so the step counts as done; "
+                             "answer it with a handle_dialog step, and put one right after such a step to skip this 5s)")
+                if failed and step["tool"] == "wait_for" and WAIT_FOR_TIMEOUT.search(text):
+                    text += WAIT_FOR_MISSED
+                view_options = {key: step[key] for key in VIEW_OPTIONS
+                                if key in step and step["tool"] == "take_snapshot"}
+                text, missing = view(text, path("step%d-snapshot.txt" % number), **view_options)
+                failed = failed or missing
+                report.append("--- %d %s %s %.1fs" % (number, step["tool"], "FAILED" if failed else "ok", took))
+                # A failed step's own reply is cut to half a failed report, so the view of the page now still fits.
+                report.append(_capped(text, path("step%d-reply.txt" % number),
+                                      ERROR_MOST // 2 if failed else REPLY_MOST))
+                report.extend(_downloaded(download) for download in got)
+                images.extend(item for item in content if item.get("type") == "image")
+                if failed:
+                    report.extend(_after_stop(devtools, page_id, steps, number, path, len("\n".join(report))))
+                    break
+                # No GAP between two fills; README.md, "Agent Gotchas & Invariants", says why.
+                if number < len(steps) and (step["tool"], steps[number]["tool"]) != ("fill", "fill"):
+                    time.sleep(GAP)
+        finally:
+            if answerer is not None:
+                # Its step failed or the queue stopped, but it may have answered a dialog all the same.
+                answered = answerer.answered(0)
+                if answered is not None:
+                    report.append("--- %s, though its handle_dialog step did not run" % answered)
     return {"content": [{"type": "text", "text": "\n".join(report)}] + images, "isError": failed}
 
 
