@@ -52,7 +52,7 @@ header lists its settings (a version to pin, where it goes); `browserd uninstall
 
 Its records (server.pid, server.log, start.lock, state.db with the profiles, sessions and tabs, ports.json,
 devtools-*.log, calls/, and downloads/<profile>/, where each profile's Chrome saves its downloads, with no Save As
-window) go in `~/Library/Application Support/browserd` on a Mac and `%LOCALAPPDATA%rowserd` on Windows,
+window) go in `~/Library/Application Support/browserd` on a Mac and `%LOCALAPPDATA%\browserd` on Windows,
 whichever version runs; `BROWSERD_HOME` names another folder.
 
 ## From a clone
@@ -64,14 +64,14 @@ A git checkout runs as it is, and keeps its records in `.run/` beside the code: 
 
 ## Layout
 
-    browserd, browserd.cmd  the command: browser/cli/service.py's start, stop, restart, status, version and uninstall
+    browserd, browserd.cmd  the command, which runs browser/cli/service.py
     browser/                the server, a folder per domain (chrome/, tabs/, steps/, dashboard/, cli/, ...), and its own
                             README, whose Directory Layout maps them; browser/system/ is what differs by OS
     package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
     VERSION                 the version on main, which install.sh and install.ps1 install as its tag, v<VERSION>
     install.sh, install.ps1 the macOS and Windows installers, run from GitHub; Formula/browserd.rb is Homebrew's
     scripts/release         cuts a release: VERSION, the tag, and the formula's archive and sha256
-    .run/                   gitignored, a checkout's records: server.pid, server.log, start.lock, state.db (profiles, sessions, tabs, needs_input), ports.json, devtools-*.log, calls/<profile>/<session>-<label>/<tab>/
+    .run/                   gitignored, a checkout's records (listed under Use)
     tests/                  the checks, and their own README
     preview/                every state of the page's parts from made-up data: `python3 preview/preview.py`, then http://127.0.0.1:9320/
     experiments/            what measures browserd: bench/, the benchmarks against other browser MCP servers; long-tasks/, the demo tasks; findings/, what each found

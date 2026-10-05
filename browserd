@@ -1,5 +1,5 @@
 #!/bin/sh
-# browserd start, stop, restart, status or version, on macOS or in Git Bash on Windows (browserd.cmd is cmd's and
+# The browserd command (browser/cli/service.py), on macOS or in Git Bash on Windows (browserd.cmd is cmd's and
 # PowerShell's). Works from any directory, and through a symlink to it, as Homebrew and install.sh put it on the PATH.
 # BROWSERD_PYTHON picks the Python; otherwise the one install.sh checked, in .python, or python3. Git Bash uses Windows'
 # own (py -3): its python3 may be MSYS2's.
