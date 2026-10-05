@@ -24,6 +24,7 @@ LOCAL = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 CALL_WAIT = 20.0  # seconds a command waits for its answer
+LOCAL_STATE_TRIES = 5  # reads of a Chrome folder's Local State before it counts as unreadable
 
 
 class CdpError(Exception):
@@ -97,6 +98,19 @@ def port_of(pid):
     return int(port) if port.isdigit() else None
 
 
+def _local_state(path):
+    """Local State's text. Chrome saves it by replacing the file, which on Windows leaves it gone or locked for a
+    moment."""
+    for _ in range(LOCAL_STATE_TRIES - 1):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return handle.read()
+        except OSError:
+            time.sleep(0.05)
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
 def check_folder(folder):
     """Raise unless a Chrome folder holds no Chrome profile but PROFILE.
 
@@ -105,9 +119,8 @@ def check_folder(folder):
     """
     path = os.path.join(folder, "Local State")
     try:
-        with open(path, encoding="utf-8") as handle:
-            # A new folder's Chrome lists no Chrome profile until its first tab loads one.
-            names = sorted(json.load(handle).get("profile", {}).get("info_cache", {}))
+        # A new folder's Chrome lists no Chrome profile until its first tab loads one.
+        names = sorted(json.loads(_local_state(path)).get("profile", {}).get("info_cache", {}))
     except (OSError, ValueError, AttributeError, TypeError) as exc:
         raise CdpError("cannot read which Chrome profiles the Chrome folder holds from %s (%s)" % (path, exc))
     if set(names) - {PROFILE}:

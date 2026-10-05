@@ -318,7 +318,9 @@ def connecting():
             handle.write("[]")
         check("a Local State that is not an object is refused", "cannot read" in refusal(require))
         os.remove(os.path.join(folder, "Local State"))
+        cdp.time = Clock()  # check_folder's tries, 0.05s apart, take no time
         check("a folder with no Local State is refused", "cannot read" in refusal(require))
+        cdp.time = time
         profile_list(folder, ["Default"])
         profile_list(folder, ["Default", "Café"])
         said = refusal(require)
