@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -21,7 +22,8 @@ sys.path.insert(0, str(HERE))
 import grade  # noqa: E402
 
 MODEL = "claude-opus-5-5"
-PROFILE = "personal"
+PROFILE = os.environ.get("BROWSERD_LONG_TASKS_PROFILE", "personal")  # browserd's profile, signed in to Google
+CLAUDE = os.environ.get("BROWSERD_LONG_TASKS_CLAUDE", "claude")  # the Claude Code to run: a pinned binary, or PATH's
 TIMEOUT = 1800  # seconds the judge may take
 BROWSERD = {"browserd": {"type": "http", "url": "http://127.0.0.1:9230/mcp"}}
 PAGE = "http://127.0.0.1:9231"  # browserd's page, whose Close session close_sessions uses
@@ -32,6 +34,14 @@ ITEMS = {  # trip/rubric.md's items, by group
                 "recommendation"],
     "polish": ["photos", "headers", "highlight", "layout", "consistent"],
 }
+
+
+def command(argv):
+    """argv with its program found on PATH, since Windows starts a bare `claude` only by its full name; a .cmd shim
+    (npm's claude and npx, node_modules/.bin's) runs through cmd /c, since Node, which starts an MCP config's servers,
+    refuses to spawn one."""
+    found = shutil.which(argv[0]) or argv[0]
+    return (["cmd", "/c"] if found.lower().endswith(".cmd") else []) + [found] + list(argv[1:])
 
 
 def env():
@@ -109,17 +119,21 @@ def judge(deck, transcript, folder, before):
     (folder / "flights-before.json").write_text(json.dumps(before) + "\n")
     (folder / "flights-after.json").write_text(json.dumps(grade.reference(PROFILE)) + "\n")
     (folder / "seen.txt").write_text("\n\n".join(tool_results(transcript)))
-    prompt = (HERE / "trip" / "rubric.md").read_text().replace("{request}", request().strip()).replace("{deck}", deck)
-    cmd = ["claude", "-p", "--model", MODEL, "--output-format", "stream-json", "--verbose", "--setting-sources", "",
-           "--tools", "Read,Grep", "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": BROWSERD}),
-           "--no-session-persistence", "--allowedTools", "mcp__browserd", "Read", "Grep",
-           "--disallowedTools", "mcp__browserd__profile_new", "mcp__browserd__profile_delete"]
+    prompt = ((HERE / "trip" / "rubric.md").read_text().replace("{request}", request().strip()).replace("{deck}", deck)
+              .replace("{profile}", PROFILE))
+    cmd = command([CLAUDE, "-p", "--model", MODEL, "--output-format", "stream-json", "--verbose", "--setting-sources", "",
+                   "--tools", "Read,Grep", "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": BROWSERD}),
+                   "--no-session-persistence", "--allowedTools", "mcp__browserd", "Read", "Grep",
+                   "--disallowedTools", "mcp__browserd__profile_new", "mcp__browserd__profile_delete"])
     with (folder / "judge.jsonl").open("w") as out, (folder / "judge-stderr.txt").open("w") as err:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=out, stderr=err, cwd=folder, env=env(), text=True)
         try:
-            subprocess.run(cmd, input=prompt, stdout=out, stderr=err, cwd=folder, env=env(), text=True,
-                           timeout=TIMEOUT)
+            proc.communicate(prompt, timeout=TIMEOUT)
         except subprocess.TimeoutExpired:
-            pass
+            if sys.platform == "win32":  # killing cmd /c alone would leave its claude running
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+            proc.kill()
+            proc.wait()
     close_sessions(folder / "judge.jsonl")
     result = next((e for e in events(folder / "judge.jsonl") if e.get("type") == "result"), {})
     verdict = verdict_of(result.get("result"))

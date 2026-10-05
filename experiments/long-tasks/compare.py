@@ -6,8 +6,8 @@ judged as it ends; or a summary and slide gallery of an experiment's runs.
 
 Each run is <data>/<exp>/<arm>-r<n>/: prompt.md, transcript.jsonl (stream-json), stderr.txt, flights-before.json, the
 recording (frames/, frames.tsv, video.mp4, record.log), deck.pdf, slides/ and result.json; its judge works in
-<data>/<exp>/judging/<random id>/. Every arm drives the personal profile's Chrome, browserd's, so runs go one at a time
-unless --jobs says otherwise. A run with a result.json is done, so running an experiment again runs only what is
+<data>/<exp>/judging/<random id>/. Every arm drives browserd's Chrome of the profile judge.PROFILE names, so runs go one
+at a time unless --jobs says otherwise. A run with a result.json is done, so running an experiment again runs only what is
 missing. report writes gallery.html and gallery-blind.html.
 """
 import argparse
@@ -36,7 +36,7 @@ from browser.steps.steps import STOPPED  # noqa: E402
 ROOT = HERE.parents[1]
 DATA = Path(os.environ.get("BROWSERD_LONG_TASKS_DATA", ROOT.parent / "browserd-long-tasks"))
 MODEL = "claude-sonnet-5-5"
-PROFILE = "personal"
+PROFILE = judge.PROFILE
 TIMEOUT = 3600  # seconds a run may take before it is stopped
 ARMS = ["browserd", "playwright", "devtools", "agentbrowser"]
 # The other arms' sentence for prompt.md's browserd one: the same request, minus the server's name and profile.
@@ -46,7 +46,7 @@ OTHER_BROWSER = "Use the browser, where I'm signed in to Google."
 def prompt(arm):
     text = (HERE / "trip" / "prompt.md").read_text()
     if arm == "browserd":
-        return text
+        return text.replace("my personal profile", "my %s profile" % PROFILE)
     text, swapped = re.subn(r"Use browserd[^.]*\.", OTHER_BROWSER, text)
     if swapped != 1:
         raise SystemExit("trip/prompt.md has no browserd sentence to swap")
@@ -54,15 +54,17 @@ def prompt(arm):
 
 
 def servers(arm, run, port, session):
-    """The arm's MCP server, by the name its tools take; the others reach the personal profile's Chrome on port."""
+    """The arm's MCP server, by the name its tools take; the others reach PROFILE's Chrome on port."""
     if arm == "browserd":
         return {"browserd": {"type": "http", "url": "http://127.0.0.1:9230/mcp"}}
     cdp = "http://127.0.0.1:%d" % port
     if arm == "playwright":
-        return {"playwright": {"command": "npx", "args": ["@playwright/mcp@0.0.82", "--cdp-endpoint", cdp]}}
+        cmd = judge.command(["npx", "@playwright/mcp@0.0.82", "--cdp-endpoint", cdp])
+        return {"playwright": {"command": cmd[0], "args": cmd[1:]}}
     if arm == "devtools":
-        return {"devtools": {"command": str(ROOT / "node_modules/.bin/chrome-devtools-mcp"),
-                             "args": ["--browserUrl", cdp, "--no-usage-statistics"]}}
+        cmd = judge.command([str(ROOT / "node_modules/.bin/chrome-devtools-mcp"), "--browserUrl", cdp,
+                             "--no-usage-statistics"])
+        return {"devtools": {"command": cmd[0], "args": cmd[1:]}}
     # agent-browser's MCP server takes no flags for the browser: its config file's "cdp" gives the port, and a session
     # of its own keeps its daemon apart from another run's.
     (run / "agent-browser.json").write_text(json.dumps({"cdp": str(port)}))
@@ -136,9 +138,10 @@ def claude(arm, run, servers):
     """One headless Claude Code, as run.sh's interactive one: no user settings, the arm's server its only tools. Returns
     whether it timed out."""
     name = next(iter(servers))
-    cmd = ["claude", "-p", "--model", MODEL, "--output-format", "stream-json", "--verbose", "--setting-sources", "",
-           "--tools", "", "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": servers}),
-           "--no-session-persistence", "--allowedTools", "mcp__" + name]
+    cmd = judge.command([judge.CLAUDE, "-p", "--model", MODEL, "--output-format", "stream-json", "--verbose",
+                         "--setting-sources", "", "--tools", "", "--strict-mcp-config",
+                         "--mcp-config", json.dumps({"mcpServers": servers}), "--no-session-persistence",
+                         "--allowedTools", "mcp__" + name])
     if arm == "browserd":
         cmd += ["--disallowedTools", "mcp__browserd__profile_new", "mcp__browserd__profile_delete"]
     with (run / "transcript.jsonl").open("w") as stdout, (run / "stderr.txt").open("w") as stderr:

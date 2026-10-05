@@ -6,7 +6,7 @@ You are grading a Google Slides deck an assistant made for this request:
 
 The deck: {deck}
 
-Read it with browserd on the profile "personal": call session_start once, then open the deck. Go through every slide,
+Read it with browserd on the profile "{profile}": call session_start once, then open the deck. Go through every slide,
 reading its text and looking at it in a screenshot. This is read-only: never type, click into a text box, drag, or
 change anything in the deck, and never open Share. Close your tabs when you are done.
 

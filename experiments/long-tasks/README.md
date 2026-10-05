@@ -34,7 +34,7 @@ answer key and graded in code; trip is written as a person would ask it, and an 
   profile and the session label, only the named sources, "n/a" over another source, exactly the slides listed,
   `tab_needs_input` on a login or captcha, nothing submitted or sent, stop at the end state), then the spec. trip's says
   the outcome, not the steps or the links; its one browserd sentence ("Use browserd with my ...") is what `compare.py`
-  swaps for the other arms' and `judge.py` leaves out.
+  swaps for the other arms' (in browserd's own it names `judge.PROFILE`) and `judge.py` leaves out.
 - **A key** is `key.json`, written by the task's `key.py`, never by hand: the values a correct run ends with.
 - **A run** is `run.sh <task> <name>`: Claude Code, interactive so its turns can be filmed, started in the run's own
   folder, `<data>/<name>/` (`../browserd-long-tasks` beside the repo, or `$BROWSERD_LONG_TASKS_DATA`), with
@@ -51,25 +51,26 @@ answer key and graded in code; trip is written as a person would ask it, and an 
 - **capex's grade** is `grade.py capex <deck URL> <sheet URL>`: the deck's `.pptx` export and the Sheet's `.xlsx`,
   fetched with the profile's cookies from a background tab of its own on docs.google.com (closed after), read with
   `zipfile` and ElementTree, then one ok/BAD line per check and a score. Text is compared through `norm`.
-- **trip's judge** is `judge.py <deck URL> <transcript> <folder> [--before F]`: a clean `claude -p` on claude-opus-5-5
-  with browserd (profile personal), Read and Grep, given `rubric.md` with the request and the deck's URL. Its folder
-  holds the evidence: `flights-before.json` (`grade.py flights` as the run began) and `flights-after.json` (now), from
-  `nonstops`, which reads each Google Flights result's aria-label on the default results and on the Cheapest tab;
-  `seen.txt`, every tool result of the run. Its last message is a JSON verdict, saved as `verdict.json`; `score`
-  counts the items each group passed, a missing item failing. It then closes the browserd session it opened
+- **trip's judge** is `judge.py <deck URL> <transcript> <folder> [--before F]`: a clean `claude -p`
+  (`$BROWSERD_LONG_TASKS_CLAUDE`, else `claude` on PATH) on claude-opus-5-5 with browserd (profile `judge.PROFILE`:
+  `$BROWSERD_LONG_TASKS_PROFILE`, else personal), Read and Grep, given `rubric.md` with the request and the deck's URL.
+  Its folder holds the evidence: `flights-before.json` (`grade.py flights` as the run began) and `flights-after.json`
+  (now), from `nonstops`, which reads each Google Flights result's aria-label on the default results and on the
+  Cheapest tab; `seen.txt`, every tool result of the run. Its last message is a JSON verdict, saved as `verdict.json`;
+  `score` counts the items each group passed, a missing item failing. It then closes the browserd session it opened
   (`close_sessions`, the browserd page's Close session).
-- **A comparison** is `compare.py run <exp>`: per run, `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p` with
-  run.sh's flags, the arm's server alone, `TIMEOUT` (1 hour), and `record.py` beside it (browserd's by `--transcript`,
-  the others' by `--cdp`); then the deck's PDF and one PNG per slide (`pdftoppm`),
+- **A comparison** is `compare.py run <exp>`: per run, `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p` (the
+  judge's Claude Code) with run.sh's flags, the arm's server alone, `TIMEOUT` (1 hour), and `record.py` beside it
+  (browserd's by `--transcript`, the others' by `--cdp`); then the deck's PDF and one PNG per slide (`pdftoppm`),
   then the judge, in `<data>/<exp>/judging/<random id>/`, so neither its folder nor its request names the arm;
   `result.json` has the run's numbers and scores. `compare.py report <exp>` sums them and writes `gallery.html` (each
   run's slides in a row) and `gallery-blind.html` (rows shuffled and lettered, the key in `gallery-key.json`). browserd
-  runs on the main server's `personal` profile, and every other arm attaches over DevTools to that same Chrome (its
-  profile's port), so all arms drive one browser signed in to the same account. Each run begins with `clean_start`:
-  the Chrome left holding one fresh blank tab, in a window of its own, where every server starts; after it, the run's
-  browserd session (if any) is closed and `clear_tabs` closes every tab no open browserd session owns, so nothing
-  passes from one run to the next. Runs go one at a time (`--jobs` 1, threads over the run list in order, each rep's
-  arms reversed from the last's).
+  runs on the main server's profile `judge.PROFILE` names, and every other arm attaches over DevTools to that same
+  Chrome (its profile's port), so all arms drive one browser signed in to the same account. Each run begins with
+  `clean_start`: the Chrome left holding one fresh blank tab, in a window of its own, where every server starts; after
+  it, the run's browserd session (if any) is closed and `clear_tabs` closes every tab no open browserd session owns, so
+  nothing passes from one run to the next. Runs go one at a time (`--jobs` 1, threads over the run list in order, each
+  rep's arms reversed from the last's).
 
 ## Agent Gotchas & Invariants (⚠️)
 
@@ -102,7 +103,7 @@ answer key and graded in code; trip is written as a person would ask it, and an 
 - `seen.txt` is the run's tool results as they came, so a harness's own wording in them (Playwright's code lines,
   browserd's step reports) can tell the judge which arm it grades; only its folder and request are blind.
 - `compare.py` takes the deck's PDF before the judge opens it: the gallery shows the deck as the run left it.
-- The other arms share browserd's `personal` Chrome because Google signs out a copy of a profile's folder within
+- The other arms share browserd's `judge.PROFILE` Chrome because Google signs out a copy of a profile's folder within
   about 10 minutes (its cookies cannot be renewed in another Chrome), and Chrome runs one process per folder. They see
   every tab of that Chrome and start on one (Playwright, chrome-devtools-mcp and agent-browser on the newest, but
   Playwright on another when several windows are open), which is why `clean_start` leaves only its fresh tab, and why
