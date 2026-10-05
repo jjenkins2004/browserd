@@ -1,5 +1,6 @@
-"""What every group of checks shares: check and its tallies, the stand-in profile and state, an MCP server to call
-tools on, and the stand-ins for Chrome and chrome-devtools-mcp more than one group uses.
+"""What every group of checks shares: check and its tallies, parallel to run blocks of checks at once, chosen to pick
+groups by name, the stand-in profile and state, an MCP server to call tools on, and the stand-ins for Chrome and
+chrome-devtools-mcp more than one group uses.
 """
 
 import http.client
@@ -10,6 +11,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,6 +23,9 @@ from browser.records.state import Session, State
 
 
 passed, failed, skipped = [], [], []
+_tallying = threading.Lock()  # check's, which blocks parallel runs call at once
+_held = threading.local()  # .lines: where check puts its lines on the thread parallel runs a block on
+AT_ONCE = 4  # blocks parallel runs at once
 
 
 STAND_IN = Profile("School", "/nowhere/Chrome-School", 9223)  # the profile offline checks name; no Chrome is behind it
@@ -50,8 +55,77 @@ def open_session(state, label="check run", profile=STAND_IN):
 
 
 def check(name, condition, detail=""):
-    (passed if condition else failed).append(name)
-    print("%s %s%s" % ("ok  " if condition else "FAIL", name, ("  -- " + detail) if detail and not condition else ""))
+    """Tally a check and print its line, or on the thread parallel runs a block on, hold it for parallel to print."""
+    with _tallying:
+        (passed if condition else failed).append(name)
+    line = "%s %s%s" % ("ok  " if condition else "FAIL", name, ("  -- " + detail) if detail and not condition else "")
+    held = getattr(_held, "lines", None)
+    if held is None:
+        print(line)
+    else:
+        held.append(line)
+
+
+def parallel(*blocks):
+    """Run each block, a callable taking nothing, on a thread of its own, at most AT_ONCE at once, started in the order
+    given, and return once all have ended. Each block's lines are printed in that order too: its own as soon as it and
+    every block before it have ended. A block that raises fails, its traceback the detail, and the rest run on.
+
+    Each block owns what it opens and closes it; what the blocks share must take calls from threads at once."""
+    slots = threading.Semaphore(AT_ONCE)
+    lines, ended, printed = [[] for _ in blocks], [False] * len(blocks), [0]
+    printing = threading.Lock()
+
+    def run(index, block):
+        _held.lines = lines[index]
+        try:
+            block()
+        except BaseException:
+            name = getattr(getattr(block, "func", block), "__name__", "")
+            check("block %d%s runs to its end" % (index + 1, " (%s)" % name if name.isidentifier() else ""), False,
+                  traceback.format_exc().rstrip())
+        finally:
+            _held.lines = None
+            slots.release()
+            with printing:
+                ended[index] = True
+                while printed[0] < len(blocks) and ended[printed[0]]:
+                    for line in lines[printed[0]]:
+                        print(line)
+                    printed[0] += 1
+                sys.stdout.flush()
+
+    threads = []
+    for index, block in enumerate(blocks):
+        slots.acquire()
+        threads.append(threading.Thread(target=run, args=(index, block), name="block %d" % (index + 1), daemon=True))
+        threads[-1].start()
+    for thread in threads:
+        thread.join()
+
+
+def chosen(argv, groups, aliases, flags=()):
+    """The names of the groups a command's arguments pick, in the order they run: every group when they pick none.
+    --list prints every name and exits; a name or flag the command does not take exits 2, printing them all.
+
+    Args:
+        argv (list): the command's arguments: group names, aliases, --list, and flags.
+        groups (list): every group's name, in the order they run.
+        aliases (dict): a name for several groups, and their names.
+        flags (tuple): the flags the command takes besides --list, as --headed.
+    """
+    unknown = [arg for arg in argv if arg not in {*groups, *aliases, *flags, "--list"}]
+    if unknown or "--list" in argv:
+        out = sys.stderr if unknown else sys.stdout
+        if unknown:
+            print("no group or flag %s; the groups are:" % ", ".join(unknown), file=out)
+        for name in groups:
+            print(name, file=out)
+        for alias, names in aliases.items():
+            print("%s: %s" % (alias, " ".join(names)), file=out)
+        sys.exit(2 if unknown else 0)
+    named = {name for arg in argv if not arg.startswith("--") for name in aliases.get(arg, [arg])}
+    return [name for name in groups if not named or name in named]
 
 
 def refusal(run, kind: type[BaseException] = cdp.CdpError):

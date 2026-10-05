@@ -1,10 +1,11 @@
 """Checks for the connection to a profile's Chrome: the websocket, the proof the port is it, and launch.
 
-browser/README.md, "Agent Gotchas & Invariants", "Checks", says what each group needs and touches.
+browser/README.md, "Agent Gotchas & Invariants", "Checks", says what each group needs and touches. None needs Chrome:
+check_server.py's live group checks the connection to a real one.
 
-    python3 tests/check_browser.py [--headed]    (py -3 tests\\check_browser.py on Windows)
+    python3 tests/check_browser.py [--list] [GROUP ...]    (py -3 tests\\check_browser.py on Windows)
 
-The live group runs on a headless Chrome, which puts no window on screen; --headed runs it on one with windows.
+With no GROUP every group runs; --list names them all.
 """
 
 import json
@@ -20,15 +21,13 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import popups
-import throwaway
 from browser import system
-from browser.chrome import cdp, launch, opens
-from browser.protocol import mcp
+from browser.chrome import cdp, launch
 from browser.chrome.profiles import Profile
 from browser.protocol.ws import TEXT, WebSocket, WebSocketError
+from harness import chosen
 
-passed, failed, skipped = [], [], []
+passed, failed = [], []
 
 
 def check(name, condition, detail=""):
@@ -160,6 +159,26 @@ class Machine:
         return self.answer
 
 
+class Answering:
+    """A browser's DevTools socket, stood in for: it answers SystemInfo.getProcessInfo as the browser process pid."""
+
+    def __init__(self, pid):
+        self.pid, self.asked, self.closed = pid, [], False
+
+    def send(self, message):
+        self.asked.append(json.loads(message)["id"])
+
+    def recv(self):
+        return json.dumps({"id": self.asked.pop(0), "result": {"processInfo": [
+            {"id": self.pid, "type": "browser"}, {"id": self.pid + 1, "type": "renderer"}]}})
+
+    def settimeout(self, seconds):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
 VERSION = {"Browser": "Chrome/153.0.0.0", "webSocketDebuggerUrl": "ws://127.0.0.1:9/devtools/browser/x"}
 OTHER = "/Applications/Firefox.app/Contents/MacOS/firefox --remote-debugging-port=9223"
 STANDS_IN = ("listeners", "command", "switches", "chrome_owner")
@@ -271,6 +290,18 @@ def connecting():
 
         machine(listening=[777], processes={777: OTHER}, answer=VERSION)
         check("Browser refuses what require refuses", "pid 777" in refusal(lambda: cdp.Browser(profile)))
+        # The browser that answers has to be the folder's owner, asked over DevTools itself.
+        machine(owner=501, listening=[501], processes={501: school}, answer=VERSION)
+        other, owner = Answering(778), Answering(501)
+        answering = [other, owner]
+        cdp.WebSocket = lambda url, wait: answering.pop(0)
+        try:
+            said = refusal(lambda: cdp.Browser(profile))
+            check("a browser that answers as another pid than the folder's owner is refused, and let go",
+                  "is pid 778, not the School Chrome's" in said and other.closed, said)
+            check("and one that answers as the owner is taken, as that pid", cdp.Browser(profile).pid == 501)
+        finally:
+            cdp.WebSocket = WebSocket
 
         machine(owner=501, listening=[501], processes={501: school}, answer=VERSION)
         profile_list(folder, ["Default", "Profile 1"])
@@ -432,10 +463,6 @@ def connecting():
                 child.kill()
                 child.wait()
             decoy.close()
-        if sys.platform == "darwin":
-            owning_mac(folder, profile)
-        else:
-            owning_windows(folder, profile)
     finally:
         for name, value in zip(STANDS_IN, saved[0]):
             setattr(system, name, value)
@@ -655,55 +682,25 @@ def owning_windows(folder, profile):
         subprocess.Popen = saved[1]
 
 
-def live():
-    with throwaway.chrome() as profile:
-        if profile is None:
-            skipped.append("live")
-            print("\nskipped the live checks: Chrome is not installed at %s" % cdp.CHROME)
-            return
-        said = refusal(lambda: cdp.require(profile))
-        check("a Chrome of the checks' own, on a new folder, passes require", not said, said)
-        if said:
-            return
-        check("the folder's owner is the process on its port", cdp.listener(profile.port) == cdp.owner(profile.folder))
+def owning():
+    """How the OS finds a folder's owner, and how Chrome is started: owning_mac or owning_windows, on a folder of its
+    own."""
+    workdir = tempfile.mkdtemp(prefix="browser-owning-")
+    try:
+        folder = os.path.join(workdir, "Chrome-School")
+        os.makedirs(folder)
+        (owning_mac if sys.platform == "darwin" else owning_windows)(folder, Profile("School", folder, 9223))
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
-        # The browser that answers has to be the folder's owner, asked over DevTools itself.
-        saved = (cdp.require, cdp.owner)
-        proven = cdp.require(profile)
-        cdp.require, cdp.owner = (lambda p: proven), (lambda folder: 1)
-        try:
-            said = refusal(lambda: cdp.Browser(profile))
-            check("a browser that answers as another pid than the folder's owner is refused", "not the Check Chrome" in said, said)
-        finally:
-            cdp.require, cdp.owner = saved
 
-        browser = cdp.Browser(profile)
-        watch = popups.watch()
-        if watch is not None:
-            check("the pop-up watch counts the throwaway Chrome's windows", watch.watches(browser.pid))
-        target = opens.tab(browser)
-        try:
-            session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
-            browser.call("Page.enable", session=session)
-            browser.call("Page.navigate", session=session, url="data:text/html,<title>cdp scratch</title>")
-            said = refusal(lambda: browser.wait_for("Page.loadEventFired", session=session, timeout=5))
-            check("a tab's load is heard over the browser connection, not waited out", not said, said)
-        finally:
-            browser.call("Target.closeTarget", targetId=target)
-            browser.close()
-            if watch is not None:
-                popups.checked(watch, check)
-        said = refusal(lambda: cdp.check_folder(profile.folder))
-        check("once a tab has loaded its profile, the folder lists only Default and still passes", not said, said)
+GROUPS = {"framing": framing, "connecting": connecting, "owning": owning}
 
 
 if __name__ == "__main__":
-    mcp.log = lambda line: None  # chromes.quit_chrome logs the throwaway Chrome's quit, which would bury the results
-    throwaway.HEADED = "--headed" in sys.argv[1:]
-    framing()
-    print()
-    connecting()
-    print()
-    live()
-    print("\n%d passed, %d failed%s" % (len(passed), len(failed), ", live checks skipped" if skipped else ""))
+    for index, name in enumerate(chosen(sys.argv[1:], list(GROUPS), {})):
+        if index:
+            print()
+        GROUPS[name]()
+    print("\n%d passed, %d failed" % (len(passed), len(failed)))
     sys.exit(1 if failed else 0)

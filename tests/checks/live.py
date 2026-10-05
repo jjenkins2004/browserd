@@ -28,13 +28,16 @@ from browser.tabs.worker import Workers, returned
 from browser.tools import queue_tool, tab_tools
 from browser.protocol.ws import WebSocketError
 import popups
-from harness import call, check, open_session, refusal, rpc, serving, skipped, text_of, uid
+from harness import SERVE_POLL, call, check, open_session, parallel, refusal, rpc, serving, skipped, text_of, uid
 
 
 # Seconds more a live step may take on Windows, where Chrome draws a background tab about once a second, and a
 # screenshot, or chrome-devtools-mcp's wait after a click, waits for its next frame (measured: a capture's median 0.2s,
 # its longest 2.0s; on a Mac they come at once).
 FRAME_WAIT = 0.0 if sys.platform == "darwin" else 2.5
+# Seconds a live check's downloads.Folder and Watchers wait for each event, in place of downloads.POLL's 0.5, so one
+# stopped ends at once.
+EVENT_WAIT = 0.05
 
 
 def front_app():
@@ -50,7 +53,25 @@ def window_state(browser, target):
 
 
 def live(profile, state):
+    """The checks' Chrome as require and a Browser find it, and tabs on it."""
+    said = refusal(lambda: cdp.require(profile))
+    check("a Chrome of the checks' own, on a new folder, passes require", not said, said)
+    check("the folder's owner is the process on its port", cdp.listener(profile.port) == cdp.owner(profile.folder))
     connect = lambda: cdp.Browser(profile)
+    browser = connect()
+    target = opens.tab(browser)
+    try:
+        attached = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
+        browser.call("Page.enable", session=attached)
+        browser.call("Page.navigate", session=attached, url="data:text/html,<title>cdp scratch</title>")
+        said = refusal(lambda: browser.wait_for("Page.loadEventFired", session=attached, timeout=5))
+        check("a tab's load is heard over the browser connection, not waited out", not said, said)
+    finally:
+        browser.call("Target.closeTarget", targetId=target)
+        browser.close()
+    said = refusal(lambda: cdp.check_folder(profile.folder))
+    check("once a tab has loaded its profile, the folder lists only Default and still passes", not said, said)
+
     tabs, session = Tabs(state, cdp.Browser), open_session(state, "live", profile)
     before = front_app()
     tab, info = tabs.open(session, "data:text/html,<title>server scratch</title><h1>hi</h1>")
@@ -227,13 +248,11 @@ KINDS_JS = """(...els) => {
 }""" % (checked.FOCUS_JS, checked.READ_JS, checked.FILL_JS, checked.SELECT_JS)
 
 
-def checked_live(httpd, tabs, opened, session):
+def checked_live(served, open_tab):
     """The checked steps over the queue tool where only Chrome can say: checked's scripts over each kind of element
-    they treat differently, and pick, type, paste, a dialog, fills and a wait on widgets that take only trusted input
-    and a stand-in resume parser. steps.checked_offline has the rest of their logic."""
-    text, _ = call(httpd, "tab_open", session=session, url="data:text/html," + urllib.parse.quote(WIDGETS))
-    tab = text.split()[0]
-    opened.append(tab)
+    they treat differently, and pick, type, paste, fills and a wait on widgets that take only trusted input and a
+    stand-in resume parser. steps.checked_offline has the rest of their logic."""
+    httpd, session, tab = served.httpd, served.session, open_tab(WIDGETS)
     snapshot, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "take_snapshot"}])
     field = lambda role, label: uid(snapshot, role, label) or uid(snapshot, role, " " + label)
     check("a native select is one line in a view", 'combobox "Auth" = "Select" (2 options)' in snapshot, snapshot)
@@ -309,20 +328,6 @@ def checked_live(httpd, tabs, opened, session):
     check("and the clipboard was never written: its change count is what it was before the pastes",
           changes() == changed_before, str(changed_before))
 
-    warned = {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        {"tool": "click", "uid": field("button", "Warn me")}, {"tool": "handle_dialog", "action": "accept"}, warned])
-    took = re.search(r"^--- 1 click ok ([\d.]+)s$", text, re.M)
-    check("a confirm a handle_dialog step waits on is answered as it opens, so its click takes no 5s",
-          not is_error and took is not None and float(took.group(1)) < 3 + FRAME_WAIT
-          and 'the confirm "Sure?" was accepted as it opened' in text and returned(text.split("--- 3")[-1]) == "confirmed"
-          and "## Pages" not in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "click", "uid": field("button", "Warn me")}])
-    answered, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "handle_dialog", "action": "accept"}, warned])
-    check("a confirm no handle_dialog step waits on counts its click done, and the next queue answers it",
-          not is_error and "counts as done" in text and "--- 1 handle_dialog ok" in answered
-          and returned(answered.split("--- 2")[-1]) == "confirmed", text + answered)
-
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "fill", "uid": field("textbox", "Name"), "value": "Grace Hopper"},
         {"tool": "fill", "uid": field("textbox", "Cover letter"), "value": "A new letter"},
@@ -334,6 +339,33 @@ def checked_live(httpd, tabs, opened, session):
         {"tool": "wait", "gone": "Parsing your resume", "timeout": 10000},
         {"tool": "expect", "uid": field("textbox", "City"), "value": "Los Angeles"}])
     check("wait for text to go waits out a parser, and the field it fills is then filled", not is_error, text)
+
+
+# WIDGETS' Warn me button, on a page of its own: the 5s its confirm holds a click no handle_dialog step waits on runs
+# while the other blocks do.
+CONFIRM = ("<title>confirm scratch</title><button onclick=\"document.getElementById('warned').textContent = "
+           "confirm('Sure?') ? 'confirmed' : 'cancelled'\">Warn me</button><p id=warned></p>")
+
+
+def confirm_live(served, open_tab):
+    """A confirm a click opens: answered as it opens by a handle_dialog step right after the click, and with none,
+    holding the click chrome-devtools-mcp's 5s, then answered by the next queue."""
+    httpd, session, tab = served.httpd, served.session, open_tab(CONFIRM)
+    snapshot, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "take_snapshot"}])
+    warn = {"tool": "click", "uid": uid(snapshot, "button", "Warn me")}
+    warned = {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
+        warn, {"tool": "handle_dialog", "action": "accept"}, warned])
+    took = re.search(r"^--- 1 click ok ([\d.]+)s$", text, re.M)
+    check("a confirm a handle_dialog step waits on is answered as it opens, so its click takes no 5s",
+          not is_error and took is not None and float(took.group(1)) < 3 + FRAME_WAIT
+          and 'the confirm "Sure?" was accepted as it opened' in text and returned(text.split("--- 3")[-1]) == "confirmed"
+          and "## Pages" not in text, text)
+    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[warn])
+    answered, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "handle_dialog", "action": "accept"}, warned])
+    check("a confirm no handle_dialog step waits on counts its click done, and the next queue answers it",
+          not is_error and "counts as done" in text and "--- 1 handle_dialog ok" in answered
+          and returned(answered.split("--- 2")[-1]) == "confirmed", text + answered)
 
 
 def windows_live(profile, state):
@@ -373,17 +405,18 @@ def windows_live(profile, state):
 
 
 def queue_live(profile, state):
-    """The queue on three tabs, each with its own chrome-devtools-mcp: a and b on the same form page, and a page the
-    pointer steps press on."""
+    """The queue in blocks that run at once (harness.parallel), each on tabs of its own, each tab with its own
+    chrome-devtools-mcp: a and b on the same form page, a page the pointer steps press on, the checked steps' page,
+    and a confirm's."""
     if not os.path.exists(PACKAGE):
         skipped.append("queue")
-        print("\nskipped the live queue checks: chrome-devtools-mcp is not installed; run npm ci")
+        print("skipped the live queue checks: chrome-devtools-mcp is not installed; run npm ci")
         return
     node = shutil.which("node")
     problem = "node is not installed" if node is None else devtools_module._node_problem(node)
     if problem:
         skipped.append("queue")
-        print("\nskipped the live queue checks: %s" % problem)
+        print("skipped the live queue checks: %s" % problem)
         return
     workdir = tempfile.mkdtemp(prefix="browser-queue-")
     devtools = Devtools(os.path.join(workdir, "tools.log"))
@@ -395,242 +428,275 @@ def queue_live(profile, state):
           {"take_snapshot", "fill", "fill_form", "click", "type_text", "press_key", "upload_file", "evaluate_script"} <= set(allowed))
     # The server's own way with the throwaway Chrome's downloads, so the queue's download checks show chrome-devtools-mcp
     # leaves them in the profile's folder.
+    poll, downloads.POLL = downloads.POLL, EVENT_WAIT
     folder = live_folder(profile, os.path.join(workdir, "downloads"))
     tabs, workers = Tabs(state, cdp.Browser), Workers(workdir, downloads_of=lambda profile: folder)
     root = os.path.join(workdir, "calls")
     httpd = serving(tab_tools(state, tabs, workers) + [queue_tool(state, tabs, workers, allowed, root)],
                     server.NAME)
-    session = call(httpd, "session_start", profile=profile.name, label="queue live")[0].split()[1].rstrip(",")
-    mine = state.session(session)
-    home = os.path.join(root, profile.name, sessions.folder(mine))
-    opened = []
     try:
-        def open_tab(html):
-            text, _ = call(httpd, "tab_open", session=session, url="data:text/html," + urllib.parse.quote(html))
-            opened.append(text.split()[0])
-            return opened[-1]
-
-        def close_tabs(*closing):
-            call(httpd, "tab_close", session=session, tabs=list(closing))
-            for tab in closing:
-                opened.remove(tab)
-
-        def queue(tab, *given):
-            return call(httpd, "queue", session=session, tab=tab, steps=list(given))
-
-        def at_once(*runs):
-            threads = [threading.Thread(target=run, args=args) for run, *args in runs]
-            for thread in threads:
-                thread.start()
-            return threads
-
-        name = "browserd-check-%d.txt" % os.getpid()
-        same = FORM % (name, urllib.parse.quote("<label for=x>Inside</label><input id=x>"))
-        a, b = open_tab(same), open_tab(same)  # the same URL, so pairing has to tell them apart
-        reports = {}
-
-        def first(tab, who):  # the tab's first queue starts and pairs its own chrome-devtools-mcp
-            snapshot = queue(tab, {"tool": "take_snapshot"})
-            fields = lambda label: uid(snapshot[0], "textbox", label)
-            reports[who] = snapshot, queue(tab, {"tool": "fill", "uid": fields("Name"), "value": "Agent " + who},
-                                           {"tool": "type", "uid": fields("Email"), "text": who.lower() + "@example.com"})
-
-        for thread in at_once((first, a, "A"), (first, b, "B")):
-            thread.join()
-        (snap_a, error_a), filled_a = reports["A"]
-        (snap_b, _), filled_b = reports["B"]
-        check("a queue's first step reaches its tab through a new chrome-devtools-mcp", not error_a and "textbox \"Name\"" in snap_a, snap_a)
-        saved = re.search(r"\(view; saved whole to (\S+)\)$", snap_a, re.M)
-        check("its snapshot is a view, the whole one saved in the tab's record folder",
-              saved is not None and os.path.dirname(saved.group(1)) == os.path.join(home, a)
-              and "RootWebArea" in open(saved.group(1), encoding="utf-8").read(), snap_a)
-        check("two queues on two tabs at once both succeed", not filled_a[1] and not filled_b[1], repr((filled_a, filled_b)))
-        read = "JSON.stringify([document.getElementById('n').value, document.getElementById('e').value])"
-        for tab, who in ((a, "A"), (b, "B")):
-            # Read over the server's own connection, not through the pairing this checks.
-            browser = cdp.Browser(profile)
-            try:
-                attached = browser.call("Target.attachToTarget", targetId=tabs.target(mine, tab), flatten=True)["sessionId"]
-                held = json.loads(browser.call("Runtime.evaluate", session=attached, expression=read)["result"]["value"])
-            finally:
-                browser.close()
-            check("tab %s holds only its own queue's values, typed keys included" % who,
-                  held == ["Agent " + who, who.lower() + "@example.com"], repr(held))
-
-        def selected_by_itself(tab):
-            """Whether a tab's page is the one its chrome-devtools-mcp selected on its own: the first it lists."""
-            paired = workers.get(tab, tabs.target(mine, tab), profile)
-            listed = re.search(r"^(\d+): ", paired._devtools.text("list_pages", {}), re.M) if paired._devtools else None
-            return listed is None or int(listed.group(1)) == paired.page_id
-
-        # A process sets its 5s on a page only once it selects it, and selects on its own the first page it lists, in
-        # Chrome's order, not the order tabs opened; both processes list in that order, so at most one of a and b is
-        # that page. The click goes to one that is not, and takes its 5s while the other's checks run.
-        slow = next((tab for tab in (b, a) if not selected_by_itself(tab)), b)
-        form = a if slow == b else b
-        snapshots = {a: snap_a, b: snap_b}
-        snap, clicked = snapshots[form], {}
-
-        def click_never():
-            began = time.monotonic()
-            clicked["text"] = queue(slow, {"tool": "click", "uid": uid(snapshots[slow], "button", "Never")})
-            clicked["took"] = time.monotonic() - began
-
-        never = at_once((click_never,))
-
-        # Taken while the caret of the box the form tab's typing left the focus in blinks, so the headless Chrome draws
-        # that tab: chrome-devtools-mcp's full-page capture waits for a frame, and of a tab Chrome is not drawing, past
-        # any timeout.
-        status, answer = rpc(httpd, "tools/call", {"name": "queue", "arguments": {
-            "session": session, "tab": form, "steps": [{"tool": "take_screenshot", "fullPage": True}]}})
-        content = (answer or {}).get("result", {}).get("content", [])
-        text = text_of(content)
-        saved = re.search(r"Saved screenshot to (.+)\.$", text, re.M)
-        where = saved.group(1) if saved else ""
-        check("a take_screenshot is saved in the tab's record folder",
-              os.path.realpath(os.path.dirname(where)) == os.path.realpath(os.path.join(home, form)) and os.path.getsize(where) > 0, text)
-        check("and not sent back as an image", all(item.get("type") == "text" for item in content), repr([i.get("type") for i in content]))
-
-        with popups.allowing():
-            text, is_error = queue(form, {"tool": "click", "uid": uid(snap, "link", "Download")},
-                                   {"tool": "click", "uid": uid(snap, "link", "Popup download")})
-        own, _, popped = text.partition("\n--- 2 click")
-        went = re.search(r"^--- downloaded %s to (.+)$" % re.escape(name), own, re.M)
-        check("a step that downloads a file says where it went, in the step's own report: the profile's downloads "
-              "folder, though chrome-devtools-mcp drives the tab",
-              not is_error and went is not None and os.path.dirname(went.group(1)) == folder.folder
-              and open(went.group(1), encoding="utf-8").read() == "hello", text)
-        went = re.search(r"^--- downloaded .+ to (.+)$", popped, re.M)
-        check("and so does one begun in a popup the step opened",
-              not is_error and went is not None and os.path.dirname(went.group(1)) == folder.folder
-              and open(went.group(1), encoding="utf-8").read() == "hello popup", text)
-
-        inside = uid(snap, "textbox", "Inside")
-        check("a field inside a cross-origin frame shows in the snapshot", bool(inside), snap)
-        text, is_error = queue(form, {"tool": "fill", "uid": inside, "value": "reached"},
-                               {"tool": "evaluate_script", "function": "() => document.querySelector('iframe') !== null"})
-        check("and fills", not is_error and "--- 1 fill ok" in text, text)
-
-        born = uid(snap, "Date", "Born")
-        check("a date field is one line in a view, with no Month, Day or Year part to fill",
-              bool(born) and "spinbutton" not in snap, snap)
-        full, _ = queue(form, {"tool": "take_snapshot", "full": True})
-        began = time.monotonic()
-        text, is_error = queue(form, {"tool": "fill", "uid": uid(full, "spinbutton", "Month"), "value": "08"})
-        check("fill on a date's Month part is refused at once, naming the field to fill",
-              is_error and time.monotonic() - began < 3 and "the Date line above it" in text, text[:300])
-        text, is_error = queue(form, {"tool": "fill", "uid": born, "value": "1957-02-29"})
-        check("fill on a date given a day that does not exist, as 1957-02-29, is refused, since Chrome would leave it "
-              "empty", is_error and 'leaves empty given "1957-02-29"' in text, text[:300])
-        text, is_error = queue(form, {"tool": "fill", "uid": born, "value": "1957-08-01"},
-                               {"tool": "expect", "uid": born, "value": "1957-08-01"})
-        check("fill on the date field itself, as 1957-08-01, takes", not is_error, text)
-
-        for thread in never:
-            thread.join()
-        (text, is_error), took = clicked.get("text", ("", False)), clicked.get("took", 0.0)
-        check("a click on a disabled button fails after chrome-devtools-mcp's 5s, not Puppeteer's 30s, on a tab whose "
-              "page its chrome-devtools-mcp did not select on its own",
-              is_error and took < 15 and "did not become interactive" in text and not selected_by_itself(slow),
-              "%.1fs: %s" % (took, text[:120]))
-        close_tabs(a, b)
-
-        pad = open_tab(POINTER)
-        text, is_error = queue(pad, {"tool": "move_at", "x": 50, "y": 60}, {"tool": "click_down", "on": ""},
-                               {"tool": "move_at", "x": 150, "y": 160}, {"tool": "click_up"},
-                               {"tool": "evaluate_script", "function": "() => seen"})
-        check("a drag is a press at one point, a move holding the button, and a let-go at another",
-              not is_error and returned(text) == [["mousemove", 50, 60, 0], ["mousedown", 50, 60, 1],
-                                                  ["mousemove", 150, 160, 1], ["mouseup", 150, 160, 0]], text)
-        took = sum(float(s) for s in re.findall(r"^--- [1-4] \S+ ok ([\d.]+)s$", text, re.M))
-        check("and its four pointer steps take under 2s, and a frame's wait on Windows", took < 2 + FRAME_WAIT, "%.1fs" % took)
-
-        # The checks' own waits for a page held by an open alert, so waiting one out takes 2s, not 5s.
-        waits, wait = (pointer.DIALOG_WAIT, screenshot.ANSWER_WAIT), 2.0
-        pointer.DIALOG_WAIT = screenshot.ANSWER_WAIT = wait
-        try:
-            began = time.monotonic()
-            text, is_error = queue(pad, {"tool": "move_at", "x": 540, "y": 70}, {"tool": "click_down", "on": "Warn"},
-                                   {"tool": "click_up"})
-            took = time.monotonic() - began
-            check("a click that opens an alert nothing waits on counts as done after pointer.DIALOG_WAIT, naming it",
-                  not is_error and 'the alert "hi" it opened blocks the page' in text
-                  and wait - 1 < took < wait + 5 + FRAME_WAIT, "%.1fs: %s" % (took, text))
-            check("and the press says it landed on the button, by the name its view gives it",
-                  'pressed the left button at 540,70 on button "Warn"' in text, text)
-            for step in ({"tool": "move_at", "x": 540, "y": 70}, {"tool": "take_screenshot"}):
-                began = time.monotonic()
-                text, is_error = queue(pad, step)
-                took = time.monotonic() - began
-                check("with it open, a %s fails after its wait, saying to answer it first" % step["tool"],
-                      is_error and "as when a dialog is open on it" in text and took < wait + 5,
-                      "%.1fs: %s" % (took, text[:300]))
-        finally:
-            pointer.DIALOG_WAIT, screenshot.ANSWER_WAIT = waits
-        text, is_error = queue(pad, {"tool": "handle_dialog", "action": "accept"})
-        check("and a handle_dialog step in the next queue answers it", not is_error, text)
-        began = time.monotonic()
-        text, is_error = queue(pad, {"tool": "click_down", "on": "Warn"}, {"tool": "click_up"},
-                               {"tool": "handle_dialog", "action": "accept"})
-        took = time.monotonic() - began
-        check("a click whose alert a handle_dialog step right after waits on is answered as it opens",
-              not is_error and "was accepted as it opened" in text and took < 3, "%.1fs: %s" % (took, text))
-
-        clicks = {"tool": "evaluate_script", "function": "() => clicks"}
-        text, is_error = queue(pad, {"tool": "evaluate_script", "function": "() => cover()"},
-                               {"tool": "move_at", "x": 300, "y": 60}, {"tool": "click_down", "on": "Buy"},
-                               {"tool": "click_up"}, clicks)
-        check("a press on a button under a layer raised since is not pressed, saying what is there, and its queue stops",
-              is_error and 'Not pressed: at 300,60 is text "Publish now", not "Buy"' in text
-              and "not run: 4 click_up, 5 evaluate_script" in text, text)
-        text, is_error = queue(pad, {"tool": "move_at", "x": 300, "y": 60}, {"tool": "click_down", "on": ""},
-                               {"tool": "click_up"}, clicks, {"tool": "evaluate_script", "function": "() => modal.remove()"})
-        check("and with on \"\" it is pressed there, on the layer",
-              not is_error and returned(text) == ["modal"] and 'on text "Publish now"' in text, text)
-        text, is_error = queue(pad, {"tool": "move_at", "x": 430, "y": 60}, {"tool": "click_down", "on": "Double"},
-                               {"tool": "click_up"}, {"tool": "click_down", "count": 2}, {"tool": "click_up", "count": 2},
-                               clicks)
-        check("a double click is two presses, the second with count 2 and no on", not is_error and "dbl" in returned(text),
-              text)
-
-        status, answer = rpc(httpd, "tools/call", {"name": "queue", "arguments": {"session": session, "tab": pad, "steps": [
-            {"tool": "evaluate_script", "function": "() => { scrollTo(0, 500); return [Math.round(visualViewport.width), Math.round(visualViewport.height)] }"},
-            {"tool": "take_screenshot", "format": "png"}]}})
-        content = (answer or {}).get("result", {}).get("content", [])
-        size = returned(text_of(content))
-        images = [item for item in content if item.get("type") == "image"]
-        box, shape = red_box(base64.b64decode(images[0]["data"]), 300) if images else (None, None)
-        check("a viewport screenshot comes back as an image of the visible viewport (no scrollbar), one pixel per CSS pixel, the scroll offset included",
-              images and images[0]["mimeType"] == "image/png" and shape == tuple(size or ()) and box == [300, 200, 339, 239],
-              "%r %r %r" % (size, shape, box))
-        text, is_error = queue(pad, {"tool": "move_at", "x": 310, "y": 225}, {"tool": "click_down", "on": ""},
-                               {"tool": "click_up"}, {"tool": "evaluate_script", "function": "() => hits"})
-        check("move_at, click_down and click_up at a point read off that screenshot click there, with trusted input",
-              not is_error and returned(text) == [[True, 10, 25]], text)
-        check("and the press says it landed on a canvas", "at 310,225 on canvas, which has no words" in text, text)
-        close_tabs(pad)
-
-        checked_live(httpd, tabs, opened, session)
+        served = Queuing(profile, state, httpd, tabs, workers, folder, root)
+        parallel(*(served.block(run) for run in (forms_live, pointer_live, checked_live, confirm_live)))
 
         numbered, total = True, 0
-        for tab in os.listdir(home):
-            names = os.listdir(os.path.join(home, tab))
+        for tab in os.listdir(served.home):
+            names = os.listdir(os.path.join(served.home, tab))
             calls = [name[:-len(".json")] for name in names if name.endswith(".json")]
             numbered = numbered and len({name.split("-")[0] for name in calls}) == len(calls)
             numbered = numbered and all(name + ".txt" in names for name in calls)
             total += len(calls)
         check("every call is recorded in its tab's record folder, with its own number and both its files",
-              numbered and total > 20 and set(os.listdir(home)) >= {a, b, pad}, repr(os.listdir(home)))
+              numbered and total > 20 and set(os.listdir(served.home)) >= set(served.every), repr(os.listdir(served.home)))
     finally:
-        for tab in opened:
-            call(httpd, "tab_close", session=session, tabs=[tab])
         workers.stop_all()
         folder.stop()
         folder.join(5)
+        downloads.POLL = poll
         remove_strays("browserd-check-")
         httpd.shutdown()
         httpd.server_close()
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+class Queuing:
+    """queue_live's server, which its blocks share, and what they read besides its replies: the profile, its Tabs and
+    Workers, the downloads Folder, the session and its record folder."""
+
+    def __init__(self, profile, state, httpd, tabs, workers, folder, root):
+        self.profile, self.httpd, self.tabs, self.workers, self.folder = profile, httpd, tabs, workers, folder
+        self.session = call(httpd, "session_start", profile=profile.name, label="queue live")[0].split()[1].rstrip(",")
+        self.mine = state.session(self.session)
+        self.home = os.path.join(root, profile.name, sessions.folder(self.mine))
+        self.every = []  # every tab a block opened, for the record check after them
+
+    def queue(self, tab, *given):
+        return call(self.httpd, "queue", session=self.session, tab=tab, steps=list(given))
+
+    def content(self, tab, *given):
+        """The content of a queue's reply, its images included."""
+        _, answer = rpc(self.httpd, "tools/call", {"name": "queue", "arguments": {
+            "session": self.session, "tab": tab, "steps": list(given)}})
+        return (answer or {}).get("result", {}).get("content", [])
+
+    def block(self, run):
+        """run(self, open_tab) as a block for parallel: open_tab opens a page's HTML in a tab of run's own and returns
+        its id, and each tab it opened is closed as it ends."""
+        def scratch():
+            opened = []
+
+            def open_tab(html):
+                text, _ = call(self.httpd, "tab_open", session=self.session,
+                               url="data:text/html," + urllib.parse.quote(html))
+                opened.append(text.split()[0])
+                self.every.append(opened[-1])
+                return opened[-1]
+
+            try:
+                run(self, open_tab)
+            finally:
+                for tab in opened:
+                    call(self.httpd, "tab_close", session=self.session, tabs=[tab])
+
+        scratch.__name__ = run.__name__
+        return scratch
+
+
+def at_once(*runs):
+    """A started thread for each (callable, *args)."""
+    threads = [threading.Thread(target=run, args=args) for run, *args in runs]
+    for thread in threads:
+        thread.start()
+    return threads
+
+
+def forms_live(served, open_tab):
+    """Tabs a and b on the same form page, their first queues at once: pairing, a full-page screenshot, downloads, a
+    field in a cross-origin frame, a date field, and a click on a disabled button."""
+    queue, tabs, mine, home, profile = served.queue, served.tabs, served.mine, served.home, served.profile
+    name = "browserd-check-%d.txt" % os.getpid()
+    same = FORM % (name, urllib.parse.quote("<label for=x>Inside</label><input id=x>"))
+    a, b = open_tab(same), open_tab(same)  # the same URL, so pairing has to tell them apart
+    reports = {}
+
+    def first(tab, who):  # the tab's first queue starts and pairs its own chrome-devtools-mcp
+        snapshot = queue(tab, {"tool": "take_snapshot"})
+        fields = lambda label: uid(snapshot[0], "textbox", label)
+        reports[who] = snapshot, queue(tab, {"tool": "fill", "uid": fields("Name"), "value": "Agent " + who},
+                                       {"tool": "type", "uid": fields("Email"), "text": who.lower() + "@example.com"})
+
+    for thread in at_once((first, a, "A"), (first, b, "B")):
+        thread.join()
+    (snap_a, error_a), filled_a = reports["A"]
+    (snap_b, _), filled_b = reports["B"]
+    check("a queue's first step reaches its tab through a new chrome-devtools-mcp", not error_a and "textbox \"Name\"" in snap_a, snap_a)
+    saved = re.search(r"\(view; saved whole to (\S+)\)$", snap_a, re.M)
+    check("its snapshot is a view, the whole one saved in the tab's record folder",
+          saved is not None and os.path.dirname(saved.group(1)) == os.path.join(home, a)
+          and "RootWebArea" in open(saved.group(1), encoding="utf-8").read(), snap_a)
+    check("two queues on two tabs at once both succeed", not filled_a[1] and not filled_b[1], repr((filled_a, filled_b)))
+    read = "JSON.stringify([document.getElementById('n').value, document.getElementById('e').value])"
+    for tab, who in ((a, "A"), (b, "B")):
+        # Read over the server's own connection, not through the pairing this checks.
+        browser = cdp.Browser(profile)
+        try:
+            attached = browser.call("Target.attachToTarget", targetId=tabs.target(mine, tab), flatten=True)["sessionId"]
+            held = json.loads(browser.call("Runtime.evaluate", session=attached, expression=read)["result"]["value"])
+        finally:
+            browser.close()
+        check("tab %s holds only its own queue's values, typed keys included" % who,
+              held == ["Agent " + who, who.lower() + "@example.com"], repr(held))
+
+    def selected_by_itself(tab):
+        """Whether a tab's page is the one its chrome-devtools-mcp selected on its own: the first it lists."""
+        paired = served.workers.get(tab, tabs.target(mine, tab), profile)
+        listed = re.search(r"^(\d+): ", paired._devtools.text("list_pages", {}), re.M) if paired._devtools else None
+        return listed is None or int(listed.group(1)) == paired.page_id
+
+    # A process sets its 5s on a page only once it selects it, and selects on its own the first page it lists, in
+    # Chrome's order, not the order tabs opened; both processes list in that order, so at most one of a and b is
+    # that page. The click goes to one that is not, and takes its 5s while the other's checks run.
+    slow = next((tab for tab in (b, a) if not selected_by_itself(tab)), b)
+    form = a if slow == b else b
+    snapshots = {a: snap_a, b: snap_b}
+    snap, clicked = snapshots[form], {}
+
+    def click_never():
+        began = time.monotonic()
+        clicked["text"] = queue(slow, {"tool": "click", "uid": uid(snapshots[slow], "button", "Never")})
+        clicked["took"] = time.monotonic() - began
+
+    never = at_once((click_never,))
+
+    # Taken while the caret of the box the form tab's typing left the focus in blinks, so the headless Chrome draws
+    # that tab: chrome-devtools-mcp's full-page capture waits for a frame, and of a tab Chrome is not drawing, past
+    # any timeout.
+    content = served.content(form, {"tool": "take_screenshot", "fullPage": True})
+    text = text_of(content)
+    saved = re.search(r"Saved screenshot to (.+)\.$", text, re.M)
+    where = saved.group(1) if saved else ""
+    check("a take_screenshot is saved in the tab's record folder",
+          os.path.realpath(os.path.dirname(where)) == os.path.realpath(os.path.join(home, form)) and os.path.getsize(where) > 0, text)
+    check("and not sent back as an image", all(item.get("type") == "text" for item in content), repr([i.get("type") for i in content]))
+
+    with popups.allowing():
+        text, is_error = queue(form, {"tool": "click", "uid": uid(snap, "link", "Download")},
+                               {"tool": "click", "uid": uid(snap, "link", "Popup download")})
+    own, _, popped = text.partition("\n--- 2 click")
+    went = re.search(r"^--- downloaded %s to (.+)$" % re.escape(name), own, re.M)
+    check("a step that downloads a file says where it went, in the step's own report: the profile's downloads "
+          "folder, though chrome-devtools-mcp drives the tab",
+          not is_error and went is not None and os.path.dirname(went.group(1)) == served.folder.folder
+          and open(went.group(1), encoding="utf-8").read() == "hello", text)
+    went = re.search(r"^--- downloaded .+ to (.+)$", popped, re.M)
+    check("and so does one begun in a popup the step opened",
+          not is_error and went is not None and os.path.dirname(went.group(1)) == served.folder.folder
+          and open(went.group(1), encoding="utf-8").read() == "hello popup", text)
+
+    inside = uid(snap, "textbox", "Inside")
+    check("a field inside a cross-origin frame shows in the snapshot", bool(inside), snap)
+    text, is_error = queue(form, {"tool": "fill", "uid": inside, "value": "reached"},
+                           {"tool": "evaluate_script", "function": "() => document.querySelector('iframe') !== null"})
+    check("and fills", not is_error and "--- 1 fill ok" in text, text)
+
+    born = uid(snap, "Date", "Born")
+    check("a date field is one line in a view, with no Month, Day or Year part to fill",
+          bool(born) and "spinbutton" not in snap, snap)
+    full, _ = queue(form, {"tool": "take_snapshot", "full": True})
+    began = time.monotonic()
+    text, is_error = queue(form, {"tool": "fill", "uid": uid(full, "spinbutton", "Month"), "value": "08"})
+    check("fill on a date's Month part is refused at once, naming the field to fill",
+          is_error and time.monotonic() - began < 3 and "the Date line above it" in text, text[:300])
+    text, is_error = queue(form, {"tool": "fill", "uid": born, "value": "1957-02-29"})
+    check("fill on a date given a day that does not exist, as 1957-02-29, is refused, since Chrome would leave it "
+          "empty", is_error and 'leaves empty given "1957-02-29"' in text, text[:300])
+    text, is_error = queue(form, {"tool": "fill", "uid": born, "value": "1957-08-01"},
+                           {"tool": "expect", "uid": born, "value": "1957-08-01"})
+    check("fill on the date field itself, as 1957-08-01, takes", not is_error, text)
+
+    for thread in never:
+        thread.join()
+    (text, is_error), took = clicked.get("text", ("", False)), clicked.get("took", 0.0)
+    check("a click on a disabled button fails after chrome-devtools-mcp's 5s, not Puppeteer's 30s, on a tab whose "
+          "page its chrome-devtools-mcp did not select on its own",
+          is_error and took < 15 and "did not become interactive" in text and not selected_by_itself(slow),
+          "%.1fs: %s" % (took, text[:120]))
+
+
+def pointer_live(served, open_tab):
+    """The pointer steps on a page that records what reaches it: a drag, a click whose alert holds the page, a press
+    under a layer raised since, a double click, and a click at a point read off a viewport screenshot. No other block
+    takes a pointer step or a viewport screenshot, so the waits this one cuts are its own."""
+    queue, pad = served.queue, open_tab(POINTER)
+    text, is_error = queue(pad, {"tool": "move_at", "x": 50, "y": 60}, {"tool": "click_down", "on": ""},
+                           {"tool": "move_at", "x": 150, "y": 160}, {"tool": "click_up"},
+                           {"tool": "evaluate_script", "function": "() => seen"})
+    check("a drag is a press at one point, a move holding the button, and a let-go at another",
+          not is_error and returned(text) == [["mousemove", 50, 60, 0], ["mousedown", 50, 60, 1],
+                                              ["mousemove", 150, 160, 1], ["mouseup", 150, 160, 0]], text)
+    took = sum(float(s) for s in re.findall(r"^--- [1-4] \S+ ok ([\d.]+)s$", text, re.M))
+    check("and its four pointer steps take under 2s, and a frame's wait on Windows", took < 2 + FRAME_WAIT, "%.1fs" % took)
+
+    # The checks' own waits for a page held by an open alert, so waiting one out takes 2s, not 5s.
+    waits, wait = (pointer.DIALOG_WAIT, screenshot.ANSWER_WAIT), 2.0
+    pointer.DIALOG_WAIT = screenshot.ANSWER_WAIT = wait
+    try:
+        began = time.monotonic()
+        text, is_error = queue(pad, {"tool": "move_at", "x": 540, "y": 70}, {"tool": "click_down", "on": "Warn"},
+                               {"tool": "click_up"})
+        took = time.monotonic() - began
+        check("a click that opens an alert nothing waits on counts as done after pointer.DIALOG_WAIT, naming it",
+              not is_error and 'the alert "hi" it opened blocks the page' in text
+              and wait - 1 < took < wait + 5 + FRAME_WAIT, "%.1fs: %s" % (took, text))
+        check("and the press says it landed on the button, by the name its view gives it",
+              'pressed the left button at 540,70 on button "Warn"' in text, text)
+        for step in ({"tool": "move_at", "x": 540, "y": 70}, {"tool": "take_screenshot"}):
+            began = time.monotonic()
+            text, is_error = queue(pad, step)
+            took = time.monotonic() - began
+            check("with it open, a %s fails after its wait, saying to answer it first" % step["tool"],
+                  is_error and "as when a dialog is open on it" in text and took < wait + 5,
+                  "%.1fs: %s" % (took, text[:300]))
+    finally:
+        pointer.DIALOG_WAIT, screenshot.ANSWER_WAIT = waits
+    text, is_error = queue(pad, {"tool": "handle_dialog", "action": "accept"})
+    check("and a handle_dialog step in the next queue answers it", not is_error, text)
+    began = time.monotonic()
+    text, is_error = queue(pad, {"tool": "click_down", "on": "Warn"}, {"tool": "click_up"},
+                           {"tool": "handle_dialog", "action": "accept"})
+    took = time.monotonic() - began
+    check("a click whose alert a handle_dialog step right after waits on is answered as it opens",
+          not is_error and "was accepted as it opened" in text and took < 3, "%.1fs: %s" % (took, text))
+
+    clicks = {"tool": "evaluate_script", "function": "() => clicks"}
+    text, is_error = queue(pad, {"tool": "evaluate_script", "function": "() => cover()"},
+                           {"tool": "move_at", "x": 300, "y": 60}, {"tool": "click_down", "on": "Buy"},
+                           {"tool": "click_up"}, clicks)
+    check("a press on a button under a layer raised since is not pressed, saying what is there, and its queue stops",
+          is_error and 'Not pressed: at 300,60 is text "Publish now", not "Buy"' in text
+          and "not run: 4 click_up, 5 evaluate_script" in text, text)
+    text, is_error = queue(pad, {"tool": "move_at", "x": 300, "y": 60}, {"tool": "click_down", "on": ""},
+                           {"tool": "click_up"}, clicks, {"tool": "evaluate_script", "function": "() => modal.remove()"})
+    check("and with on \"\" it is pressed there, on the layer",
+          not is_error and returned(text) == ["modal"] and 'on text "Publish now"' in text, text)
+    text, is_error = queue(pad, {"tool": "move_at", "x": 430, "y": 60}, {"tool": "click_down", "on": "Double"},
+                           {"tool": "click_up"}, {"tool": "click_down", "count": 2}, {"tool": "click_up", "count": 2},
+                           clicks)
+    check("a double click is two presses, the second with count 2 and no on", not is_error and "dbl" in returned(text),
+          text)
+
+    content = served.content(pad, {"tool": "evaluate_script", "function": "() => { scrollTo(0, 500); return [Math.round(visualViewport.width), Math.round(visualViewport.height)] }"},
+                             {"tool": "take_screenshot", "format": "png"})
+    size = returned(text_of(content))
+    images = [item for item in content if item.get("type") == "image"]
+    box, shape = red_box(base64.b64decode(images[0]["data"]), 300) if images else (None, None)
+    check("a viewport screenshot comes back as an image of the visible viewport (no scrollbar), one pixel per CSS pixel, the scroll offset included",
+          images and images[0]["mimeType"] == "image/png" and shape == tuple(size or ()) and box == [300, 200, 339, 239],
+          "%r %r %r" % (size, shape, box))
+    text, is_error = queue(pad, {"tool": "move_at", "x": 310, "y": 225}, {"tool": "click_down", "on": ""},
+                           {"tool": "click_up"}, {"tool": "evaluate_script", "function": "() => hits"})
+    check("move_at, click_down and click_up at a point read off that screenshot click there, with trusted input",
+          not is_error and returned(text) == [[True, 10, 25]], text)
+    check("and the press says it landed on a canvas", "at 310,225 on canvas, which has no words" in text, text)
 
 
 def remove_strays(*prefixes):
@@ -677,15 +743,16 @@ def downloads_live(profile):
     begins at once saved with no Save As window, and the folder set again when its connection drops."""
     workdir = tempfile.mkdtemp(prefix="browser-downloads-live-")
     files = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Attachments)
-    threading.Thread(target=files.serve_forever, daemon=True).start()
+    threading.Thread(target=files.serve_forever, args=(SERVE_POLL,), daemon=True).start()
     base = "http://127.0.0.1:%d" % files.server_address[1]
+    retry, poll = downloads.RETRY, downloads.POLL
+    downloads.POLL = EVENT_WAIT
     # As the server has it: Chromes finds the running Chrome and starts its Folder.
     keeper = chromes.Chromes(workdir)
     keeper.adopt([profile])
     folder = keeper.downloads(profile)
     browser = cdp.Browser(profile)
     opened = []
-    retry = downloads.RETRY
 
     def begin(*names):
         """Open a page, begin a download of each name from it at once, and return which of them the folder holds."""
@@ -741,13 +808,13 @@ def downloads_live(profile):
         check("when the Folder's connection drops, it sets the folder again, and downloads still go there",
               again and held == [name], repr(held))
     finally:
-        downloads.RETRY = retry
         for target in opened:
             with contextlib.suppress(cdp.CdpError, WebSocketError, OSError):
                 browser.call("Target.closeTarget", targetId=target)
         browser.close()
         folder.stop()
         folder.join(5)
+        downloads.RETRY, downloads.POLL = retry, poll
         remove_strays("browserd-many-", "browserd-again-")
         files.shutdown()
         files.server_close()
