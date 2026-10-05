@@ -89,7 +89,9 @@ browserd call and has them from its next turn; one that connected to a browserd 
     python3 tests/check_browser.py    framing, a profile's Chrome proof, launch; each OS's own owner and launch checks
     python3 tests/check_server.py     protocol, tab ids, sessions, focus, queue, recording, profiles, page, service
 
-On Windows, `py -3 tests\check_browser.py` and `py -3 tests\check_server.py`.
+On Windows, `py -3 tests\check_browser.py` and `py -3 tests\check_server.py`. They take about 0.4s and 18s. Either
+runs only the groups named (`--list` lists them), as `check_server.py offline` or `check_server.py queue_live`.
 
 The live groups start a Chrome of their own on a new folder and a free port, and quit it after, so
-they never touch a profile's Chrome; `check_server.py`'s queue checks need `npm ci` done.
+they never touch a profile's Chrome; `check_server.py`'s queue checks need `npm ci` done. That Chrome is headless, so no
+check puts a window on screen; `check_server.py --headed` adds the checks of windows and the focus, which do.

@@ -75,7 +75,7 @@ parts.
     ../tests/check_server.py    runs checks/'s groups in order: protocol, tab ids, sessions, focus, queue, recording, profiles, page, service; live tabs, queue
     ../tests/checks/            a module per folder here (protocol, tabs, chrome, steps, records, tools, dashboard, cli), and live.py, every live group
     ../tests/harness.py         check and its tallies, the stand-in profile and state, a served MCP to call, the shared stand-ins
-    ../tests/check_browser.py   framing, a profile's Chrome proof, launch; live proof, tab load
+    ../tests/check_browser.py   framing, a profile's Chrome proof, launch; each OS's owner and launch checks
     ../tests/throwaway.py       the live checks' own Chrome, on a new folder and a free port
     ../tests/popups.py          on Windows, every window that comes on screen or takes the focus while checks run
 
@@ -697,7 +697,10 @@ same tabs under the same ids. A crash leaves the same.
   step's arguments are recorded in the tab's record folder, and a refused call's in `../.run/server.log` too.
 - **Checks.** Each component is checked for what it does against stand-ins, offline, and only what needs a real
   Chrome or chrome-devtools-mcp is checked live, once: the offline groups take about 3s, the whole of
-  `check_server.py` about 40s, `check_browser.py` about 1.5s.
+  `check_server.py` about 18s, `check_browser.py` about 0.4s. Either script runs groups by name (`[--list] [GROUP
+  ...]`; `check_server.py` also takes `--headed`): each offline group by its function name without `_offline`,
+  `live`, `windows_live`, `queue_live`, `downloads_live`, and `offline` and `live:all`. The checks' Chrome starts
+  only for a live group; `check_browser.py`'s groups are `framing`, `connecting` and `owning`, none with a Chrome.
   - **Without Chrome:** `framing` and `protocol` need nothing. `connecting` stands in for the OS
     (`system.listeners`, `command`, `switches`, `chrome_owner`) and the port, then asks the real OS about ports it
     holds itself; `owning_mac` checks the lock, `ps`, `lsof` and `open`, and `owning_windows` a real
@@ -722,13 +725,16 @@ same tabs under the same ids. A crash leaves the same.
     `$TMPDIR` and a free port, and quit it after, so no live check touches a profile's Chrome; with no
     Chrome installed they skip. It runs headless (`--headless=new`, passed through `launch.launch`'s `flags`, which
     no profile's Chrome is given), so no live check puts a window on screen or moves the user's focus, and they run
-    while the user works. `--headed` (`check_server.py --headed`, `check_browser.py --headed`) runs them on a Chrome
-    with windows instead, and adds `windows_live`, the checks of windows and the focus: the first tab's window
+    while the user works. `check_server.py --headed` runs them on a Chrome with windows instead, and adds `windows_live`, the checks of windows and the focus: the first tab's window
     minimized, and a page's popup and `target=_blank` link put back, each on screen for under a tenth of a second
-    while the focus moves and comes back. `queue_live` also needs `npm ci` done, and skips
-    without it, and records into a temporary folder. It opens three tabs, each with its own chrome-devtools-mcp:
-    `a` and `b` on one form page (the form, a date input, a disabled button, two download links and a cross-origin
-    frame), and one pointer page; each is closed when its part is done. Its checked steps run on a local page whose
+    while the focus moves and comes back. `live` first checks the Chrome passes `require`, its folder's owner is
+    on its port, a load is heard, and `check_folder` passes. `queue_live` also needs `npm ci` done, and skips
+    without it, and records into a temporary folder. Its four blocks run at once (`harness.parallel`, at most four,
+    each block's lines printed in order), each opening and closing its own tabs, each with its own
+    chrome-devtools-mcp: `a` and `b` on one form page (the form, a date input, a disabled button, two download links
+    and a cross-origin frame); the pointer page, the one block with pointer steps or viewport screenshots, so the
+    waits it cuts are its own; the checked page; and a confirm page of its own, whose Warn me click with no
+    handle_dialog takes about 5s, so pairing another tab never probes a tab with a confirm open. Its checked steps run on a local page whose
     dropdowns and one textarea take only trusted input, whose Parse resume button runs a stand-in resume parser,
     whose Stopper editor puts a paste in itself and stops it without cancelling Chrome's own insert, as Slides
     does, and whose Warn me confirm, clicked with no handle_dialog step after it, makes one click take about 5s;
