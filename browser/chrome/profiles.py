@@ -14,7 +14,7 @@ from .. import system
 from ..protocol import mcp
 from . import cdp
 
-GOOGLE = system.CHROME_DATA  # the folder holding Chrome's own folder: ../README.md says where on each OS
+GOOGLE = system.CHROME_DATA  # the folder holding Chrome's own folder: ../system/README.md says where on each OS
 # Every profile's folder is GOOGLE/Chrome-*, beside Chrome's own GOOGLE/Chrome, where Chrome refuses a debugging port; a
 # new one is Chrome-<profile name>.
 PREFIX = "Chrome-"

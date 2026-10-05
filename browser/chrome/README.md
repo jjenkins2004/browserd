@@ -35,7 +35,7 @@ it first.
 
 - **An answer on a profile's port proves nothing by itself.** Every connection goes through `cdp.require`, which
   refuses, saying what is wrong and what to do, unless the port's one listener is the Chrome that holds the profile's
-  folder (`system.chrome_owner`, `../README.md`), started with `INPUT_FLAG`, with no Chrome profile in its folder
+  folder (`system.chrome_owner`, `../system/README.md`), started with `INPUT_FLAG`, with no Chrome profile in its folder
   but `Default`. chrome-devtools-mcp's own connection (`--browser-url`) skips `require`, so each queue proves the Chrome
   first through `Tabs.target`.
 - **`require` proves the Chrome, not the tab.** An Incognito, Guest or other Chrome profile's window is another

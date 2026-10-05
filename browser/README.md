@@ -31,7 +31,7 @@ server.py tools.py, and cli/ server.py too, which it starts and stops. Each fold
       server.py      the server process (`python -m browser.server`, how browserd finds it running): serves the tools
                      and the page, keeps the pid file
       tools.py       the tools agents call: session_start, the tab tools, the queue, profile_new and profile_delete
-      system/        what differs by OS, behind one set of names: macos.py, windows.py
+      system/        what differs by OS, behind one set of names; its own README
       config/
         paths.py     ROOT, this project's folder; RUN, the records folder; the version, from ../VERSION
         ports.py     the MCP port and the page's: 9230 and 9231, or ports.json's
@@ -68,28 +68,6 @@ server.py tools.py, and cli/ server.py too, which it starts and stops. Each fold
     ../tests/popups.py          on Windows, every window that comes on screen or takes the focus while checks run
 
 ## Core Abstractions & Shared Pieces
-
-**`system`** is everything browserd asks of the OS, one set of names in `system/__init__.py`, each given by
-`system/macos.py` or `system/windows.py`; nothing else runs an OS tool or calls an OS API. What each OS does:
-
-| | macOS | Windows |
-|---|---|---|
-| Chrome's binary | `/Applications/Google Chrome.app` | `BROWSERD_CHROME`, else App Paths, else Program Files |
-| profile folders beside Chrome's own | `~/Library/Application Support/Google` | `%LOCALAPPDATA%\Google` |
-| the folder's owner | `SingletonLock`'s pid, `ps` showing Chrome's binary | `Chrome_MessageWindow` titled with the folder; its process's image is Chrome's, no `--type` |
-| a port's listeners | `lsof` | the TCP table (`GetExtendedTcpTable`), IPv4 and IPv6 |
-| a command line | `ps` (words joined by spaces) | `NtQueryInformationProcess`, split by `CommandLineToArgvW` |
-| starting Chrome | `open -gna`, no window | the binary, detached, minimized and without the focus |
-| the app in front, bringing one | `lsappinfo`, AppKit through `osascript` | the foreground window; `SetForegroundWindow`, shared input, `SwitchToThisWindow` |
-| what a Chrome's windows did, minimizing one | nothing kept | WinEvent hooks: the focus taken, a window un-minimized or shown; `ShowWindow` |
-| `browserd stop`, `restart` | SIGTERM, SIGHUP | two named events per checkout and user |
-| the command's colors | on in a terminal | on in a console once asked (`ENABLE_VIRTUAL_TERMINAL_PROCESSING`) |
-| `browserd uninstall` removing its own folder | at once | by a process of its own, once browserd has exited; its `bin` taken off the user's PATH |
-| the command key (paste, `Meta+A`) | Meta (Command) | Control |
-
-A process the OS will not let this user read raises `system.Unanswered` (a `CdpError` to callers), never reads as
-one that exited. `system.remote_path` refuses a network share, `\\?\` or `\\.\` path before anything opens it,
-which on Windows would send the user's credentials to that host.
 
 **`installs.find`** is `browserd uninstall`'s map of what each installer put where (its docstring lists the three
 layouts); `service.uninstall` says what it removes and keeps, asks y/N, stops the server, then `installs.remove` runs
@@ -179,16 +157,6 @@ same tabs under the same ids. A crash leaves the same.
 
 ## Agent Gotchas & Invariants (⚠️)
 
-- **A profile's Chrome is whoever holds its folder as Chrome itself tells.** On a Mac that is `SingletonLock` in
-  the folder: that symlink ends in the owning pid, and `ps` must show that pid's command line starting with
-  Chrome's binary, so a lock left by a crash is not trusted. A command line alone never is: `ps` joins arguments
-  with spaces, and argv[0] can be set to anything. On Windows it is the message-only window of class
-  `Chrome_MessageWindow` titled with the folder, which a second Chrome given the folder finds and hands its launch
-  to; its process must run Chrome's own image (the file, not argv[0]) and name no `--type` (a helper's). Windows
-  matches the title whatever its case, but only as the folder was spelled at launch, so a profile's folder is
-  always given in one spelling, long and resolved; a Chrome given another (an 8.3 name) exits 21, which `launch`
-  names. Chrome makes no `SingletonLock` there, and its `lockfile` is never opened: an open at the moment a Chrome
-  starts would make that Chrome fail.
 - **No agent ends a session.** An agent would end one while its task still needed it, so only Joshua
   closes one: on the page (Close session, or Delete profile for every one of its profile's) or with `browserd stop`;
   `profile_delete` is refused while its profile has one open. A session is paused after 30 minutes without a call,

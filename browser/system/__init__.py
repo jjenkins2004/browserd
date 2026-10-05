@@ -5,13 +5,12 @@ says what each OS does in its place.
     NAME             the OS, as a sentence names it: "macOS" or "Windows"
     CHROME           Chrome's binary; a profile's Chrome is a process of it
     CHROME_FLAGS     switches every profile's Chrome starts with on this OS, besides launch's own
-    BACKGROUND_WINDOWS  whether opens.window asks for a new window in the background: on a Mac, or Chrome comes to
-                     the front; on Windows, Chrome shows such a window on screen first
+    BACKGROUND_WINDOWS  whether opens.window asks for its new window in the background
     CHROME_DATA      the folder holding Chrome's own folder, where each profile's Chrome-<name> folder sits beside it
     DATA             where an installed browserd keeps its records, the user's own; a git checkout keeps them in .run
     DESKTOP          the user's Desktop folder
-    EXTRA_ROOTS      folders beside DESKTOP, browserd's own and the temporary folder that chrome-devtools-mcp's file tools
-                     may touch
+    EXTRA_ROOTS      folders chrome-devtools-mcp's file tools may touch besides DESKTOP, browserd's own and the
+                     temporary folder
     COMMAND_KEY      the key a shortcut is held with, as press_key names it: "Meta" (Command) or "Control"
     COMMAND_BIT      that key's CDP modifier bit
     COMMAND_PROPERTY that key's KeyboardEvent property, "metaKey" or "ctrlKey"
@@ -53,6 +52,7 @@ Every function that asks the OS and cannot get an answer raises Unanswered, with
 import sys
 
 
+# Defined before the import below: macos.py and windows.py import it from here.
 class Unanswered(Exception):
     """The OS could not be asked, or did not answer; never read as "nothing there"."""
 

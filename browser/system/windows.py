@@ -1,5 +1,6 @@
 """Windows, through ctypes: Chrome's message window, the TCP table, process command lines, the foreground window,
-msvcrt locks and named events. The package's __init__.py lists what each name is; README.md says why each is so.
+msvcrt locks and named events. The package's __init__.py lists what each name is; README.md has what each OS does and
+the rules the rest of browserd keeps.
 """
 
 import collections
@@ -155,6 +156,7 @@ CHROME = _find_chrome()
 # viewport flips between the two widths as it is laid out, which moves every point read off a screenshot.
 CHROME_FLAGS = ["--enable-features=OverlayScrollbar"]
 BACKGROUND_WINDOWS = False  # Chrome shows a background window on screen first, then minimizes it (measured)
+# Resolved, so every profile's folder, made in it, is given in one spelling: README.md says why.
 CHROME_DATA = os.path.realpath(os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local"),
                                             "Google"))
 DATA = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local"), "browserd")
@@ -287,8 +289,9 @@ def listeners(port):
 
 def chrome_owner(folder):
     # Chrome's own proof that it holds a folder is a message-only window of class Chrome_MessageWindow titled with the
-    # folder, exactly as it was given: a second Chrome given the folder finds it and hands its launch over. The folder
-    # is always given in one spelling (profiles.canonical), so this spelling finds it.
+    # folder, exactly as it was given but whatever its case: a second Chrome given the folder finds it and hands its
+    # launch over. Every folder asked about here is given in one spelling, and Chrome's lockfile in it is never opened
+    # (README.md).
     folder = folder.rstrip("\\/") or folder
     window, found = None, []
     while True:
@@ -312,11 +315,10 @@ def chrome_owner(folder):
 
 
 def launch_chrome(args):
-    # Chrome is started off the user's focus: no window at first (--no-startup-window), and each window then asked
-    # minimized (opens.window's), and each the user opens (Ctrl+N), shown minimized from the start, never on screen
-    # first, which Chrome takes from how it was started (measured: with both, no window came on screen in any trial: the
-    # first window, a second, and one in a Chrome whose windows had all been closed); opens._by_user
-    # un-minimizes the user's. DETACHED_PROCESS and a group of its own keep it running past the server.
+    # SW_SHOWMINNOACTIVE: Chrome opens the windows opens.window asks for, and the user's Ctrl+N ones, in the show state
+    # it was started with, so they open minimized, never on screen first (measured with launch's --no-startup-window:
+    # the first window, a second, and one after all had closed). opens._by_user un-minimizes the user's.
+    # DETACHED_PROCESS and a group of its own keep Chrome running past the server.
     startup = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=7)  # SW_SHOWMINNOACTIVE
     try:
         return _spawn([CHROME, *args], _DETACHED_PROCESS | _NEW_GROUP, startupinfo=startup, stdin=subprocess.DEVNULL,
