@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Start or stop the local sites the suites run against, each detached with its log in the data folder:
 
-    python experiments/bench/sites.py start     WebGames 4380, FormFactory 5055, MiniWoB++ 4390, clicks 4395, haystack 4396
+    python experiments/bench/sites.py start     WebGames 4380, FormFactory 5055, MiniWoB++ 4390, clicks 4395, haystack 4396, traps 4397
     python experiments/bench/sites.py stop
 
 Each site's process id is kept in the data folder's sites.json, so stop ends exactly what start began.
@@ -31,6 +31,7 @@ SITES = {  # name: (port, folder, command)
     "mwserver": (4390, paths.BENCH, [sys.executable, "mwserver.py"]),
     "clickserver": (4395, paths.BENCH, [sys.executable, "clickserver.py"]),
     "hayserver": (4396, paths.BENCH, [sys.executable, "hayserver.py"]),
+    "trapserver": (4397, paths.BENCH, [sys.executable, "trapserver.py"]),
 }
 
 

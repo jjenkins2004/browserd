@@ -37,12 +37,14 @@ import clicks
 import miniwob
 import popups
 import slides
+import traps
 import tasks
 import webgames
 
 SUITES = {"mcpuniverse": tasks, "webgames": webgames, "formfactory": formfactory, "botwall": botwall, "miniwob": miniwob,
           "clicks": clicks, "haystack": haystack, "canvas": canvas,
-          "popups": popups, "slides": slides}
+          "popups": popups, "slides": slides,
+          "traps": traps}
 
 ARMS = {
     "browserd": {

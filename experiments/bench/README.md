@@ -19,6 +19,7 @@ The suites, each `--suite` of `run.py`:
 | `miniwob` | synthetic form and widget drills | 38 × 2 seeds | the page's own reward |
 | `clicks`, `haystack` | click accuracy on small targets; finding a fact on long pages | 9; 12 | the bench's own |
 | `canvas` | pixel clicks in apps that draw (Excalidraw, Desmos, GeoGebra, diagrams.net, Maps, EtherCalc) | 6 | the app's own state, read through browserd after the run |
+| `traps` | clicks an agent never meant: a fake editor whose timed popups go up over its next target | 12 seeds | the page's own log of every trusted click and key |
 
 The last run (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`. `miniwob` (drills) and `botwall`
 have not been run in full.
@@ -57,13 +58,16 @@ tree is started and stopped, and Windows' `.cmd` shims).
       miniwob.py      suite miniwob
       clicks.py       suite clicks: squares of 4 to 32 px to click in order
       haystack.py     suite haystack: one fact on a 40- or 80-section page
+      traps.py        suite traps: 8 tasks in a fake editor, 6 timed traps over the next target
       ffserver.py     FormFactory's Flask app on 5055, each submission saved under its run
       mwserver.py     MiniWoB++'s pages on 4390, each reward saved under its run
       allow.py        the claudechrome arm's --permission-prompt-tool: allows every permission prompt
       clickserver.py  the clicks page on 4395
       hayserver.py    the haystack pages on 4396
+      trapserver.py   the trap editor (trapapp.html) on 4397, each run's log under results/trap-logs/
       assets/         sample.pdf, which setup.py copies to the data folder's assets/
-      tools/          analyze.py (tool use by arm), paired.py (sign tests), miscalls.py, cheats.py, ffmap.py
+      tools/          analyze.py (tool use by arm), paired.py (sign tests), miscalls.py, cheats.py, ffmap.py,
+                      trapcheck.py (traps' scoring on synthetic logs; a real run's log against its layout history)
       probes/         the pairing bug's replays and probes (../findings/benchmark.md, "The pairing bug")
 
     <data folder>/    paths.DATA: ../../../browserd-bench beside the repo, or $BROWSERD_BENCH_DATA
@@ -145,10 +149,10 @@ tree is started and stopped, and Windows' `.cmd` shims).
   also stops after `run.DEAD_AFTER` (2) runs in a row of one arm that reached no browser (its server did not connect,
   or every call needing a Chrome failed): those count as done, so move their `.jsonl` and `.err` to
   `results/_invalid/<exp>-<why>/<arm>/` to rerun them. A rerun keeps the run's token (`run.token`), so for
-  formfactory, miniwob and clicks also move its record,
-  `results/{formfactory-submissions,miniwob-rewards,click-hits}/<token>.jsonl`, or the set-aside run's record is
-  scored with the rerun's. A wifi outage looks the same: set aside the runs of every arm in the outage's window, not
-  just the flagged ones, and resume. A run the plan's session limit cuts off part way counts as done, and only the
+  formfactory, miniwob, clicks and traps also move its record,
+  `results/{formfactory-submissions,miniwob-rewards,click-hits,trap-logs}/<token>.jsonl`, or the set-aside run's
+  record is scored with the rerun's. A wifi outage looks the same: set aside the runs of every arm in the outage's
+  window, not just the flagged ones, and resume. A run the plan's session limit cuts off part way counts as done, and only the
   next run stops the batch: set aside each run whose transcript says "session limit", as well as the flagged ones.
 - **Cleanup is the runner's.** After each run it stops the run's process group, kills orphaned headless Chromes of
   Puppeteer, Playwright and agent-browser, closes the agent-browser session, and closes each browserd session the run
