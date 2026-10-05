@@ -21,7 +21,7 @@ The suites, each `--suite` of `run.py`:
 | `canvas` | pixel clicks in apps that draw (Excalidraw, Desmos, GeoGebra, diagrams.net, Maps, EtherCalc) | 6 | the app's own state, read through browserd after the run |
 | `popups` | first-visit consent banners, welcome dialogs and look-alike buttons on 7 live sites (Forbes, HubSpot, Kayak, CNN, BBC, the Guardian, Sephora) | 7 | the popup seen, the press on the right button or the page's state after, and no press on its look-alike |
 | `slides` | edits to a new, blank Google Slides deck per run, on the `experiments` arm's profile signed in to Google | 6 | the deck's own pptx export, read in the run's tab after the run |
-| `traps` | clicks an agent never meant: a fake editor whose timed popups go up over its next target | 12 seeds | the page's own log of every trusted click and key |
+| `traps` | clicks an agent never meant: a fake editor whose timed traps go up over its next target | 12 seeds | the page's own log of every trusted click and key |
 
 The last run (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`. `miniwob` (drills) and `botwall`
 have not been run in full.
@@ -166,9 +166,9 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   also stops after `run.DEAD_AFTER` (2) runs in a row of one arm that reached no browser (its server did not connect,
   or every call needing a Chrome failed): those count as done, so move their `.jsonl` and `.err` to
   `results/_invalid/<exp>-<why>/<arm>/` to rerun them. A rerun keeps the run's token (`run.token`), so for
-  formfactory, miniwob, clicks and traps also move its record,
-  `results/{formfactory-submissions,miniwob-rewards,click-hits,trap-logs}/<token>.jsonl` (and canvas', popups' and
-  slides' `results/<suite>-state/<token>.json`), or the set-aside run's record is scored with the rerun's. A wifi outage looks the same: set aside the runs of every arm in the outage's
+  formfactory, miniwob and clicks also move its record, `results/{formfactory-submissions,miniwob-rewards,click-hits}/
+  <token>.jsonl` (and canvas', popups' and slides' `results/<suite>-state/<token>.json`), or the set-aside run's record
+  is scored with the rerun's; traps' prepare moves an earlier attempt's log to `results/_invalid/trap-logs/` itself. A wifi outage looks the same: set aside the runs of every arm in the outage's
   window, not just the flagged ones, and resume. A run the plan's session limit cuts off part way counts as done, and only the
   next run stops the batch: set aside each run whose transcript says "session limit", as well as the flagged ones.
 - **Cleanup is the runner's.** After each run it stops the run's process tree (`procs.stop_tree`), closes the
