@@ -69,7 +69,7 @@ answer key and graded in code; trip is written as a person would ask it, and an 
   the Chrome left holding one fresh blank tab, in a window of its own, where every server starts; after it, the run's
   browserd session (if any) is closed and `clear_tabs` closes every tab no open browserd session owns, so nothing
   passes from one run to the next. Runs go one at a time (`--jobs` 1, threads over the run list in order, each rep's
-  arms reversed from the last's), each only with `FREE_LEAST` (25%) of memory free.
+  arms reversed from the last's).
 
 ## Agent Gotchas & Invariants (⚠️)
 
