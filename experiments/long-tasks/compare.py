@@ -46,8 +46,9 @@ ARMS = ["browserd", "playwright", "devtools", "agentbrowser"]
 BROWSERD_SENTENCE = re.compile(r"Use browserd with my personal profile[^.]*\.")
 NEUTRAL = "Use the browser, where I'm signed in to Google."
 # The files each task's final message links, in the order its grader takes them, and their URLs' shapes.
-FILES = {"trip": ["deck", "sheet"], "capex": ["deck", "sheet"], "parks": ["map"]}
-LINKS = {"deck": re.compile(r"https://docs\.google\.com/presentation/d/[\w-]+"),
+FILES = {"trip": ["doc"], "capex": ["deck", "sheet"], "parks": ["map"]}
+LINKS = {"doc": re.compile(r"https://docs\.google\.com/document/d/[\w-]+"),
+         "deck": re.compile(r"https://docs\.google\.com/presentation/d/[\w-]+"),
          "sheet": re.compile(r"https://docs\.google\.com/spreadsheets/d/[\w-]+"),
          "map": re.compile(r"https://(?:www|mymaps)\.google\.com/maps/d/\S*?mid=[\w-]+")}
 
@@ -114,11 +115,13 @@ def clear_tabs(state, browser, keep=()):
 
 def clean_start(state, browser):
     """Leave the Chrome holding one fresh tab, in a window of its own, so every run starts the same: the other servers
-    see every tab and start on one, so nothing a run could find is left from before. While an open browserd session
-    owns a tab, someone else is at work, and the run waits. Returns the fresh tab's target."""
+    see every tab and start on one, so nothing a run could find is left from before; and with no Yelp cookies, so no
+    run inherits a bot check. While an open browserd session owns a tab, someone else is at work, and the run waits.
+    Returns the fresh tab's target."""
     while page_targets(browser) & others_tabs(state):
         print("waiting: an open browserd session has a tab in the %s Chrome" % PROFILE, flush=True)
         time.sleep(60)
+    grade.forget_yelp(PROFILE)
     fresh = opens.window(browser, "about:blank")
     clear_tabs(state, browser, keep=[fresh])
     return fresh
@@ -195,18 +198,21 @@ def _stopped(result):
 
 
 def pictures(run, deck):
-    """The deck as it ended, deck.pdf and slides/slide-<n>.png, for the gallery; taken before the judge opens it."""
+    """The deck as it ended, deck.pdf and slides/slide-<n>.png, for the gallery."""
     pdf = grade.fetch(PROFILE, "https://docs.google.com/presentation/d/%s/export/pdf" % grade.file_id(deck, "presentation"))
     (run / "deck.pdf").write_bytes(pdf)
     (run / "slides").mkdir(exist_ok=True)
     subprocess.run(["pdftoppm", "-png", "-r", "60", str(run / "deck.pdf"), str(run / "slides" / "slide")], check=True)
 
 
-def judged(out, run, deck, sheet, before):
-    """trip's judge on the deck and Sheet: why the run has no scores (None when it has), and result.json's fields from
-    the verdict."""
+def judged(out, run, doc, before):
+    """trip's judge on the Doc: why the run has no scores (None when it has), and result.json's fields from the
+    verdict."""
     folder = out / "judging" / secrets.token_hex(4)  # a name that says nothing of the arm
-    verdict, judge_cost = judge.judge(deck, sheet, run / "transcript.jsonl", folder, before)
+    try:
+        verdict, judge_cost = judge.judge(doc, run / "transcript.jsonl", folder, before)
+    except (Exception, SystemExit) as exc:  # a Doc that cannot be exported, or a failed read, leaves no scores
+        return "not judged: %s" % exc, dict(judged=folder.name)
     if verdict is None:
         return "the judge gave no verdict", dict(judged=folder.name, judge_cost=judge_cost)
     scores = judge.score(verdict)
@@ -270,7 +276,7 @@ def run_one(out, task, arm, rep, stopped):
         return
     final = measured.pop("final")
     # A map's link in one form, whatever page of it the message gives (edit, viewer, u/0), so an earlier run's map is
-    # known again; a deck's or Sheet's link is one form already.
+    # known again; a Doc's, deck's or Sheet's link is one form already.
     links = {name: re.sub(r"^\S*?mid=", "https://www.google.com/maps/d/edit?mid=", found.group(0))
              for name, shape in LINKS.items() if (found := shape.search(final))}
     missing = [name for name in FILES[task] if name not in links]
@@ -287,7 +293,7 @@ def run_one(out, task, arm, rep, stopped):
                 pictures(run, links["deck"])
             except (Exception, SystemExit) as exc:  # a deck that cannot be exported still gets graded
                 note = "no pictures: %s" % exc
-        failed, grades = (judged(out, run, links["deck"], links["sheet"], before) if task == "trip" else
+        failed, grades = (judged(out, run, links["doc"], before) if task == "trip" else
                           graded(task, [links[name] for name in FILES[task]]))
         note = failed or note
     # The task's fields, as a run that gets no grade leaves them.

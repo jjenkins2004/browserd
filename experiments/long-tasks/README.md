@@ -5,12 +5,12 @@
 Long, bounded browser tasks for a demo of browserd: a real agent doing an hour-scale job on real sites, in the user's own
 logged-in Chrome (the `personal` profile), ending in Google files, with the tab it works in recorded as a timelapse.
 Each task names its entities, its sources (pinned where they can be), its fields and the files and slides it ends in, so
-a longer run means the harness struggled, not that the model chose to dig deeper. Each prompt stays 1,200 to 1,450
-characters; the work, 15-35 minutes on browserd in calibration runs, comes from many entities and editor features, not
-from the prompt's length. capex is written as a spec with an answer key and graded in code; parks, a My Maps map, is asked as a
-person would and graded in code; trip is asked as a person would, and an agent grades the deck and Sheet against a
-rubric. `compare.py` runs any task on browserd and on other browser MCP servers, each given the same logged-in Chrome,
-to compare them.
+a longer run means the harness struggled, not that the model chose to dig deeper. Each prompt stays 1,200 to 1,475
+characters; the work, 15-45 minutes on browserd in calibration runs, comes from many entities, sites and editor
+features, not from the prompt's length. capex is written as a spec with an answer key and graded in code; parks, a My
+Maps map, is asked as a person would and graded in code; trip is asked as a person would, and an agent grades its
+Google Doc against a rubric. `compare.py` runs any task on browserd and on other browser MCP servers, each given the
+same logged-in Chrome, to compare them.
 
 ## Directory Layout
 
@@ -26,17 +26,19 @@ to compare them.
         key.py      builds key.json from that revision
         key.json    each park's layer, date, acres, visitors and point; the route's towns
       trip/
-        prompt.md   a team offsite in 3 short paragraphs, as a person would ask: 8 cities' flights, hotel, weather and
-                    a restaurant near the hotel; a Sheet with its chart; a 13-slide deck ending in the pick's itinerary
-        rubric.md   the judge's prompt: how to read the deck and Sheet, the evidence files, the items; its
+        prompt.md   a team offsite in 4 short paragraphs, as a person would ask: 6 cities' flights, hotel, GSA M&IE,
+                    weather and 7+ underrated dinner spots, one picked and backed by Reddit and a guide or
+                    TikTok; one Google Doc
+        rubric.md   the judge's prompt: how to read the Doc and the evidence files, the items; its
                     {request}-style placeholders are filled by judge.py
-        key.py      builds key.json: each city's November high from a pinned Wikipedia revision
-        key.json    the 8 cities and their November highs (±2°F passes); fares, hotels and restaurants are live
+        key.py      builds key.json: each city's November high from a pinned Wikipedia revision, its M&IE from gsa.gov
+        key.json    the 6 cities, their November highs (±2°F passes) and M&IE; fares, hotels and dinner spots are
+                    live
       run.sh        one run: a clean Claude Code on claude-sonnet-5-5 with the task's prompt, record.py beside it
       record.py     the timelapse of the tab an agent works in, captured over DevTools, into frames/ and video.mp4
       grade.py      capex's and parks' checks against their keys (GRADERS); `flights`, Google Flights' nonstops now,
                     for trip's judge
-      judge.py      grades a trip deck and Sheet: claude-opus-5-5 on browserd with rubric.md and the run's evidence
+      judge.py      grades a trip Doc: claude-opus-5-5 on browserd with rubric.md and the run's evidence
       compare.py    a task on each arm (browserd, playwright, devtools, agentbrowser) k times, one at a time in
                     browserd's Chrome, each recorded and graded; gallery
 
@@ -68,23 +70,25 @@ to compare them.
   www.google.com), read by `read_map`. My Maps' "Image URL" tab refuses outside URLs, and the dialog's Google Images
   search finds one. A missing layer, pin, row or slide fails every check on it, so a task's runs all have as many
   checks.
-- **trip's judge** is `judge.py <deck URL> <sheet URL> <transcript> <folder> [--before F]`: a clean `claude -p`
+- **trip's judge** is `judge.py <doc URL> <transcript> <folder> [--before F]`: a clean `claude -p`
   (`$BROWSERD_LONG_TASKS_CLAUDE`, else `claude` on PATH) on claude-opus-5-5 with browserd (profile `judge.PROFILE`:
-  `$BROWSERD_LONG_TASKS_PROFILE`, else personal), Read and Grep, given `rubric.md` with the request, the deck's and
-  Sheet's URLs, and the cities, normals and items from `key.json`.
-  Its folder holds the evidence: `flights-before.json` (`grade.py flights` as the run began) and `flights-after.json`
-  (now), from `nonstops`, which reads each Google Flights result's aria-label on the default results and on the
-  Cheapest tab; `seen.txt`, every tool result of the run. Its last message is a JSON verdict, saved as `verdict.json`;
+  `$BROWSERD_LONG_TASKS_PROFILE`, else personal), Read and Grep, given `rubric.md` with the request, the Doc's URL,
+  and the cities, key values and items from `key.json`.
+  Its folder holds the evidence: `doc.md` and `doc.pdf`, the Doc's Markdown and PDF exports (fetched as capex's files
+  are, the Markdown's inline images cut); `flights-before.json` (`grade.py flights` as the run began) and
+  `flights-after.json` (now), from `nonstops`, which reads each Google Flights result's aria-label on the default
+  results and on the Cheapest tab; `seen.txt`, every tool call's input (a `> ` line) and result of the run. Its last
+  message is a JSON verdict, saved as `verdict.json`;
   `score` counts the items each group passed, a missing item failing. It then closes the browserd session it opened
   (`close_sessions`, the browserd page's Close session).
 - **A comparison** is `compare.py run <exp> [--task trip|capex|parks]` (trip by default): per run,
   `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p` (the judge's Claude Code) with run.sh's flags, the arm's server
   alone, `TIMEOUT` (2 hours), and `record.py` beside it (browserd's by `--transcript`, the others' by `--cdp`); then the
   files the task's final message must link (`FILES`, found by `LINKS`), the deck's PDF and one PNG per slide
-  (`pdftoppm`) for a task with a deck, then the grade. trip's is the judge, given the deck and Sheet, in
+  (`pdftoppm`) for a task with a deck, then the grade. trip's is the judge, given the Doc, in
   `<data>/<exp>/judging/<random id>/`, so neither its folder nor its request names the arm; capex's and parks' are
-  `grade.GRADERS` on `judge.PROFILE`, and no judge. `result.json` has the task, the files' URLs (`deck`, `sheet`,
-  `map`), the run's numbers and scores: trip's `correct`, `polish` and `looks`; capex's and parks' `score` (checks
+  `grade.GRADERS` on `judge.PROFILE`, and no judge. `result.json` has the task, the files' URLs (`doc`, `deck`,
+  `sheet`, `map`), the run's numbers and scores: trip's `correct`, `polish` and `looks`; capex's and parks' `score` (checks
   passed, checks made) and `checks` (each check's ok/BAD line); `passed` when every correct item or check passed. A
   `result.json` of `{"skipped": why}`, written by hand, keeps a run from starting. `compare.py report <exp>` sums the
   runs in a table per task, leaving out skipped ones, and writes `gallery.html` (each
@@ -135,13 +139,19 @@ to compare them.
 - Google Flights' "Cheapest" tab lists the same flights lower, through third parties; the prompt allows either, so
   `nonstops` reads both, clicking the tab (`CHEAPEST_TAB`) in its background tab.
 - `judge.ITEMS` builds rubric.md's `<city>_` items from `key.json`'s cities; the judge's request comes from
-  `prompt.md`, so the two stay in step. A new city is a line in `trip/key.py`, a name in the prompt's list and one
-  more in its slide count, then `key.py` again.
+  `prompt.md`, so the two stay in step. A new city is a line in `trip/key.py` and a name in the prompt's list, then
+  `key.py` again.
   The prompt names Wikipedia for the weather, whose climate tables also hold a "Mean maximum" row 10-20°F higher, so the
   rubric takes only the mean daily maximum, within 2°F.
-- `seen.txt` is the run's tool results as they came, so a harness's own wording in them (Playwright's code lines,
-  browserd's step reports) can tell the judge which arm it grades; only its folder and request are blind.
-- `compare.py` takes the deck's PDF before the judge opens it: the gallery shows the deck as the run left it.
+- `seen.txt` is the run's tool calls and results as they came, so a harness's own wording in them (Playwright's code
+  lines, browserd's step reports and session label) can tell the judge which arm it grades; only its folder and
+  request are blind. Its `> ` lines hold what the agent typed into the Doc too, so the rubric counts a value as seen
+  only in a site's result.
+- A Doc's body is a canvas: a snapshot shows its outline, not its text, so an agent checks its work by screenshot and
+  the judge reads the exports. Claude Code's Read takes a PDF whole; a page range needs `pdftoppm`.
+- Yelp shows a bot check (DataDome) after many page loads in one Chrome, and its cookie keeps it there for later
+  visits, so `compare.py` (before each run) and `judge.py` (before the judge) delete Yelp's cookies
+  (`grade.forget_yelp`); the rubric also takes the Yelp rating Google's results show.
 - The other arms share browserd's `judge.PROFILE` Chrome because Google signs out a copy of a profile's folder within
   about 10 minutes (its cookies cannot be renewed in another Chrome), and Chrome runs one process per folder. They see
   every tab of that Chrome and start on one (Playwright, chrome-devtools-mcp and agent-browser on the newest, but
@@ -150,9 +160,9 @@ to compare them.
 - agent-browser's `close`, Playwright's `browser_close` and chrome-devtools-mcp leave the Chrome running: each closes
   its own tab at most (checked on a throwaway Chrome).
 - Every run shares the account's Drive and Google Flights' recent searches. A run that reports a file an earlier run
-  made is not graded ("an earlier run's deck", "... sheet" or "... map"), but a copy of one has a new URL: capex and
-  parks name their files, and Sheets, My Maps and Slides' Insert > Chart list earlier runs' files of that name. Move
-  earlier runs' files to the Trash before a batch.
+  made is not graded ("an earlier run's doc", "... deck", "... sheet" or "... map"), but a copy of one has a new URL:
+  capex and parks name their files, and Sheets, My Maps and Slides' Insert > Chart list earlier runs' files of that
+  name. Move earlier runs' files to the Trash before a batch.
 - An experiment holds one task: a run's folder is `<arm>-r<n>` whatever the task, and one with a `result.json` is done,
   so `--task capex` on an experiment with trip's runs skips those arms' reps. Give each task its own `<exp>`.
 - Run `compare.py run` detached (`nohup`): a batch started under a Claude Code session dies with its window.

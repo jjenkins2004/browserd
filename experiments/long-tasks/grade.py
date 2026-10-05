@@ -110,6 +110,15 @@ def background_tab(profile, url, host):
         browser.close()
 
 
+def forget_yelp(profile):
+    """Delete the profile's cookies of yelp.com and its subdomains, leaving the rest (the Google sign-in)."""
+    with background_tab(profile, "about:blank", "") as (browser, session):
+        for cookie in browser.call("Storage.getCookies")["cookies"]:
+            if cookie["domain"].lstrip(".") == "yelp.com" or cookie["domain"].endswith(".yelp.com"):
+                browser.call("Network.deleteCookies", session=session, name=cookie["name"], domain=cookie["domain"],
+                             path=cookie["path"])
+
+
 def fetch(profile, url):
     """A Google URL's bytes (docs.google.com's, or www.google.com's for My Maps), fetched with the profile's cookies
     from a background tab on its host."""
@@ -161,7 +170,7 @@ def nonstops(profile, airport):
 
 
 def trip_key():
-    return json.loads((HERE / "trip" / "key.json").read_text())["cities"]
+    return json.loads((HERE / "trip" / "key.json").read_text(encoding="utf-8"))["cities"]
 
 
 def reference(profile):
