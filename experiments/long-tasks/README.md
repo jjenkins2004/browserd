@@ -100,8 +100,8 @@ same logged-in Chrome, to compare them.
   Chrome starts; after it, the run's browserd session (if any) is closed and `clear_tabs` closes every tab no open
   browserd session owns, so nothing passes from one run to the next. Runs go one at a time (`--jobs` 1, threads over the
   run list in order, each rep's arms reversed from the last's). Another task's `compare.py run` can go beside this one
-  on a profile of its own (`$BROWSERD_LONG_TASKS_PROFILE`), never the same task: capex and parks name their files, so
-  two runs of one task on one account would find each other's.
+  on a profile of its own (`$BROWSERD_LONG_TASKS_PROFILE`), never the same task: capex and parks title their files, so
+  two runs of one task on one account would find each other's, and each one's `clean_start` would trash the other's.
 
 ## Agent Gotchas & Invariants (⚠️)
 
@@ -169,10 +169,11 @@ same logged-in Chrome, to compare them.
   `list_connected_browsers` with that profile's Chrome alone running). Two runs on two profiles' extensions run at once
   (checked). Claude Code also asks before acting on each new site, whatever the permission mode, which the bench's
   `allow.py` answers.
-- Every run shares the account's Drive and Google Flights' recent searches. A run that reports a file an earlier run
-  made is not graded ("an earlier run's doc", "... deck", "... sheet" or "... map"), but a copy of one has a new URL:
-  capex and parks name their files, and Sheets, My Maps and Slides' Insert > Chart list earlier runs' files of that
-  name. Move earlier runs' files to the Trash before a batch.
+- Every run shares the account's Drive and Google Flights' recent searches. capex and parks title their files, which
+  My Maps, Sheets and Slides' Insert > Chart list, and agents that found an earlier run's map there reported it as
+  their own; so `clean_start` moves every file of the task's title (`TITLES`) to the Trash first (`grade.trash`). A
+  file a run titles otherwise stays, as does trip's Doc, which its prompt leaves untitled. A run that reports a file an
+  earlier run made is not graded ("an earlier run's doc", "... deck", "... sheet" or "... map").
 - An experiment holds one task: a run's folder is `<arm>-r<n>` whatever the task, and one with a `result.json` is done,
   so `--task capex` on an experiment with trip's runs skips those arms' reps. Give each task its own `<exp>`.
 - Run `compare.py run` detached (`nohup`): a batch started under a Claude Code session dies with its window.

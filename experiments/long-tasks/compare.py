@@ -50,6 +50,7 @@ BROWSERD_SENTENCE = re.compile(r"Use browserd with my personal profile[^.]*\.")
 NEUTRAL = "Use the browser, where I'm signed in to Google."
 # The files each task's final message links, in the order its grader takes them, and their URLs' shapes.
 FILES = {"trip": ["doc"], "capex": ["deck", "sheet"], "parks": ["map"]}
+TITLES = {"capex": "Tech capex", "parks": grade.MAP_NAME}  # what the prompt titles the task's files
 LINKS = {"doc": re.compile(r"https://docs\.google\.com/document/d/[\w-]+"),
          "deck": re.compile(r"https://docs\.google\.com/presentation/d/[\w-]+"),
          "sheet": re.compile(r"https://docs\.google\.com/spreadsheets/d/[\w-]+"),
@@ -121,15 +122,18 @@ def clear_tabs(state, browser, keep=()):
         browser.call("Target.closeTarget", targetId=target)
 
 
-def clean_start(state, browser):
+def clean_start(state, browser, task):
     """Leave the Chrome holding one fresh tab, in a window of its own, so every run starts the same: Playwright and
-    chrome-devtools-mcp see every tab and start on one, so nothing a run could find is left from before; and with no
-    Yelp cookies, so no run inherits a bot check. While an open browserd session owns a tab, someone else is at work,
-    and the run waits. Returns the fresh tab's target."""
+    chrome-devtools-mcp see every tab and start on one, so nothing a run could find is left from before; with no Yelp
+    cookies, so no run inherits a bot check; and with every file of the task's title (TITLES) in the Trash, so no run
+    finds an earlier run's. While an open browserd session owns a tab, someone else is at work, and the run waits.
+    Returns the fresh tab's target."""
     while page_targets(browser) & others_tabs(state):
         print("waiting: an open browserd session has a tab in the %s Chrome" % PROFILE, flush=True)
         time.sleep(60)
     grade.forget_yelp(PROFILE)
+    if task in TITLES:
+        print("trashed %d earlier files titled %s" % (grade.trash(PROFILE, TITLES[task]), TITLES[task]), flush=True)
     fresh = opens.window(browser, "about:blank")
     clear_tabs(state, browser, keep=[fresh])
     return fresh
@@ -259,7 +263,7 @@ def run_one(out, task, arm, rep, stopped):
     state = State(grade.STATE_FILE)
     profile = state.profile(PROFILE)
     browser = cdp.Browser(profile)
-    clean_start(state, browser)
+    clean_start(state, browser, task)
     print("%s r%d: started" % (arm, rep), flush=True)
     recorder = start_recorder(arm, run, profile)
     started = time.time()

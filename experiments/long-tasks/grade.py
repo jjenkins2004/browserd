@@ -47,6 +47,28 @@ FETCH = """(async () => {
   for (let i = 0; i < bytes.length; i += 32768) text += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768));
   return [reply.status, btoa(text)];
 })()"""
+# Drive's web API as drive.google.com calls it: with a copy of its page's own public key, and the profile's cookies
+# authorized by a SAPISIDHASH (a SHA-1 of the time, the SAPISID cookie and the page's origin).
+TRASH = """(async (title) => {
+  const key = 'AIzaSyD_InbmSFufIEps5UAt2NmB_3LvBH3Sz_8';
+  const sapisid = document.cookie.split('; ').find(c => c.startsWith('SAPISID=')).slice(8);
+  const time = Math.floor(Date.now() / 1000);
+  const signed = new TextEncoder().encode(time + ' ' + sapisid + ' ' + location.origin);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', signed));
+  const hash = [...digest].map(b => b.toString(16).padStart(2, '0')).join('');
+  const headers = {'Authorization': 'SAPISIDHASH ' + time + '_' + hash, 'X-Goog-AuthUser': '0'};
+  const call = (method, path) => fetch('https://clients6.google.com/drive/v2internal/' + path + '&key=' + key,
+                                       {method, headers, credentials: 'include'});
+  const query = "title = '" + title + "' and 'me' in owners and trashed = false";
+  const found = await call('GET', 'files?fields=items(id)&q=' + encodeURIComponent(query));
+  if (!found.ok) return [found.status, 0];
+  const ids = (await found.json()).items.map(item => item.id);
+  for (const id of ids) {
+    const trashed = await call('POST', 'files/' + id + '/trash?fields=id');
+    if (!trashed.ok) return [trashed.status, 0];
+  }
+  return [200, ids.length];
+})(%s)"""
 # Google Flights' own encoding of the search trip/prompt.md asks for (round trip LAX to SEA, 2026-11-13 to 2026-11-15,
 # 1 adult, economy, nonstop only), copied from its address bar; another city's search swaps its airport in for SEA.
 FLIGHTS_SEARCH = ("CBwQAhogEgoyMDI2LTExLTEzKABqBwgBEgNMQVhyBwgBEgNTRUEaIBIKMjAyNi0xMS0xNSgAagcIARIDU0VBcgcIARIDTEFYQAFIA"
@@ -132,6 +154,20 @@ def fetch(profile, url):
     if status != 200:
         raise SystemExit("fetching %s: HTTP %d" % (url, status))
     return base64.b64decode(data)
+
+
+def trash(profile, title):
+    """Move every file of the profile's own Drive titled title to the Trash, through Drive's web API from a background
+    tab on drive.google.com; returns how many."""
+    with background_tab(profile, "https://drive.google.com/robots.txt", "drive.google.com") as (browser, session):
+        reply = browser.call("Runtime.evaluate", session=session, expression=TRASH % json.dumps(title),
+                             awaitPromise=True, returnByValue=True, wait=90)
+    if "exceptionDetails" in reply:
+        raise SystemExit("trashing %s failed: %s" % (title, reply["exceptionDetails"].get("text")))
+    status, count = reply["result"]["value"]
+    if status != 200:
+        raise SystemExit("trashing %s: HTTP %d" % (title, status))
+    return count
 
 
 def flights_url(airport):
