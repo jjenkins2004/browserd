@@ -35,7 +35,7 @@ A folder per domain; each folder, and tools.py and server.py, imports only those
       tools.py       the tools agents call, their descriptions, and the queue's body
       server.py      the server process (`python -m browser.server`): serves the tools and the browserd page
       cli/
-        service.py   the browserd command: start, stop, restart, status, version, setup, uninstall
+        service.py   the browserd command; its help lists its commands
         installs.py  what each installer put where, for uninstall
 
 ## Core Abstractions & Shared Pieces
@@ -49,9 +49,8 @@ A folder per domain; each folder, and tools.py and server.py, imports only those
 - **`state.State`** is state.db's one SQLite connection, shared by the server's threads; a `Profile` is a profile's
   row (`chrome/profiles.py` makes and deletes one), a `Session` one agent's task on one profile (`tabs/sessions.py` has
   its rules), a `Tab` one page of a profile's Chrome (`tabs/tabs.py` gives out its ids).
-- **The records folder**, `paths.RUN` (`config/paths.py` says where), holds server.pid, server.log, start.lock,
-  state.db, ports.json, devtools-*.log, calls/ and downloads/<profile>/. Record folders and devtools logs are never
-  removed.
+- **The records folder** is `paths.RUN`: `config/paths.py` says where, and `../README.md`'s Use what it holds. Record
+  folders and devtools logs are never removed.
 - **The ports** change only through `browserd setup` (`service.setup`). browserd never edits an agent's settings, so
   after the MCP port changes an agent needs `service.CONNECT`'s line again.
 - **The browserd page.** `page.Page` serves it on a thread of the server's own; `Page.snapshot`'s docstring says what

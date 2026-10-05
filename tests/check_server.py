@@ -7,7 +7,7 @@ checks of windows and the focus, which put windows on screen for a moment and mo
     python3 tests/check_server.py [--headed] [--list] [GROUP ...]    (py -3 tests\\check_server.py on Windows)
 
 With no GROUP every group runs; --list names them all. offline names every group that needs no Chrome, and live:all
-every one that does; the checks' Chrome starts only when a live group runs.
+every one that does; the throwaway Chrome starts only when a live group runs.
 """
 
 import os
@@ -30,13 +30,13 @@ OFFLINE = {group.__name__.removesuffix("_offline"): group for group in (
     steps.paste_offline, steps.screenshot_offline, steps.pointer_offline, steps.hit_offline, steps.on_offline,
     steps.limits_offline, records.records_offline, records.recording_offline, chrome.profiles_offline,
     tools.profile_tools_offline, dashboard.page_offline, chrome.quitting, cli.service_offline, cli.paths_offline)}
-# Each given the checks' Chrome's profile and a state.db holding it.
+# Each given the throwaway Chrome's profile and a state.db holding it.
 LIVE = {"live": live.live, "windows_live": live.windows_live, "queue_live": live.queue_live,
         "downloads_live": lambda profile, state: live.downloads_live(profile)}
 
 
 def live_groups(names, headed):
-    """Run the live groups names gives, in turn, on the checks' own Chrome, with windows when headed."""
+    """Run the live groups names gives, in turn, on the throwaway Chrome, with windows when headed."""
     # On Windows, popups.watch measures every window the live checks open, the Chrome's start and quit included.
     watch = popups.watch()
     try:

@@ -15,7 +15,7 @@ POLL = 0.5
 READY_WAIT = 2.0  # seconds a start waits for its connection; a slower one still starts, missing only what began meanwhile
 RETRY = 0.5  # seconds between a Folder's tries to reach its Chrome again
 KEPT = 500  # downloads a Folder remembers, the newest
-AGAIN = 30.0  # seconds between a Folder's settings of its folder, on a connection that stays open
+AGAIN = 30.0  # seconds a Folder waits to set its download behaviour again, on a connection that stays open
 BEHIND = 2.0  # seconds a download the tab says completed waits for the Folder to hear where it went
 
 

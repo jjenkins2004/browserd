@@ -96,7 +96,7 @@ class Chromes:
 
     def adopt(self, profiles):
         """Keep putting back the tabs pages open in every profile's Chrome already running as the server starts, and save its
-        downloads in its folder again: the setting went with the last server's connection.
+        downloads in its folder again: the download behaviour went with the last server's connection.
 
         Args:
             profiles (list[Profile]): every profile in state.db; one whose Chrome is down is skipped.
@@ -203,7 +203,7 @@ class Chromes:
             return folder
 
     def _settle(self, folder):
-        """Wait for a new Folder's setting to take, up to downloads.READY_WAIT, saying so when it has not."""
+        """Wait for a new Folder's download behaviour to take, up to downloads.READY_WAIT, saying so when it has not."""
         if not folder.ready():
             mcp.log("the %s Chrome's downloads are not yet set to go to %s; its Folder keeps trying"
                     % (folder.name, folder.folder))

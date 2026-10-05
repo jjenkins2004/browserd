@@ -54,7 +54,7 @@ def window_state(browser, target):
 
 
 def live(profile, state):
-    """The checks' Chrome as require and a Browser find it, and tabs on it."""
+    """The throwaway Chrome as require and a Browser find it, and tabs on it."""
     said = refusal(lambda: cdp.require(profile))
     check("a Chrome of the checks' own, on a new folder, passes require", not said, said)
     check("the folder's owner is the process on its port", cdp.listener(profile.port) == cdp.owner(profile.folder))

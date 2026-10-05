@@ -4,7 +4,7 @@ on screen not minimized. Windows only.
     py -3 tests/popups.py -- py -3 tests/check_server.py
     py -3 tests/popups.py --seconds 30          (watch alone, as while an agent works)
 
-A window is watched when its process is one this process started, or its children did (the checks' own Chrome, a
+A window is watched when its process is one this process started, or its children did (the throwaway Chrome, a
 console a helper flashed); run as a command, any Chrome started with --remote-debugging-port is too, a browserd
 profile's included. The user's own windows, open before or opened since, are never counted. Two ways see each pop-up:
 a WinEvent hook, called as the OS shows, restores or focuses a window, so a flash shorter than any poll is caught, and
@@ -178,7 +178,7 @@ class Watch:
             chrome = "chrome.exe" in words and "--remote-debugging-port" in words and "--type=" not in words
             if chrome and self._every_chrome:
                 why = "debug Chrome"
-            elif _descends(pid, os.getpid()):  # started before the watch or after, as the checks' Chrome is
+            elif _descends(pid, os.getpid()):  # started before the watch or after, as the throwaway Chrome is
                 why = "debug Chrome" if chrome else "new process: %s" % (line.split('" ')[0].strip('"')[:120] or pid)
             self._whys[pid] = why
         return self._whys[pid]
