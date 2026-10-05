@@ -39,7 +39,7 @@ same logged-in Chrome, to compare them.
       grade.py      capex's and parks' checks against their keys (GRADERS); `flights`, Google Flights' nonstops now,
                     for trip's judge
       judge.py      grades a trip Doc: claude-opus-5-5 on browserd with rubric.md and the run's evidence
-      compare.py    a task on each arm (browserd, playwright, devtools, agentbrowser) k times, one at a time in
+      compare.py    a task on each arm (browserd, playwright, devtools, claudechrome) k times, one at a time in
                     browserd's Chrome, each recorded and graded; gallery
 
 ## Core Abstractions & Shared Pieces
@@ -83,22 +83,25 @@ same logged-in Chrome, to compare them.
   (`close_sessions`, the browserd page's Close session).
 - **A comparison** is `compare.py run <exp> [--task trip|capex|parks]` (trip by default): per run,
   `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p` (the judge's Claude Code) with run.sh's flags, the arm's server
-  alone, `TIMEOUT` (2 hours), and `record.py` beside it (browserd's by `--transcript`, the others' by `--cdp`); then the
-  files the task's final message must link (`FILES`, found by `LINKS`), the deck's PDF and one PNG per slide
-  (`pdftoppm`) for a task with a deck, then the grade. trip's is the judge, given the Doc, in
-  `<data>/<exp>/judging/<random id>/`, so neither its folder nor its request names the arm; capex's and parks' are
-  `grade.GRADERS` on `judge.PROFILE`, and no judge. `result.json` has the task, the files' URLs (`doc`, `deck`,
-  `sheet`, `map`), the run's numbers and scores: trip's `correct`, `polish` and `looks`; capex's and parks' `score` (checks
-  passed, checks made) and `checks` (each check's ok/BAD line); `passed` when every correct item or check passed. A
-  `result.json` of `{"skipped": why}`, written by hand, keeps a run from starting. `compare.py report <exp>` sums the
-  runs in a table per task, leaving out skipped ones, and writes `gallery.html` (each
-  run's slides in a row) and `gallery-blind.html` (rows shuffled and lettered, the key in `gallery-key.json`). browserd
-  runs on the main server's profile `judge.PROFILE` names, and every other arm attaches over DevTools to that same
-  Chrome (its profile's port), so all arms drive one browser signed in to the same account. Each run begins with
-  `clean_start`: the Chrome left holding one fresh blank tab, in a window of its own, where every server starts; after
-  it, the run's browserd session (if any) is closed and `clear_tabs` closes every tab no open browserd session owns, so
-  nothing passes from one run to the next. Runs go one at a time (`--jobs` 1, threads over the run list in order, each
-  rep's arms reversed from the last's).
+  alone (claudechrome's tools are Claude in Chrome's, from `--chrome`), `TIMEOUT` (2 hours), and `record.py` beside it
+  (browserd's by `--transcript`, the others' by `--cdp`); then the files the task's final message must link (`FILES`,
+  found by `LINKS`), the deck's PDF and one PNG per slide (`pdftoppm`) for a task with a deck, then the grade. trip's is
+  the judge, given the Doc, in `<data>/<exp>/judging/<random id>/`, so neither its folder nor its request names the arm;
+  capex's and parks' are `grade.GRADERS` on `judge.PROFILE`, and no judge. `result.json` has the task, the files' URLs
+  (`doc`, `deck`, `sheet`, `map`), the run's numbers and scores: trip's `correct`, `polish` and `looks`; capex's and
+  parks' `score` (checks passed, checks made) and `checks` (each check's ok/BAD line); `passed` when every correct item
+  or check passed. A `result.json` of `{"skipped": why}`, written by hand, keeps a run from starting. `compare.py report
+  <exp>` sums the runs in a table per task, leaving out skipped ones, and writes `gallery.html` (each run's slides in a
+  row) and `gallery-blind.html` (rows shuffled and lettered, the key in `gallery-key.json`). browserd runs on the main
+  server's profile `judge.PROFILE` names, Playwright and chrome-devtools-mcp attach over DevTools to that same Chrome
+  (its profile's port), and claudechrome, Claude Code's own `--chrome` tools, reaches it through the Claude extension
+  installed and signed in there, so all arms drive one browser signed in to the same account. Each run begins with
+  `clean_start`: the Chrome left holding one fresh blank tab, in a window of its own, where every server but Claude in
+  Chrome starts; after it, the run's browserd session (if any) is closed and `clear_tabs` closes every tab no open
+  browserd session owns, so nothing passes from one run to the next. Runs go one at a time (`--jobs` 1, threads over the
+  run list in order, each rep's arms reversed from the last's). Another task's `compare.py run` can go beside this one
+  on a profile of its own (`$BROWSERD_LONG_TASKS_PROFILE`), never the same task: capex and parks name their files, so
+  two runs of one task on one account would find each other's.
 
 ## Agent Gotchas & Invariants (⚠️)
 
@@ -153,12 +156,19 @@ same logged-in Chrome, to compare them.
   visits, so `compare.py` (before each run) and `judge.py` (before the judge) delete Yelp's cookies
   (`grade.forget_yelp`); the rubric also takes the Yelp rating Google's results show.
 - The other arms share browserd's `judge.PROFILE` Chrome because Google signs out a copy of a profile's folder within
-  about 10 minutes (its cookies cannot be renewed in another Chrome), and Chrome runs one process per folder. They see
-  every tab of that Chrome and start on one (Playwright, chrome-devtools-mcp and agent-browser on the newest, but
-  Playwright on another when several windows are open), which is why `clean_start` leaves only its fresh tab, and why
-  runs never go two at once. A tab of an open browserd session (the user at work) makes a run wait, never closed.
-- agent-browser's `close`, Playwright's `browser_close` and chrome-devtools-mcp leave the Chrome running: each closes
-  its own tab at most (checked on a throwaway Chrome).
+  about 10 minutes (its cookies cannot be renewed in another Chrome), and Chrome runs one process per folder.
+  Playwright and chrome-devtools-mcp see every tab of that Chrome and start on one (the newest, but Playwright on
+  another when several windows are open), which is why `clean_start` leaves only its fresh tab, and why runs never go
+  two at once in one Chrome; Claude in Chrome sees only its own tab group, where it opens a tab of its own. A tab of
+  an open browserd session (the user at work) makes a run wait, never closed.
+- Playwright's `browser_close` and chrome-devtools-mcp leave the Chrome running: each closes its own tab at most
+  (checked on a throwaway Chrome).
+- Every profile's Claude extension connects to every `claude --chrome`, and with more than one connected, Claude in
+  Chrome acts in none until the run selects one; asked which, a headless run cannot answer. So claudechrome's system
+  prompt names the profile's device id, from `<data>/claude-devices.json` (`{profile: id}`, written by hand from
+  `list_connected_browsers` with that profile's Chrome alone running). Two runs on two profiles' extensions run at once
+  (checked). Claude Code also asks before acting on each new site, whatever the permission mode, which the bench's
+  `allow.py` answers.
 - Every run shares the account's Drive and Google Flights' recent searches. A run that reports a file an earlier run
   made is not graded ("an earlier run's doc", "... deck", "... sheet" or "... map"), but a copy of one has a new URL:
   capex and parks name their files, and Sheets, My Maps and Slides' Insert > Chart list earlier runs' files of that

@@ -2,15 +2,15 @@
 on claude-sonnet-5-5, graded as it ends; or a summary and slide gallery of an experiment's runs.
 
     python3 experiments/long-tasks/compare.py run <exp> [--task trip|capex|parks]
-        [--arms browserd,playwright,devtools,agentbrowser] [--k 2] [--jobs 1]
+        [--arms browserd,playwright,devtools,claudechrome] [--k 2] [--jobs 1]
     python3 experiments/long-tasks/compare.py report <exp>
 
 Each run is <data>/<exp>/<arm>-r<n>/: prompt.md, transcript.jsonl (stream-json), stderr.txt, flights-before.json (trip
 only), the recording (frames/, frames.tsv, video.mp4, record.log), deck.pdf and slides/ (a task with a deck) and
 result.json. trip's judge works in <data>/<exp>/judging/<random id>/; capex and parks are graded by grade.py's checks.
 Every arm drives browserd's Chrome of the profile judge.PROFILE names, so runs go one at a time unless --jobs says
-otherwise. A run with a result.json is done, so running an experiment again runs only what is missing. report writes
-gallery.html and gallery-blind.html.
+otherwise; another task's compare.py may run beside it on a profile of its own. A run with a result.json is done, so
+running an experiment again runs only what is missing. report writes gallery.html and gallery-blind.html.
 """
 import argparse
 import concurrent.futures
@@ -40,7 +40,10 @@ DATA = Path(os.environ.get("BROWSERD_LONG_TASKS_DATA", ROOT.parent / "browserd-l
 MODEL = "claude-sonnet-5-5"
 PROFILE = judge.PROFILE
 TIMEOUT = 7200  # seconds a run may take before it is stopped
-ARMS = ["browserd", "playwright", "devtools", "agentbrowser"]
+ARMS = ["browserd", "playwright", "devtools", "claudechrome"]
+DEVICES = DATA / "claude-devices.json"  # {profile: its Claude extension's device id}, written by hand (README)
+SELECT = ("Claude in Chrome's browser for this task is the one whose deviceId is %s: select it with select_browser "
+          "before any other browser action.")
 # Each prompt's one browserd sentence, and the other arms' for it: the same request, minus browserd's name, profile and
 # session label. browserd's own keeps it, with PROFILE for personal.
 BROWSERD_SENTENCE = re.compile(r"Use browserd with my personal profile[^.]*\.")
@@ -61,8 +64,17 @@ def prompt(task, arm):
         lambda found: found.group(0).replace("personal", PROFILE) if arm == "browserd" else NEUTRAL, text)
 
 
-def servers(arm, run, port, session):
-    """The arm's MCP server, by the name its tools take; the others reach PROFILE's Chrome on port."""
+def device():
+    """PROFILE's Claude extension's device id, from DEVICES."""
+    devices = json.loads(DEVICES.read_text()) if DEVICES.exists() else {}
+    if PROFILE not in devices:
+        raise SystemExit("%s gives no Claude extension device id for the profile %s" % (DEVICES, PROFILE))
+    return devices[PROFILE]
+
+
+def servers(arm, port):
+    """The arm's MCP server, by the name its tools take. The others reach PROFILE's Chrome on port; claudechrome's is
+    allow.py, which answers Claude Code's asks, since Claude in Chrome is Claude Code's own, through the extension."""
     if arm == "browserd":
         return {"browserd": {"type": "http", "url": "http://127.0.0.1:9230/mcp"}}
     cdp = "http://127.0.0.1:%d" % port
@@ -73,11 +85,7 @@ def servers(arm, run, port, session):
         cmd = judge.command([str(ROOT / "node_modules/.bin/chrome-devtools-mcp"), "--browserUrl", cdp,
                              "--no-usage-statistics"])
         return {"devtools": {"command": cmd[0], "args": cmd[1:]}}
-    # agent-browser's MCP server takes no flags for the browser: its config file's "cdp" gives the port, and a session
-    # of its own keeps its daemon apart from another run's.
-    (run / "agent-browser.json").write_text(json.dumps({"cdp": str(port)}))
-    return {"agent-browser": {"command": "agent-browser", "args": ["mcp"],
-                              "env": {"AGENT_BROWSER_CONFIG": str(run / "agent-browser.json"), "AGENT_BROWSER_SESSION": session}}}
+    return {"allow": {"command": sys.executable, "args": [str(ROOT / "experiments/bench/allow.py")]}}
 
 
 def start_recorder(arm, run, profile):
@@ -114,10 +122,10 @@ def clear_tabs(state, browser, keep=()):
 
 
 def clean_start(state, browser):
-    """Leave the Chrome holding one fresh tab, in a window of its own, so every run starts the same: the other servers
-    see every tab and start on one, so nothing a run could find is left from before; and with no Yelp cookies, so no
-    run inherits a bot check. While an open browserd session owns a tab, someone else is at work, and the run waits.
-    Returns the fresh tab's target."""
+    """Leave the Chrome holding one fresh tab, in a window of its own, so every run starts the same: Playwright and
+    chrome-devtools-mcp see every tab and start on one, so nothing a run could find is left from before; and with no
+    Yelp cookies, so no run inherits a bot check. While an open browserd session owns a tab, someone else is at work,
+    and the run waits. Returns the fresh tab's target."""
     while page_targets(browser) & others_tabs(state):
         print("waiting: an open browserd session has a tab in the %s Chrome" % PROFILE, flush=True)
         time.sleep(60)
@@ -145,15 +153,21 @@ else:
 
 
 def claude(arm, run, servers):
-    """One headless Claude Code, as run.sh's interactive one: no user settings, the arm's server its only tools. Returns
-    whether it timed out."""
-    name = next(iter(servers))
+    """One headless Claude Code, as run.sh's interactive one: no user settings, the arm's server its only tools
+    (claudechrome's are Claude in Chrome's, from --chrome). Returns whether it timed out."""
+    tools = "mcp__claude-in-chrome" if arm == "claudechrome" else "mcp__" + next(iter(servers))
     cmd = judge.command([judge.CLAUDE, "-p", "--model", MODEL, "--output-format", "stream-json", "--verbose",
                          "--setting-sources", "", "--tools", "", "--strict-mcp-config",
                          "--mcp-config", json.dumps({"mcpServers": servers}), "--no-session-persistence",
-                         "--allowedTools", "mcp__" + name])
+                         "--allowedTools", tools])
     if arm == "browserd":
         cmd += ["--disallowedTools", "mcp__browserd__profile_new", "mcp__browserd__profile_delete"]
+    if arm == "claudechrome":
+        # allow.py answers Claude Code's asks (README), itself out of the model's reach; claude.ai, where the extension
+        # is signed in, is denied.
+        cmd += ["--chrome", "--permission-prompt-tool", "mcp__allow__approve",
+                "--disallowedTools", "mcp__allow__approve", "ClaudeInChromeDomain(claude.ai)",
+                "--append-system-prompt", SELECT % device()]
     with (run / "transcript.jsonl").open("w") as stdout, (run / "stderr.txt").open("w") as stderr:
         # Out of the terminal's Ctrl-C, as on macOS: there a session of its own, which stop_tree's killpg also uses
         # to reach the MCP servers claude starts; on Windows a process group of its own, which Ctrl-C skips.
@@ -243,23 +257,16 @@ def run_one(out, task, arm, rep, stopped):
         before = grade.reference(PROFILE)
         (run / "flights-before.json").write_text(json.dumps(before) + "\n")
     state = State(grade.STATE_FILE)
-    profile, session = state.profile(PROFILE), "%s-%s-r%d" % (out.name, arm, rep)
+    profile = state.profile(PROFILE)
     browser = cdp.Browser(profile)
     clean_start(state, browser)
     print("%s r%d: started" % (arm, rep), flush=True)
     recorder = start_recorder(arm, run, profile)
     started = time.time()
     try:
-        timed_out = claude(arm, run, servers(arm, run, profile.port, session))
+        timed_out = claude(arm, run, servers(arm, profile.port))
     finally:
         stop_recorder(recorder)
-        if arm == "agentbrowser":  # it ends its daemon's hold on the Chrome, never the Chrome itself
-            try:
-                subprocess.run(["agent-browser", "close"], capture_output=True, timeout=60,
-                               env=dict(os.environ, AGENT_BROWSER_CONFIG=str(run / "agent-browser.json"),
-                                        AGENT_BROWSER_SESSION=session))
-            except subprocess.TimeoutExpired:
-                pass
         if arm == "browserd":
             judge.close_sessions(run / "transcript.jsonl")
         clear_tabs(state, browser)  # what the run opened: nothing it leaves reaches the next run
@@ -416,6 +423,10 @@ if __name__ == "__main__":
     out = DATA / args.exp
     if args.action == "run":
         arms = args.arms.split(",")
+        if set(arms) - set(ARMS):
+            raise SystemExit("no such arm: %s" % ", ".join(sorted(set(arms) - set(ARMS))))
+        if "claudechrome" in arms:
+            device()  # before any run starts
         # Each rep runs the arms in the other order, so none always runs first or last.
         runs = [(arm, rep) for rep in range(1, args.k + 1) for arm in (arms if rep % 2 else arms[::-1])]
         stopped = threading.Event()

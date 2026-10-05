@@ -68,7 +68,8 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
       traps.py        suite traps: 8 tasks in a fake editor, 6 timed traps over the next target
       ffserver.py     FormFactory's Flask app on 5055, each submission saved under its run
       mwserver.py     MiniWoB++'s pages on 4390, each reward saved under its run
-      allow.py        the claudechrome arm's --permission-prompt-tool: allows every permission prompt
+      allow.py        the claudechrome arms' --permission-prompt-tool, here and in ../long-tasks/compare.py: allows
+                      every permission prompt
       clickserver.py  the clicks page on 4395
       hayserver.py    the haystack pages on 4396
       trapserver.py   the trap editor (trapapp.html) on 4397, each run's log under results/trap-logs/
