@@ -207,7 +207,7 @@ def read_deck(pptx):
 
 
 def read_sheet(xlsx):
-    """The workbook's tab names, its first tab's cells {"B2": (value, formula or None)}, and its chart kinds."""
+    """The workbook's tab names, its first tab's cells {"B2": (value, has a formula)}, and its chart kinds."""
     book = zipfile.ZipFile(io.BytesIO(xlsx))
     shared = ["".join(t.text or "" for t in item.iter(S + "t")) for item in
               ET.fromstring(book.read("xl/sharedStrings.xml")).iter(S + "si")] if "xl/sharedStrings.xml" in book.namelist() else []
@@ -222,7 +222,7 @@ def read_sheet(xlsx):
         text = value.text if value is not None else "".join(t.text or "" for t in cell.iter(S + "t"))
         if kind == "s" and text:
             text = shared[int(text)]
-        cells[cell.get("r")] = (text or "", formula.text if formula is not None else None)
+        cells[cell.get("r")] = (text or "", formula is not None)
     charts = [child.tag.removeprefix(CHART) for name in book.namelist() if name.startswith("xl/charts/chart")
               for plot in ET.fromstring(book.read(name)).iter(CHART + "plotArea") for child in plot
               if child.tag.endswith("Chart")]

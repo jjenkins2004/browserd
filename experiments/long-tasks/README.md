@@ -95,6 +95,10 @@ compare them.
 - No export shows that slide 6's chart is linked to the Sheet, or that column H is formatted as a percent: those are
   left to the eye. That a Sheets chart reaches the `.xlsx` export as `xl/charts/` is untested: a run with a chart is
   the first proof.
+- An `.xlsx` may write same-shaped formulas as one shared formula, its text in the first cell alone
+  (`<f t="shared" ref="H2:H5" si="0">G2/F2-1</f>`) and an empty `<f t="shared" si="0"/>` in the rest, so
+  `read_sheet` records only whether a cell has an `<f>`. That Sheets' export does so is read from the runs' grades
+  (H2 a formula, H3 to H5 none, in every run): no export has been opened.
 - `clean_start` opens the run's one window minimized (`opens.window`), and Chrome does not draw a tab in a minimized
   window (`../../browser/steps/README.md`, the screenshot gotcha): `record.py` asks each frame again until one comes,
   but another server's own screenshots and clicks may wait on one. Un-minimize the window before a run, and keep it
