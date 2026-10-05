@@ -1,21 +1,24 @@
-"""Tab ids, the session and tab tools, and pairing a tab with its own chrome-devtools-mcp.
+"""Tab ids, the session and tab tools, pairing a tab with its own chrome-devtools-mcp, and the tools that start and
+stop that process.
 """
 
 import json
+import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 
 from browser import system
 from browser.chrome import cdp, focus
 from browser.chrome.opens import PLACEHOLDER
-from browser.tabs import sessions
+from browser.tabs import sessions, worker
 from browser.chrome.profiles import Profile
 from browser.records.state import Tab
 from browser.tabs.tabs import LETTERS, Tabs
 from browser.tabs.worker import Worker, Workers
-from browser.tools import tab_tools
+from browser.tools import queue_steps, queue_tool, tab_tools
 from harness import (FakeChrome, FakeConnection, STAND_IN, call, check, open_session, refusal, rpc, serving,
                      stand_in_state)
 
@@ -308,3 +311,115 @@ def pairing_offline():
           listing.asked == ["list_pages", "evaluate_script"]
           and "Open %s again with tab_open first, then close this tab with tab_close" % url in said
           and marks.marker is None, said)
+
+
+class Process:
+    """A tab's chrome-devtools-mcp as Worker.ensure starts it, standing in for devtools.Devtools: each step answers after
+    Process.wait seconds, a take_snapshot with a view holding a Name box, and close ends it."""
+
+    wait = 0.0
+
+    def __init__(self, log_path, endpoint=None):
+        self.running = True
+
+    def call(self, tool, arguments, wait=None):
+        time.sleep(Process.wait)
+        if tool == "take_snapshot":
+            snapshot = '## Latest page snapshot\nuid=1_0 RootWebArea "Form"\n  uid=1_1 textbox "Name"'
+            return [{"type": "text", "text": snapshot}], False
+        return [{"type": "text", "text": "Successfully clicked on the element"}], False
+
+    def text(self, tool, arguments, wait=None):
+        return ""  # select_page, as ensure asks it
+
+    def alive(self):
+        return self.running
+
+    def close(self):
+        self.running = False
+
+
+def queue_tools_offline():
+    """tab_open's steps, queues on two tabs at once, a tab's process started again once it died, and the tab tools
+    stopping a closed tab's process: over HTTP against a stand-in Chrome, each tab's process a Process that pairs at
+    once."""
+    workdir = tempfile.mkdtemp(prefix="browser-queue-tools-")
+    state = stand_in_state(workdir)
+    chrome, root = FakeChrome(), os.path.join(workdir, "calls")
+    tabs = Tabs(state, chrome.connect)
+
+    def unreachable():
+        raise cdp.CdpError("nothing listens on the stand-in's port")  # so each tab's downloads.Watcher hears nothing
+
+    workers = Workers(workdir, unreachable)
+    allowed = {"take_snapshot": {},
+               "click": {"inputSchema": {"required": ["uid"], "properties": {"uid": {"type": "string"}}}}}
+    httpd = serving(tab_tools(state, tabs, workers, queue_steps(state, tabs, workers, allowed, root))
+                    + [queue_tool(state, tabs, workers, allowed, root)])
+    saved = worker.Devtools, Worker._pair
+    worker.Devtools, Worker._pair = Process, lambda self, devtools: 1
+    try:
+        session = call(httpd, "session_start", profile="School", label="queue tools")[0].split()[1].rstrip(",")
+        mine = state.session(session)
+        home = os.path.join(root, "School", sessions.folder(mine))
+        text, is_error = call(httpd, "tab_open", session=session, url="https://example.com/a",
+                              steps=[{"tool": "take_snapshot"}])
+        a = text.split()[0] if text else ""
+        check("tab_open given steps opens the tab, then runs them on it: its tab id, title and URL, then the queue's report",
+              not is_error and text.startswith(a + "  Loaded  https://example.com/a\n--- 1 take_snapshot ok")
+              and 'textbox "Name"' in text, text)
+        check("and records them as that tab's first queue call",
+              sorted(os.listdir(os.path.join(home, a))) == ["001-queue.json", "001-queue.txt", "001-step1-snapshot.txt"],
+              repr(os.listdir(os.path.join(home, a))))
+        text, is_error = call(httpd, "tab_open", session=session, url="https://example.com/b",
+                              steps=[{"tool": "new_page", "url": "about:blank"}])
+        b = text.split()[0] if text else ""
+        check("tab_open whose steps are refused still opens the tab and names it, with why they did not run",
+              is_error and text.startswith(b + "  Loaded  https://example.com/b\nthe tab is open, but its steps did not run")
+              and "new_page" in text and b in call(httpd, "tab_list", session=session)[0], text)
+
+        Process.wait, spans = 0.2, {}
+
+        def run(tab):
+            began = time.monotonic()
+            text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "click", "uid": "1_1"},
+                                                                                  {"tool": "click", "uid": "1_2"}])
+            spans[tab] = (began, text, is_error, time.monotonic())
+
+        threads = [threading.Thread(target=run, args=(tab,)) for tab in (a, b)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        Process.wait = 0.0
+        worked = sum(float(took) for _, text, _, _ in spans.values()
+                     for took in re.findall(r"^--- \d+ \S+ \w+ ([\d.]+)s$", text, re.M))
+        wall = max(end for *_, end in spans.values()) - min(began for began, *_ in spans.values())
+        check("queues on two tabs run at the same time, not in turn",
+              len(spans) == 2 and not any(is_error for _, _, is_error, _ in spans.values()) and wall < worked,
+              "%.1fs of %.1fs: %r" % (wall, worked, spans))
+
+        first = workers.get(a, tabs.target(mine, a), STAND_IN)._devtools
+        if first is not None:
+            first.close()
+        text, is_error = call(httpd, "queue", session=session, tab=a, steps=[{"tool": "take_snapshot"}])
+        again = workers.get(a, tabs.target(mine, a), STAND_IN)._devtools
+        check("a tab whose chrome-devtools-mcp died gets a new one on its next queue",
+              not is_error and again is not first and again.alive(), text)
+        check("and the report says its old uids are gone", text.startswith("note:"), text[:120])
+
+        process = workers.get(b, tabs.target(mine, b), STAND_IN)._devtools
+        chrome.targets.remove(chrome.find(tabs.target(mine, b)))
+        call(httpd, "tab_list", session=session)
+        check("tab_list stops the chrome-devtools-mcp of a tab closed outside the server",
+              process is not None and not process.alive())
+        call(httpd, "tab_close", session=session, tabs=[a])
+        check("closing a tab stops its chrome-devtools-mcp", not again.alive())
+    finally:
+        worker.Devtools, Worker._pair = saved
+        Process.wait = 0.0
+        httpd.shutdown()
+        httpd.server_close()
+        workers.stop_all()
+        state.close()
+        shutil.rmtree(workdir, ignore_errors=True)

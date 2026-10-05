@@ -1,11 +1,14 @@
 """A Chrome of the checks' own, on a new folder and a free port, so no live check touches a profile's Chrome. It runs
 headless, with no window at all, so no check puts one on screen or takes the user's focus; with HEADED set (the
-checks' --headed), it has windows as a profile's Chrome does, for the checks of windows and the focus.
+checks' --headed), it has windows as a profile's Chrome does, for the checks of windows and the focus. Its profile asks
+where to save each file from the start, so every live download shows a profile's downloads.Folder saves with no Save As
+window whatever the profile says.
 
     with throwaway.chrome() as profile:  # None when Chrome is not installed
 """
 
 import contextlib
+import json
 import os
 import shutil
 import socket
@@ -28,6 +31,15 @@ def start(profile):
     return launch.launch(profile, flags=flags())
 
 
+def asking(folder):
+    """Set the Chrome profile in a new Chrome folder to ask where to save each file, before its Chrome first starts."""
+    os.makedirs(os.path.join(folder, cdp.PROFILE))
+    with open(os.path.join(folder, cdp.PROFILE, "Preferences"), "w", encoding="utf-8") as handle:
+        json.dump({"download": {"prompt_for_download": True}}, handle)
+    with open(os.path.join(folder, "Local State"), "w", encoding="utf-8") as handle:
+        handle.write("{}")  # launch reads it in a folder holding anything: as a new folder's Chrome first writes it
+
+
 @contextlib.contextmanager
 def chrome():
     if not os.path.exists(cdp.CHROME):
@@ -41,6 +53,7 @@ def chrome():
         port = probe.getsockname()[1]
     profile = Profile("Check", folder, port)
     try:
+        asking(folder)
         start(profile)
         yield profile
     finally:

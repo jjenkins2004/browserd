@@ -36,6 +36,7 @@ if __name__ == "__main__":
     steps.checked_offline()
     print()
     tabs.pairing_offline()
+    tabs.queue_tools_offline()
     print()
     steps.dialogs_offline()
     print()
@@ -90,7 +91,7 @@ if __name__ == "__main__":
                           "screen\n")
                 live.queue_live(profile, state)
                 print()
-                live.downloads_live(profile)  # last: it sets the throwaway profile to ask where to save each file
+                live.downloads_live(profile)
             finally:
                 if watch is not None:
                     popups.checked(watch, check)
