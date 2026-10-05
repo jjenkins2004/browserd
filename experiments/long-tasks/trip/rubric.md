@@ -101,6 +101,6 @@ Polish (headings from doc.md, the rest from doc.pdf):
 
 Then looks, 1 to 10: how good the Doc looks as something to send a manager.
 
-Your final message is only this JSON, every item above in it ({items}), each note one short sentence:
+Give your verdict as this JSON, every item above in it ({items}), each note one short sentence:
 {"correct": {"structure": [true, "note"], "seattle_flights": [false, "note"], ...}, "polish": {"headings": [true,
 "note"], ...}, "looks": 7, "summary": "one or two sentences"}

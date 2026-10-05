@@ -36,6 +36,16 @@ ITEMS = {  # trip/rubric.md's items, by group: its <city>_ items once for each c
                 + ["costs", "table", "pick", "recommendation", "return", "vetting", "by_hand"]),
     "polish": ["headings", "headers", "highlight", "photos", "layout", "consistent"],
 }
+# The verdict's shape, for --json-schema: Claude Code checks the judge's verdict against it, so every item comes back.
+# An item is [true or false, its note], but the schema holds each of its two values only to a boolean or a string:
+# Claude Code refuses prefixItems and the API refuses items as a list. The items share one $defs entry, which keeps
+# the argument under cmd /c's 8191 characters.
+ITEM = {"type": "array", "items": {"anyOf": [{"type": "boolean"}, {"type": "string"}]}, "minItems": 2, "maxItems": 2}
+VERDICT = {"type": "object", "required": [*ITEMS, "looks", "summary"], "additionalProperties": False,
+           "$defs": {"item": ITEM},
+           "properties": {**{group: {"type": "object", "properties": dict.fromkeys(items, {"$ref": "#/$defs/item"}),
+                                     "required": items, "additionalProperties": False} for group, items in ITEMS.items()},
+                          "looks": {"type": "integer", "minimum": 1, "maximum": 10}, "summary": {"type": "string"}}}
 
 
 def command(argv):
@@ -104,21 +114,9 @@ def request():
     return re.sub(r" ?Use browserd[^.]*\.", "", (HERE / "trip" / "prompt.md").read_text(encoding="utf-8"))
 
 
-def verdict_of(text):
-    """The JSON object the judge's final message holds, or None."""
-    found = re.search(r"\{.*\}", text or "", re.S)
-    try:
-        verdict = json.loads(found.group(0)) if found else None
-    except ValueError:
-        return None
-    return verdict if isinstance(verdict, dict) else None
-
-
 def passed(verdict, group, item):
-    """Whether the verdict passes an item: only [true, note] does, so one it leaves out or gives in another shape
-    fails."""
-    found = verdict[group].get(item) if isinstance(verdict.get(group), dict) else None
-    return isinstance(found, list) and bool(found) and found[0] is True
+    """Whether the verdict passes an item: only [true, note] does."""
+    return verdict[group][item][0] is True
 
 
 def score(verdict):
@@ -149,7 +147,8 @@ def judge(doc, transcript, folder, before):
               .replace("{items}", ", ".join(ITEMS["correct"] + ITEMS["polish"])))
     cmd = command([CLAUDE, "-p", "--model", MODEL, "--output-format", "stream-json", "--verbose", "--setting-sources", "",
                    "--tools", "Read,Grep", "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": BROWSERD}),
-                   "--no-session-persistence", "--allowedTools", "mcp__browserd", "Read", "Grep",
+                   "--no-session-persistence", "--json-schema", json.dumps(VERDICT),
+                   "--allowedTools", "mcp__browserd", "Read", "Grep",
                    "--disallowedTools", "mcp__browserd__profile_new", "mcp__browserd__profile_delete"])
     with (folder / "judge.jsonl").open("w") as out, (folder / "judge-stderr.txt").open("w") as err:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=out, stderr=err, cwd=folder, env=env(),
@@ -163,7 +162,7 @@ def judge(doc, transcript, folder, before):
             proc.wait()
     close_sessions(folder / "judge.jsonl")
     result = next((e for e in events(folder / "judge.jsonl") if e.get("type") == "result"), {})
-    verdict = verdict_of(result.get("result"))
+    verdict = result.get("structured_output")
     (folder / "verdict.json").write_text(json.dumps(verdict, indent=1) + "\n")
     return verdict, result.get("total_cost_usd")
 
@@ -181,7 +180,7 @@ if __name__ == "__main__":
         raise SystemExit("the judge gave no verdict: see %s" % Path(args.folder, "judge.jsonl"))
     for group, items in ITEMS.items():
         for item in items:
-            _, note = ((verdict.get(group) or {}).get(item) or [False, "not graded"])[:2]
+            _, note = verdict[group][item]
             print("%s  %s %s: %s" % ("ok " if passed(verdict, group, item) else "BAD", group, item, note))
     scores = score(verdict)
     print("correct %d/%d, polish %d/%d, looks %s, judge $%s" % (*scores["correct"], *scores["polish"], scores["looks"],

@@ -77,9 +77,9 @@ same logged-in Chrome, to compare them.
   Its folder holds the evidence: `doc.md` and `doc.pdf`, the Doc's Markdown and PDF exports (fetched as capex's files
   are, the Markdown's inline images cut); `flights-before.json` (`grade.py flights` as the run began) and
   `flights-after.json` (now), from `nonstops`, which reads each Google Flights result's aria-label on the default
-  results and on the Cheapest tab; `seen.txt`, every tool call's input (a `> ` line) and result of the run. Its last
-  message is a JSON verdict, saved as `verdict.json`;
-  `score` counts the items each group passed, a missing item failing. It then closes the browserd session it opened
+  results and on the Cheapest tab; `seen.txt`, every tool call's input (a `> ` line) and result of the run. Its
+  verdict is JSON that Claude Code checks against `VERDICT` (`--json-schema`), saved as `verdict.json`;
+  `score` counts the items each group passed. It then closes the browserd session it opened
   (`close_sessions`, the browserd page's Close session).
 - **A comparison** is `compare.py run <exp> [--task trip|capex|parks]` (trip by default): per run,
   `<data>/<exp>/<arm>-r<n>/`, a headless `claude -p` (the judge's Claude Code) with run.sh's flags, the arm's server
