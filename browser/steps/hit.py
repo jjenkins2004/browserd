@@ -24,11 +24,15 @@ HOLDERS = {"menu", "menubar", "listbox", "toolbar", "tablist", "tree", "treegrid
            "radiogroup", "list", "group", "dialog", "alertdialog", "rootwebarea", "webarea", "document", "application",
            "main", "navigation", "region", "form", "search", "banner", "contentinfo", "complementary", "article",
            "feed", "tabpanel", "iframe", "iframepresentational", "menulistpopup"}
+# Roles whose value a step's name may fit and a press's on may name: agents name what they see, and a box shows its
+# value (the Google editors' title is the value of textbox "Rename").
+TEXT_BOXES = {"textbox", "searchbox", "combobox"}
 
-# role: the hit's, or its control's, lowercased; name: what a report shows of it; words: every string a press's words
-# may come from; control: whether role is one of CONTROLS; frame: the origin of a frame from another site whose
-# content Chrome keeps in another process, which no read reaches into, or None.
-What = collections.namedtuple("What", "role name words control frame")
+# role: the hit's, or its control's, lowercased; name: what a report shows of it; words: its names and text, any of
+# which a press's words may come from; control: whether role is one of CONTROLS; frame: the origin of a frame from
+# another site whose content Chrome keeps in another process, which no read reaches into, or None; value: a text box's
+# value (TEXT_BOXES), or "".
+What = collections.namedtuple("What", "role name words control frame value", defaults=("",))
 NOTHING = What(None, "", [], False, None)
 SHORT = 80  # characters of an element's text the DOM's words keep; a longer text is a holder's, like a menu's
 PREFIX = 4  # letters from which an on's word may begin a longer word of the name: "Close" passes on "Closer"
@@ -102,7 +106,9 @@ def read(browser, session, x, y):
         if _role(node) in CONTROLS:
             if not words:  # a control the tree names nothing, like a shape thumbnail with only a tooltip
                 words = _dom_words(browser, session, node.get("backendDOMNodeId") or hit["backendNodeId"])
-            return What(_role(node), name or (words[0] if words else ""), words, True, None)
+            # The tree gives an input's value no text child, so said lacks it.
+            value = _value(node) if _role(node) in TEXT_BOXES else ""
+            return What(_role(node), name or (words[0] if words else value), words, True, None, value)
         node = by_id.get(node.get("parentId"))
     if _role(first) == "iframe":
         return What("iframe", "", [], False, _origin(browser, session, hit["backendNodeId"]))
@@ -111,8 +117,10 @@ def read(browser, session, x, y):
 
 
 def carries(what, on):
-    """Whether what a press lands on carries the words on names, as fit matches them, in one of its names or its text."""
-    return any(fit(said, on) is not None for said in what.words)
+    """Whether what a press lands on carries the words on names, as fit matches them: in one of its names or its text,
+    or as the whole or the start of a text box's value. Not further in a value, which can hold an editor's whole text,
+    so a press anywhere in it would pass for any word of it."""
+    return any(fit(said, on) is not None for said in what.words) or bool(what.value) and fit(what.value, on) in (0, 1)
 
 
 def fit(said, on):
@@ -165,6 +173,10 @@ def _role(node):
 
 def _name(node):
     return str((node.get("name") or {}).get("value") or "").strip()
+
+
+def _value(node):
+    return str((node.get("value") or {}).get("value") or "").strip()
 
 
 def _dom_words(browser, session, backend):

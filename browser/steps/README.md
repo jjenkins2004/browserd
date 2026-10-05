@@ -62,13 +62,14 @@ bind this folder too: read it first.
   `upload_file`; `_named_tool`): `_step` finds the control in snapshots taken up to `NAME_WAIT`, preferring one inside
   a popup open over the page (`POPUPS`; `_names` says which are open), and runs the step on its uid (`_named` says which
   control fits and when the snapshots stop).
-- **Every snapshot a report holds is a view** (`_view`'s docstring), or with `full: true` its lines as written; either
-  is cut at `VIEW_MOST`. The whole snapshot is saved in the tab's record folder, and the header names the file.
+- **Every snapshot a report holds is a view** (`_view`'s docstring; `view`'s says which urls it cuts), or with
+  `full: true` its lines as written; either is cut at `VIEW_MOST`. The whole snapshot is saved in the tab's record
+  folder, and the header names the file.
 - **A step that begins a download says where it went**, since chrome-devtools-mcp's reply never does (an agent told
   nothing failed WebGames' combination lock hunting for the file): `run` waits up to `DOWNLOAD_WAIT` after each step
   while a download the tab's `downloads.Watcher` heard is still in progress (`../chrome/`).
 - **Text agents read repeats some of these numbers and lines.** `../tools.py`'s `QUEUE_HELP` and `STEPS_HELP` say
-  10,000 characters (`VIEW_MOST`), 5s (`dialogs.LATE`, `NAME_WAIT`), 1s (`NAME_STILL`) and 100 characters (where
-  chrome-devtools-mcp's `fill` sets a value by script), and describe the report's lines; `../../tests/checks/steps.py`
-  matches those lines word for word, and `queue_steps` acts on chrome-devtools-mcp's "No page found". Change them
-  together.
+  10,000 characters (`VIEW_MOST`), 300 characters (`URL_MOST`), 5s (`dialogs.LATE`, `NAME_WAIT`), 1s (`NAME_STILL`)
+  and 100 characters (where chrome-devtools-mcp's `fill` sets a value by script), and describe the report's lines;
+  `../../tests/checks/steps.py` matches those lines word for word, and `queue_steps` acts on chrome-devtools-mcp's "No
+  page found". Change them together.

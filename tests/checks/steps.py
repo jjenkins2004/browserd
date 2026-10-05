@@ -606,6 +606,32 @@ def views(workdir):
     text, _ = steps.view(rooted, path)
     check("a long first line, like a data: page's url, does not eat the view",
           text.split("\n")[1].startswith('uid=1_0 RootWebArea') and len(text.split("\n--- cut: ")[0]) > 12000 + 9000, len(text))
+    hotels = "https://www.google.com/travel/search?q=" + "h" * 300
+    linked = "\n".join(['uid=1_0 RootWebArea "Hotels" url="%s"' % hotels,
+                        '  uid=1_1 link "Hotel Lux" description="4 stars" url="%s"' % hotels,
+                        '  uid=1_2 link "Ad" url="https://www.google.com/aclk#%s"' % ("a" * 300),
+                        '  uid=1_3 link "10-K" url="https://www.sec.gov/Archives/edgar/data/1341439/orcl-20250531.htm?x=1"',
+                        '  uid=1_4 link "Deck" url="https://docs.google.com/presentation/d/%s/edit"' % ("d" * 300),
+                        '  uid=1_5 Iframe', '    uid=1_6 RootWebArea url="%s"' % hotels])
+    text, _ = steps.view("## Latest page snapshot\n" + linked, path)
+    check("a view cuts a url over URL_MOST characters after its scheme, host and path, at its ? or #; a shorter one, one "
+          "with no query or fragment, and the page's own stay whole, while a frame's is cut",
+          text.split("\n")[2:] == [
+              '  uid=1_1 link "Hotel Lux" description="4 stars" url="https://www.google.com/travel/search?…"',
+              '  uid=1_2 link "Ad" url="https://www.google.com/aclk#…"',
+              '  uid=1_3 link "10-K" url="https://www.sec.gov/Archives/edgar/data/1341439/orcl-20250531.htm?x=1"',
+              '  uid=1_4 link "Deck" url="https://docs.google.com/presentation/d/%s/edit"' % ("d" * 300),
+              '  uid=1_6 RootWebArea url="https://www.google.com/travel/search?…"']
+          and text.split("\n")[1] == 'uid=1_0 RootWebArea "Hotels" url="%s"' % hotels
+          and open(path, encoding="utf-8").read() == linked + "\n", text)
+    text, _ = steps.view("## Latest page snapshot\n" + linked, path, find="q=hhh")
+    check("find matches a url whole, the part a view cuts included, and shows the line cut",
+          text.split("\n")[1:] == ['uid=1_0 RootWebArea "Hotels" url="%s"' % hotels,
+                                   '  uid=1_1 link "Hotel Lux" description="4 stars" url="https://www.google.com/travel/search?…"',
+                                   '  (3 lines left out by find)',
+                                   '  uid=1_6 RootWebArea url="https://www.google.com/travel/search?…"'], text)
+    text, _ = steps.view("## Latest page snapshot\n" + linked, path, full=True)
+    check("and full: true keeps every url whole", text.count(hotels) == 3 and "…" not in text, text)
     text, _ = steps.view(big, path, find=r"^\s*uid=\S+ heading")
     check("a view within VIEW_MOST, like a find's, is not cut", "--- cut: " not in text and text.count(" heading ") == 60, text[:200])
     role = "## Latest page snapshot\n" + "\n".join([
@@ -1425,12 +1451,39 @@ def on_offline():
     content, failed = pointer.run({"tool": "click_down", "count": 2}, "P5", lambda: hand)
     check("a second press of a double click, which takes no on, goes out unchecked", not failed, repr(content))
     pointer.run({"tool": "click_up", "count": 2}, "P5", lambda: hand)
+    title = [ax("RootWebArea", "page", 1), ax("textbox", "Rename", 2, 1, backend=7,
+                                              value={"type": "string", "value": "Untitled spreadsheet"}), ax("generic", "", 3, 2)]
+    hand = Hand(nodes=title)
+    pointer.run({"tool": "move_at", "x": 5, "y": 6}, "P7", lambda: hand)
+    content, failed = pointer.run({"tool": "click_down", "on": "Untitled spreadsheet"}, "P7", lambda: hand)
+    check("a press whose on names what a text box shows, its value, goes out, naming the box by its name",
+          not failed and hand.events[-1]["type"] == "mousePressed" and 'on textbox "Rename"' in content[0]["text"],
+          repr(content))
+    pointer.run({"tool": "click_up"}, "P7", lambda: hand)
+    hand = Hand(nodes=[ax("RootWebArea", "page", 1),
+                       ax("textbox", "", 2, 1, backend=7, value={"type": "string", "value": "Untitled spreadsheet"})])
+    content, failed = pointer.run({"tool": "click_down", "on": "Untitled spreadsheet"}, "P7", lambda: hand)
+    check("and a text box nothing else names is named by its value",
+          not failed and 'on textbox "Untitled spreadsheet"' in content[0]["text"], repr(content))
+    pointer.run({"tool": "click_up"}, "P7", lambda: hand)
+    editor = [ax("RootWebArea", "page", 1),
+              ax("textbox", "Body", 2, 1, value={"type": "string", "value": "Dear team, please press Bold to save"}),
+              ax("paragraph", "", 3, 2, backend=7), ax("StaticText", "Thanks", 4, 3)]
+    hand = Hand(nodes=editor)
+    content, failed = pointer.run({"tool": "click_down", "on": "Bold"}, "P7", lambda: hand)
+    check("but one whose on is only further in a text box's value, as in an editor's text, is not sent",
+          failed and not hand.events and content[0]["text"].startswith('Not pressed: at 5,6 is textbox "Body", not "Bold"'),
+          repr(content))
     frame = [ax("RootWebArea", "page", 1), ax("Iframe", "", 2, 1, backend=7)]
     content, failed = pointer.run({"tool": "click_down", "on": "Accept all"}, "P5",
                                   lambda: Hand(nodes=frame, frame="https://consent.example/"))
     check("one at a frame from another site is not sent for any on but \"\", naming where the frame is from",
           failed and "is a frame from consent.example, which browserd cannot read into" in content[0]["text"],
           repr(content))
+    for where, hand in (("at a frame from another site", Hand(nodes=frame, frame="https://consent.example/")),
+                        ("on a canvas", Hand(nodes=[ax("RootWebArea", "page", 1), ax("Canvas", "", 2, 1, backend=7)]))):
+        content, failed = pointer.run({"tool": "click_down", "on": " "}, "P5", lambda: hand)
+        check("nor one whose on is only a space %s" % where, failed and not hand.events, repr(content))
     content, failed = pointer.run({"tool": "click_down", "on": "Go"}, "P5", lambda: Hand(unread=True))
     check("nor at a point browserd could not read",
           failed and content[0]["text"].startswith('Not pressed: browserd could not read what is at 5,6'), repr(content))

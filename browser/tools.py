@@ -362,9 +362,10 @@ that step for a late one; evaluate_script answers its own with dialogAction (def
 step after it. When a step opens a dialog and no handle_dialog step follows it, that step takes about 5s, counts as
 done, and leaves the dialog open, blocking the page: answer it with a handle_dialog step in the next queue.
 
-Views: names and values show as the page has them, quotes and all; a spinbutton's value= is its aria-valuenow, which
-some pages never update, while expect reads the field's real value. A native select may show its first option though
-no one chose it; fill it anyway. Three or more one-word text lines whose uids count up, as a canvas app like Slides
+Views: names and values show as the page has them, quotes and all, but a url over 300 characters, the page's own
+aside, is cut to its scheme, host and path (full: true and the saved snapshot keep it whole); a spinbutton's value= is
+its aria-valuenow, which some pages never update, while expect reads the field's real value. A native select may show
+its first option though no one chose it; fill it anyway. Three or more one-word text lines whose uids count up, as a canvas app like Slides
 draws its words or a table its one-word cells, are one line, uid=5_1..25 StaticText "<words>" for uids 5_1 to 5_25:
 the words keep their uids in order, and a step given 5_1..25 acts on 5_1. A view over 10,000 characters, one taken
 with full: true included, is cut at a line, and its note gives the take_snapshot call that reads on and the headings

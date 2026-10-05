@@ -44,8 +44,6 @@ NAME_WAIT = 5.0
 NAME_STILL = 1.0
 NAMES_SHOWN = 8  # elements a name's failure lists
 POPUP_CONTROLS = 4  # controls of each open popup a name's failure lists
-# Whose value a step's name may fit, when no control's name does: agents name what they see, and a box shows its value.
-TEXT_BOXES = {"textbox", "searchbox", "combobox"}
 # chrome-devtools-mcp's reply sections: a dialog a step left open, its refusal when one was open before the step,
 # and the list of every page in Chrome, which names other tabs and is no use inside one tab's queue.
 OPEN_DIALOG = "# Open dialog"
@@ -67,6 +65,10 @@ VIEW_OPTIONS = ("under", "full", "find", "after")  # take_snapshot's own options
 # Characters a view shows before it is cut: 145 of 537 views were longer in two benchmark runs, and each later request
 # of a conversation carries every view again (../../experiments/findings/benchmark.md, "The view cap (`hay1`)").
 VIEW_MOST = 10000
+# Characters of a url a view shows whole. In 8 runs, 178 of 250 urls in views were longer (Google Hotels' result links,
+# Google ads' /aclk links), 8.6% of the tool text agents read, yet no agent used a url over 300 characters: the urls
+# agents took from a view were 83 to 100 characters.
+URL_MOST = 300
 HEADINGS_MOST = 40  # headings below a cut that its note names
 LINE_UID = re.compile(r"^\s*uid=([^\s.]+)")  # a view line's uid, a word run's first
 HEADING = re.compile(r"^\s*uid=\S+ heading ")
@@ -493,7 +495,8 @@ def _full(nodes, out):
 
 def view(text, path, under=None, full=False, find=None, after=None):
     """A tool's reply with its snapshot, when it has one, cut to a view or kept full, and the whole snapshot saved.
-    The lines kept, a view's or full's, go through _cut.
+    The lines kept, a view's or full's, go through _cut; a view's go through _short_url first, after find has matched
+    them whole, but for the page's own root, whose url stays whole.
 
     Args:
         text (str): the reply's text.
@@ -514,6 +517,7 @@ def view(text, path, under=None, full=False, find=None, after=None):
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("\n".join(whole) + "\n")
     nodes, loose = _tree(whole)
+    root = nodes[0]["uid"] if nodes else None
     scope = ""
     if under is not None:
         found = _find(nodes, under)
@@ -537,6 +541,8 @@ def view(text, path, under=None, full=False, find=None, after=None):
     if find is not None:
         # Here, not before after: _after keeps only lines with a uid, and would drop the lines _matching adds.
         kept = _matching(kept, find)
+    if not full:
+        kept = [line if _line_uid(line) == root else _short_url(line) for line in kept]
     asked = {key: value for key, value in (("under", under), ("full", full), ("find", find)) if value}
     shown = ["%s (%s%s; saved whole to %s)" % (SNAPSHOT, kind, scope, path)] + _cut(kept, asked)
     return "\n".join(before + shown + tail), False
@@ -569,6 +575,21 @@ def _matching(lines, find):
         out.append(line)
         left_out = 0
     return out
+
+
+def _short_url(line):
+    """A view line with its url, when over URL_MOST characters, cut after its scheme, host and path (which hold a
+    document's id) and the ? or # that begins its query or fragment, then "…". A url with neither stays whole."""
+    node = NODE.match(line)
+    if node is None:
+        return line
+    name = NAME.match(line, node.start(4))
+    url = next((found for found in ATTRIBUTE.finditer(line, name.end() if name else node.start(4))
+                if found.group(1) == "url"), None)
+    if url is None or len(url.group(2) or "") <= URL_MOST:
+        return line
+    cut = re.search(r"[?#]", url.group(2))
+    return line if cut is None else line[:url.start(2) + cut.end()] + "…" + line[url.end(2):]
 
 
 def _line_uid(line):
@@ -847,10 +868,10 @@ def _tabbed(devtools, page_id, step, left):
 def _named(devtools, page_id, name, wait, enabled):
     """(its line, uid) for the control (CONTROLS) whose name fits a step's name best, as hit.fit ranks them: the one
     whose name is those words, or else begins with them, or else carries them further in. When no control's name fits,
-    a text box (TEXT_BOXES) whose value is or begins with them will do; not one whose value carries them further in, as
-    an editor's long value can. Only the controls inside an open popup (POPUPS) are ranked when any of them fits, since
-    the step before most likely opened it; the page's otherwise. Of controls that fit equally well, a combobox gives way
-    to a textbox or searchbox inside it, as Slides' combobox "Font size" does to its textbox "Font size".
+    a text box (hit.TEXT_BOXES) whose value is or begins with them will do; not one whose value carries them further in,
+    as an editor's long value can. Only the controls inside an open popup (POPUPS) are ranked when any of them fits,
+    since the step before most likely opened it; the page's otherwise. Of controls that fit equally well, a combobox
+    gives way to a textbox or searchbox inside it, as Slides' combobox "Font size" does to its textbox "Font size".
 
     Snapshots are taken until the best fit, the controls ranked first, is usable and its name is or begins with them,
     so a control already on the page that carries them further in does not win over the one the step before is still
@@ -870,7 +891,7 @@ def _named(devtools, page_id, name, wait, enabled):
             rank = hit.fit(said, name)
             if rank is not None:
                 fits.append((rank, node, said, popup))
-            value = _attribute(node, "value") if node["role"] in TEXT_BOXES else None
+            value = _attribute(node, "value") if node["role"] in hit.TEXT_BOXES else None
             rank = hit.fit(value, name) if value else None
             if rank is not None and rank < 2:
                 values.append((rank, node, said, popup))
