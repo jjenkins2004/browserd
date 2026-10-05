@@ -15,10 +15,52 @@ ANSWER_WAIT = 5.0  # seconds the page has to answer before a screenshot fails, a
 # Seconds a capture waits before asking again: Chrome on Windows can hold a background tab's capture for a frame that
 # only another capture brings (measured: every capture answered within 3s nudged, where one in two hung for 60s).
 NUDGE = 0.5
-# A screencast run for a capture's length, so Chrome draws a tab it is not drawing (each in a minimized window, a
-# background tab): smallest frames, and few of them, which nothing reads.
+# A screencast, so Chrome draws a tab it is not drawing (each in a minimized window, a background tab): smallest
+# frames, and few of them, which nothing reads; README.md, "Agent Gotchas & Invariants", says what drawing changes.
 DRAWN = {"format": "jpeg", "quality": 1, "maxWidth": 16, "maxHeight": 16, "everyNthFrame": 1000}
 LONGEST = 2000  # pixels on the image's longer side; Claude Code shrinks a larger image, moving every point read off it
+
+
+@contextlib.contextmanager
+def drawn(browser, session):
+    """A block in which Chrome draws the tab, through a screencast of it on session: True, or False when Chrome would
+    not start one."""
+    try:
+        browser.call("Page.startScreencast", session, **DRAWN)
+    except cdp.CdpError:
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        with contextlib.suppress(cdp.CdpError, WebSocketError, OSError):
+            browser.call("Page.stopScreencast", session)
+
+
+@contextlib.contextmanager
+def drawing(target, connect):
+    """A block, a queue, in which Chrome draws a tab, through a connection of its own whose screencast ends with it.
+    Nothing is drawn without a target, or when the tab cannot be reached; the block runs all the same.
+
+    Args:
+        target (str | None): the tab's target id.
+        connect (callable | None): opens a proven connection to the tab's Chrome.
+    """
+    browser = None
+    if target and connect is not None:
+        try:
+            browser = connect()
+            session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
+            browser.call("Page.startScreencast", session, **DRAWN)
+        except (cdp.CdpError, WebSocketError, OSError):
+            if browser is not None:
+                browser.close()
+            browser = None
+    try:
+        yield
+    finally:
+        if browser is not None:
+            browser.close()
 
 
 def taken(step):
@@ -85,15 +127,13 @@ def capture(browser, session, kind, quality, scale):
     clip = {"x": css["pageX"], "y": css["pageY"], "width": css["clientWidth"], "height": css["clientHeight"],
             "scale": fit * css["clientWidth"] / device["clientWidth"]}
     extra = {} if kind == "png" else {"quality": quality}
-    # A scaled capture of a tab Chrome is not drawing could leave the tab laid out at the scaled size, which moves
-    # every point read off a screenshot after it (measured in minimized windows: 3 of 15 captures at a scale of 0.5,
-    # each halving the viewport); with Chrome drawing it, 0 of 15, and the capture answered at once.
-    browser.call("Page.startScreencast", session, **DRAWN)
-    try:
-        data = browser.call("Page.captureScreenshot", session, nudge=NUDGE, format=kind, clip=clip, **extra)["data"]
-    finally:
-        with contextlib.suppress(cdp.CdpError, WebSocketError, OSError):
-            browser.call("Page.stopScreencast", session)
+    # Asked once, of a tab Chrome draws, which answers at once. A capture at a scale asked again while the first waits
+    # can leave the tab laid out at that scale, halving its viewport at 0.5 and moving every point read off a later
+    # screenshot (measured in minimized windows: 4 of 15 asked again every 1ms, 0 of 15 asked once), so only one at a
+    # device pixel a pixel is asked again, where Chrome would not draw the tab.
+    with drawn(browser, session) as drawing_it:
+        again = None if drawing_it or clip["scale"] != 1 else NUDGE
+        data = browser.call("Page.captureScreenshot", session, nudge=again, format=kind, clip=clip, **extra)["data"]
     return data, css, fit
 
 

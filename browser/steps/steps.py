@@ -620,6 +620,13 @@ def run(devtools, page_id, steps, path, restarted=False, target=None, connect=No
         watcher (Watcher | None): the tab's downloads.Watcher, so each step's report says what it downloaded; None
             reports none.
     """
+    # Chrome draws the tab while its queue runs: a click on a tab it does not draw, as every tab in a minimized window
+    # is, waits out chrome-devtools-mcp's 3s for the page to settle (measured: 2.9s a click, drawn 0.2s).
+    with screenshot.drawing(target, connect):
+        return _run(devtools, page_id, steps, path, restarted, target, connect, began, watcher)
+
+
+def _run(devtools, page_id, steps, path, restarted, target, connect, began, watcher):
     report, images, failed = [], [], False
     if restarted:
         report.append(RESTARTED)

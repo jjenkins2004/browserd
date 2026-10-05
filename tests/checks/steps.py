@@ -1038,13 +1038,15 @@ class Shots:
     """A connection to a profile's Chrome whose tab has a viewport of css CSS pixels at a device pixel ratio, scrolled
     down 300; it records what it is asked, and answers a screenshot with the bytes b"img"."""
 
-    def __init__(self, css=(1200, 792), ratio=2, fails=False):
-        self.calls, self.css, self.ratio, self.fails = [], css, ratio, fails
+    def __init__(self, css=(1200, 792), ratio=2, fails=False, undrawn=False):
+        self.calls, self.css, self.ratio, self.fails, self.undrawn = [], css, ratio, fails, undrawn
 
     def call(self, method, session=None, wait=None, **params):
         self.calls.append((method, params))
         if self.fails:
             raise cdp.CdpError("Page.captureScreenshot did not answer in time")
+        if self.undrawn and method == "Page.startScreencast":
+            raise cdp.CdpError("Page.startScreencast: not supported")
         if method == "Target.attachToTarget":
             return {"sessionId": "S1"}
         if method == "Page.getLayoutMetrics":
@@ -1066,8 +1068,8 @@ def screenshot_offline():
         content, failed_ = screenshot.viewport({"tool": "take_screenshot", "filePath": path}, "T1", lambda: shots)
         captured = [params for method, params in shots.calls if method == "Page.captureScreenshot"]
         check("a viewport screenshot is clipped to the scrolled viewport at one pixel per CSS pixel, as a JPEG, asked "
-              "again while Chrome holds it", not failed_ and captured == [{
-                  "nudge": screenshot.NUDGE, "format": "jpeg", "quality": screenshot.QUALITY, "clip": {
+              "once, of a tab Chrome draws", not failed_ and captured == [{
+                  "nudge": None, "format": "jpeg", "quality": screenshot.QUALITY, "clip": {
                       "x": 0, "y": 300, "width": 1200, "height": 792, "scale": 0.5}}], repr(shots.calls))
         methods = [method for method, _ in shots.calls]
         check("Chrome draws the tab for the capture's length, a screencast begun before it and ended after, so a tab in "
@@ -1075,6 +1077,14 @@ def screenshot_offline():
                                                                      "Page.stopScreencast"]
               and shots.calls[-3][1] == screenshot.DRAWN, repr(shots.calls))
         check("it is saved to the step's filePath", open(path, "rb").read() == b"img")
+        nudged = []
+        for ratio in (1, 2):
+            shots = Shots(ratio=ratio, undrawn=True)
+            screenshot.viewport({"tool": "take_screenshot", "filePath": path}, "T1", lambda: shots)
+            nudged += [params["nudge"] for method, params in shots.calls if method == "Page.captureScreenshot"]
+        check("where Chrome will not draw the tab, a capture at a device pixel a pixel is asked again while Chrome holds "
+              "it, but a scaled one only once, since one asked again can leave the tab laid out at its scale",
+              nudged == [screenshot.NUDGE, None], repr(nudged))
         check("and sent back as an image after a line giving its size in CSS pixels and where it is saved",
               content[1:] == [{"type": "image", "data": base64.b64encode(b"img").decode(), "mimeType": "image/jpeg"}]
               and "1200x792 px, one pixel per CSS pixel" in content[0]["text"]
@@ -1121,6 +1131,9 @@ def screenshot_offline():
                            target="T1", connect=lambda: shots)
         check("a queue's viewport screenshot never reaches chrome-devtools-mcp, and its image comes back",
               fake.calls == [] and not result["isError"] and result["content"][1]["type"] == "image", repr(result))
+        check("a queue has Chrome draw its tab while it runs, on a connection of its own, so a click waits out no 3s",
+              shots.calls[:2] == [("Target.attachToTarget", {"targetId": "T1", "flatten": True}),
+                                  ("Page.startScreencast", screenshot.DRAWN)], repr(shots.calls[:2]))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
