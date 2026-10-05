@@ -5,6 +5,8 @@ says what each OS does in its place.
     NAME             the OS, as a sentence names it: "macOS" or "Windows"
     CHROME           Chrome's binary; a profile's Chrome is a process of it
     CHROME_FLAGS     switches every profile's Chrome starts with on this OS, besides launch's own
+    BACKGROUND_WINDOWS  whether opens.window asks for a new window in the background: on a Mac, or Chrome comes to
+                     the front; on Windows, Chrome shows such a window on screen first
     CHROME_DATA      the folder holding Chrome's own folder, where each profile's Chrome-<name> folder sits beside it
     DATA             where an installed browserd keeps its records, the user's own; a git checkout keeps them in .run
     DESKTOP          the user's Desktop folder
@@ -24,11 +26,11 @@ says what each OS does in its place.
     kill_chrome(pid)      stop a Chrome that never answered, by pid
     front()               the pid of the app the user's focus is in, or None
     bring(pid)            bring an app to the front, and return whether the OS let it
-    happened(pid, since)  what an app's windows did since a time.monotonic(): (when, kind, window, the pid that had
-                          the focus before a "front"), oldest first, kind "front" (took the focus), "restored"
-                          (un-minimized) or "shown" (a new window); [] where the OS keeps no record
-    minimize(window)      minimize a window happened said was restored, and return whether it is; False where the OS
-                          cannot
+    happened(pid, since)  what an app's windows did since a time.monotonic() and since happened was first called,
+                          which starts the OS's record: (kind, window, the pid that had the focus before a "front"),
+                          oldest first, kind "front" (took the focus), "restored" (un-minimized) or "shown" (a new
+                          window); [] where the OS keeps no record
+    minimize(window)      minimize a window happened said was restored; nothing where the OS keeps no record
     lock(handle)          hold an exclusive lock on an open file until it is closed, waiting for it
     spawn_detached(argv, **popen)  a Popen of a process that runs on past this one, with no window of its own
     hidden()              Popen arguments that give a helper process no window of its own

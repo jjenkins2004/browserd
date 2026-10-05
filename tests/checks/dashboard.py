@@ -10,7 +10,8 @@ import tempfile
 import threading
 import time
 
-from browser.chrome import cdp, focus, profiles
+from browser import system
+from browser.chrome import cdp, profiles
 from browser.dashboard import page
 from browser.records.state import State
 from browser.tabs.tabs import Tabs
@@ -123,11 +124,11 @@ def page_offline():
         check("but not a tab a session owns", status == 400 and "already" in raw.decode(), raw.decode())
         status, raw, _ = ask("POST", "/handover", {"tab": stale, "session": "zzzzzz"}, **own)
         check("nor to a session there is not", status == 400 and "no open session" in raw.decode(), raw.decode())
-        saved_bring, focus.bring = focus.bring, lambda pid: True
+        saved_bring, system.bring = system.bring, lambda pid: True
         try:
             status, raw, _ = ask("POST", "/show", {"tab": stale}, **own)
         finally:
-            focus.bring = saved_bring
+            system.bring = saved_bring
         check("Show brings any session's tab to the front", status == 200 and chrome.activated[-1] == state.tab(stale).target,
               raw.decode())
         status, raw, _ = ask("POST", "/close-paused", {}, **own)

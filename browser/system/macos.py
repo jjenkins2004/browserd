@@ -10,7 +10,7 @@ import subprocess
 
 from . import Unanswered
 
-__all__ = ["NAME", "CHROME", "CHROME_FLAGS", "APP", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
+__all__ = ["NAME", "CHROME", "CHROME_FLAGS", "BACKGROUND_WINDOWS", "APP", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
            "kill_chrome", "front", "bring", "happened", "minimize", "lock", "spawn_detached", "hidden", "remove_own_folder", "drop_from_user_path", "ansi", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
@@ -19,6 +19,7 @@ NAME = "macOS"
 APP = "/Applications/Google Chrome.app"
 CHROME = APP + "/Contents/MacOS/Google Chrome"
 CHROME_FLAGS = []  # scrollbars on a Mac already overlay the page
+BACKGROUND_WINDOWS = True  # without it, Target.createTarget brings Chrome to the front, as it does for a tab
 CHROME_DATA = os.path.expanduser("~/Library/Application Support/Google")
 DATA = os.path.expanduser("~/Library/Application Support/browserd")
 DESKTOP = os.path.expanduser("~/Desktop")
@@ -115,7 +116,7 @@ def happened(pid, since):
 
 
 def minimize(window):
-    return False
+    pass  # happened names no window to minimize
 
 
 def lock(handle):

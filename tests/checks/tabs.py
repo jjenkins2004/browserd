@@ -11,7 +11,7 @@ import threading
 import time
 
 from browser import system
-from browser.chrome import cdp, focus
+from browser.chrome import cdp
 from browser.chrome.opens import PLACEHOLDER
 from browser.tabs import sessions, worker
 from browser.chrome.profiles import Profile
@@ -34,8 +34,8 @@ def tabs_offline():
     chrome.add("https://example.com/worker.js", kind="service_worker")
     chrome.add("https://incognito.example", context="other")
     tabs = Tabs(state, chrome.connect)
-    brought, saved_bring = [], focus.bring
-    focus.bring = lambda pid: brought.append(pid) or True
+    brought, saved_bring = [], system.bring
+    system.bring = lambda pid: brought.append(pid) or True
     try:
         found, outside = tabs.list(mine)
         check("a tab opened by hand is in no session's list", found == [], repr(found))
@@ -105,17 +105,13 @@ def tabs_offline():
                       for row in state.open_tabs("School")))
 
         shown = tabs.show(mine, tab)
-        check("show un-minimizes the tab's window, brings the tab and its Chrome to the front and answers with where "
-              "it is", chrome.activated == [tabs.target(mine, tab)] and brought == [FakeConnection.pid]
-              and chrome.restored == [1] and shown["url"] == "https://jobs.ashbyhq.com/new",
-              repr((chrome.activated, brought, chrome.restored)))
-        tabs.show(mine, tab)
-        check("and leaves a window already up as it is", chrome.restored == [1], repr(chrome.restored))
-        chrome.window_state = "minimized"
+        check("show brings the tab and its Chrome to the front and answers with where it is",
+              chrome.activated == [tabs.target(mine, tab)] and brought == [FakeConnection.pid]
+              and shown["url"] == "https://jobs.ashbyhq.com/new", repr((chrome.activated, brought)))
         check("show refuses another session's tab", "no tab of this session" in refusal(lambda: tabs.show(theirs, tab)))
-        focus.bring = lambda pid: False
+        system.bring = lambda pid: False
         check("show fails when %s does not bring the Chrome to the front" % system.NAME, "did not bring that Chrome" in refusal(lambda: tabs.show(mine, tab)))
-        focus.bring = lambda pid: brought.append(pid) or True
+        system.bring = lambda pid: brought.append(pid) or True
 
         check("close refuses another session's tab", "no tab of this session" in refusal(lambda: tabs.close(theirs, tab)))
         tabs.close(mine, tab)
@@ -159,7 +155,7 @@ def tabs_offline():
         state.add_tab(Tab("k3f9", "School", "T999", mine.id, time.time(), None))
         check("and a tab of it is refused as closed", "is closed" in refusal(lambda: down.target(mine, "k3f9")))
     finally:
-        focus.bring = saved_bring
+        system.bring = saved_bring
         state.close()
         shutil.rmtree(workdir, ignore_errors=True)
     session_tools_offline()
@@ -172,7 +168,7 @@ def session_tools_offline():
     state.add_profile(Profile("Jobs", "/nowhere/Chrome-Jobs", 9224))
     chrome = FakeChrome()
     httpd = serving(tab_tools(state, Tabs(state, chrome.connect), Workers(workdir)))
-    saved_bring, focus.bring = focus.bring, lambda pid: True
+    saved_bring, system.bring = system.bring, lambda pid: True
     try:
         text, is_error = call(httpd, "session_start", profile="school", label="  Apply to Acme  ")
         found = re.match(r"session (\S+), on the School profile", text)
@@ -249,7 +245,7 @@ def session_tools_offline():
         check("a closed session is refused, pointing at session_start", is_error and "is closed" in text
               and "session_start" in text, text)
     finally:
-        focus.bring = saved_bring
+        system.bring = saved_bring
         httpd.shutdown()
         httpd.server_close()
         state.close()

@@ -1,4 +1,5 @@
-"""The live checks, on the throwaway Chrome: tabs, the queue on scratch pages, and downloads.
+"""The live checks, on the throwaway Chrome: tabs, windows and the focus (--headed only), the queue on scratch
+pages, and downloads.
 """
 
 import base64
@@ -18,7 +19,7 @@ import urllib.parse
 import zlib
 
 from browser import server, system
-from browser.chrome import cdp, chromes, downloads, launch, opens
+from browser.chrome import cdp, chromes, downloads, opens
 from browser.steps import checked, pointer, screenshot, steps
 from browser.tabs import devtools, sessions
 from browser.tabs import devtools as devtools_module  # queue_live names its own chrome-devtools-mcp devtools
@@ -189,7 +190,7 @@ WIDGETS = r"""<title>checked scratch</title>
 <div id=bio contenteditable role=textbox aria-multiline=true aria-label=Bio></div>
 <div id=quoted contenteditable role=textbox aria-label=Quoted></div>
 <div id=stopper contenteditable role=textbox aria-label=Stopper></div>
-<button onclick="document.getElementById('warned').textContent = confirm('Sure?') ? 'confirmed' : 'cancelled'">Warn me</button><p id=warned></p>
+<button>Warn me</button>
 <p id=parsing></p><label for=city>City</label><input id=city>
 <script>
 // The dropdown ignores scripted events, as react-select does: only trusted input filters or picks. Like React, it keeps
@@ -223,7 +224,7 @@ let letterKept = letter.value;
 letter.addEventListener('input', (e) => { if (e.isTrusted) letterKept = letter.value; else letter.value = letterKept; });
 // Like Slides, curls each quote as it is typed; a paste goes in as it is.
 quoted.addEventListener('keydown', (e) => {
-  if (e.key === '"' || e.key === "'") { e.preventDefault(); document.execCommand('insertText', false, e.key === '"' ? '“' : '’'); }
+  if (e.key === '"' || e.key === "'") { e.preventDefault(); document.execCommand('insertText', false, e.key === '"' ? '\u201c' : '\u2019'); }
 });
 // Like Slides, puts a paste's text in itself and stops the paste there, without cancelling Chrome's own insert.
 stopper.addEventListener('paste', (e) => { e.stopPropagation(); document.execCommand('insertText', false, e.clipboardData.getData('text/plain')); });
@@ -308,9 +309,14 @@ def checked_live(served, open_tab):
     check("type into a contenteditable element takes a line break and reads the text back",
           not is_error and "--- 2 type ok" in text, text)
 
+    said, pasted = 'It\'s "exact"', 'Dear "team",\nit\'s me'
+    text, _ = call(httpd, "queue", session=session, tab=tab, steps=[
+        {"tool": "click", "uid": field("textbox", "Quoted")}, {"tool": "type_text", "text": said},
+        {"tool": "evaluate_script", "function": "() => { const t = quoted.textContent; quoted.textContent = ''; return t; }"}])
+    check("the stand-in editor curls quotes as they are typed, so a paste that keeps them straight was no typing",
+          returned(text.split("--- 3")[-1]) == "It\u2019s \u201cexact\u201c", text)
     changes = system.clipboard_changes
     changed_before = changes()
-    said, pasted = 'It\'s "exact"', 'Dear "team",\nit\'s me'
     text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
         {"tool": "evaluate_script", "function": "() => { quoted.focus() }"}, {"tool": "paste", "text": said},
         {"tool": "expect", "uid": field("textbox", "Quoted"), "value": said},
@@ -341,8 +347,8 @@ def checked_live(served, open_tab):
     check("wait for text to go waits out a parser, and the field it fills is then filled", not is_error, text)
 
 
-# WIDGETS' Warn me button, on a page of its own: the 5s its confirm holds a click no handle_dialog step waits on runs
-# while the other blocks do.
+# A button whose click opens a confirm, on a page of its own: the 5s its confirm holds a click no handle_dialog step
+# waits on runs while the other blocks do.
 CONFIRM = ("<title>confirm scratch</title><button onclick=\"document.getElementById('warned').textContent = "
            "confirm('Sure?') ? 'confirmed' : 'cancelled'\">Warn me</button><p id=warned></p>")
 
@@ -350,19 +356,18 @@ CONFIRM = ("<title>confirm scratch</title><button onclick=\"document.getElementB
 def confirm_live(served, open_tab):
     """A confirm a click opens: answered as it opens by a handle_dialog step right after the click, and with none,
     holding the click chrome-devtools-mcp's 5s, then answered by the next queue."""
-    httpd, session, tab = served.httpd, served.session, open_tab(CONFIRM)
-    snapshot, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "take_snapshot"}])
+    queue, tab = served.queue, open_tab(CONFIRM)
+    snapshot, _ = queue(tab, {"tool": "take_snapshot"})
     warn = {"tool": "click", "uid": uid(snapshot, "button", "Warn me")}
     warned = {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[
-        warn, {"tool": "handle_dialog", "action": "accept"}, warned])
+    text, is_error = queue(tab, warn, {"tool": "handle_dialog", "action": "accept"}, warned)
     took = re.search(r"^--- 1 click ok ([\d.]+)s$", text, re.M)
     check("a confirm a handle_dialog step waits on is answered as it opens, so its click takes no 5s",
           not is_error and took is not None and float(took.group(1)) < 3 + FRAME_WAIT
           and 'the confirm "Sure?" was accepted as it opened' in text and returned(text.split("--- 3")[-1]) == "confirmed"
           and "## Pages" not in text, text)
-    text, is_error = call(httpd, "queue", session=session, tab=tab, steps=[warn])
-    answered, _ = call(httpd, "queue", session=session, tab=tab, steps=[{"tool": "handle_dialog", "action": "accept"}, warned])
+    text, is_error = queue(tab, warn)
+    answered, _ = queue(tab, {"tool": "handle_dialog", "action": "accept"}, warned)
     check("a confirm no handle_dialog step waits on counts its click done, and the next queue answers it",
           not is_error and "counts as done" in text and "--- 1 handle_dialog ok" in answered
           and returned(answered.split("--- 2")[-1]) == "confirmed", text + answered)
@@ -379,7 +384,7 @@ def windows_live(profile, state):
     popped = []
     try:
         opener = tabs.target(session, tab)
-        check("the first tab in a Chrome with no window open goes into a new window, minimized",
+        check("the first tab a session opens is in a minimized window",
               window_state(browser, opener) == "minimized", window_state(browser, opener))
         attached = browser.call("Target.attachToTarget", targetId=opener, flatten=True)["sessionId"]
         # A page's own: a popup window, and a target=_blank link, which un-minimizes its window and takes the focus.
@@ -501,14 +506,6 @@ class Queuing:
         return scratch
 
 
-def at_once(*runs):
-    """A started thread for each (callable, *args)."""
-    threads = [threading.Thread(target=run, args=args) for run, *args in runs]
-    for thread in threads:
-        thread.start()
-    return threads
-
-
 def forms_live(served, open_tab):
     """Tabs a and b on the same form page, their first queues at once: pairing, a full-page screenshot, downloads, a
     field in a cross-origin frame, a date field, and a click on a disabled button."""
@@ -524,7 +521,10 @@ def forms_live(served, open_tab):
         reports[who] = snapshot, queue(tab, {"tool": "fill", "uid": fields("Name"), "value": "Agent " + who},
                                        {"tool": "type", "uid": fields("Email"), "text": who.lower() + "@example.com"})
 
-    for thread in at_once((first, a, "A"), (first, b, "B")):
+    pair = [threading.Thread(target=first, args=(tab, who)) for tab, who in ((a, "A"), (b, "B"))]
+    for thread in pair:
+        thread.start()
+    for thread in pair:
         thread.join()
     (snap_a, error_a), filled_a = reports["A"]
     (snap_b, _), filled_b = reports["B"]
@@ -565,7 +565,8 @@ def forms_live(served, open_tab):
         clicked["text"] = queue(slow, {"tool": "click", "uid": uid(snapshots[slow], "button", "Never")})
         clicked["took"] = time.monotonic() - began
 
-    never = at_once((click_never,))
+    never = threading.Thread(target=click_never)
+    never.start()
 
     # Taken while the caret of the box the form tab's typing left the focus in blinks, so the headless Chrome draws
     # that tab: chrome-devtools-mcp's full-page capture waits for a frame, and of a tab Chrome is not drawing, past
@@ -613,8 +614,7 @@ def forms_live(served, open_tab):
                            {"tool": "expect", "uid": born, "value": "1957-08-01"})
     check("fill on the date field itself, as 1957-08-01, takes", not is_error, text)
 
-    for thread in never:
-        thread.join()
+    never.join()
     (text, is_error), took = clicked.get("text", ("", False)), clicked.get("took", 0.0)
     check("a click on a disabled button fails after chrome-devtools-mcp's 5s, not Puppeteer's 30s, on a tab whose "
           "page its chrome-devtools-mcp did not select on its own",

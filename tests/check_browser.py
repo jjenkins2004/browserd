@@ -25,7 +25,7 @@ from browser import system
 from browser.chrome import cdp, launch
 from browser.chrome.profiles import Profile
 from browser.protocol.ws import TEXT, WebSocket, WebSocketError
-from harness import chosen
+from harness import Clock, chosen
 
 passed, failed = [], []
 
@@ -480,21 +480,6 @@ class FakeChrome:
 
     def poll(self):
         return self.code
-
-
-class Clock:
-    """A module's time, stood in for: sleep moves it on at once, so a wait of seconds takes none."""
-
-    def __init__(self):
-        self.now = 1000.0
-
-    def time(self):
-        return self.now
-
-    monotonic = time
-
-    def sleep(self, seconds):
-        self.now += seconds
 
 
 def lock(folder, pid):

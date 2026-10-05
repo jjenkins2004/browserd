@@ -35,41 +35,44 @@ LIVE = {"live": live.live, "windows_live": live.windows_live, "queue_live": live
         "downloads_live": lambda profile, state: live.downloads_live(profile)}
 
 
-def live_groups(names):
-    """Run the live groups names gives, in turn, on the checks' own Chrome."""
-    with throwaway.chrome() as profile:
-        if profile is None:
-            skipped.append("live")
-            print("skipped the live checks: Chrome is not installed at %s" % cdp.CHROME)
-            return
-        workdir = tempfile.mkdtemp(prefix="browser-live-")
-        state = stand_in_state(workdir, profile)
-        # As the server has it: what each page opens put back. Every window the live checks open is measured.
-        chromes.Chromes().adopt([profile])
-        watch = popups.watch()
-        if watch is not None:
-            check("the pop-up watch counts the throwaway Chrome's windows", watch.watches(cdp.owner(profile.folder)))
-        try:
-            for index, name in enumerate(names):
-                if index:
-                    print()
-                if name == "windows_live" and not throwaway.HEADED:
-                    skipped.append("headed")
-                    print("skipped the checks of windows and the focus: they need --headed, and put windows on screen")
-                else:
-                    LIVE[name](profile, state)
-        finally:
+def live_groups(names, headed):
+    """Run the live groups names gives, in turn, on the checks' own Chrome, with windows when headed."""
+    # On Windows, popups.watch measures every window the live checks open, the Chrome's start and quit included.
+    watch = popups.watch()
+    try:
+        with throwaway.chrome(headed) as profile:
+            if profile is None:
+                skipped.append("live")
+                print("skipped the live checks: Chrome is not installed at %s" % cdp.CHROME)
+                return
             if watch is not None:
-                popups.checked(watch, check)
-            state.close()
-            shutil.rmtree(workdir, ignore_errors=True)
+                check("the pop-up watch counts the throwaway Chrome's windows",
+                      watch.watches(cdp.owner(profile.folder)))
+            workdir = tempfile.mkdtemp(prefix="browser-live-")
+            state = stand_in_state(workdir, profile)
+            chromes.Chromes().adopt([profile])  # as the server has it: what each page opens put back
+            try:
+                for index, name in enumerate(names):
+                    if index:
+                        print()
+                    if name == "windows_live" and not headed:
+                        skipped.append("headed")
+                        print("skipped the checks of windows and the focus: they need --headed, and put windows on "
+                              "screen")
+                    else:
+                        LIVE[name](profile, state)
+            finally:
+                state.close()
+                shutil.rmtree(workdir, ignore_errors=True)
+    finally:
+        if watch is not None:
+            popups.checked(watch, check)
 
 
 if __name__ == "__main__":
     mcp.log = lambda line: None  # the server's own log lines would bury the results
     names = chosen(sys.argv[1:], list(OFFLINE) + list(LIVE), {"offline": list(OFFLINE), "live:all": list(LIVE)},
                    ("--headed",))
-    throwaway.HEADED = "--headed" in sys.argv[1:]
     for index, name in enumerate(names):
         if name in OFFLINE:
             if index:
@@ -78,6 +81,6 @@ if __name__ == "__main__":
     if any(name in LIVE for name in names):
         if names[0] in OFFLINE:
             print()
-        live_groups([name for name in names if name in LIVE])
+        live_groups([name for name in names if name in LIVE], "--headed" in sys.argv[1:])
     print("\n%d passed, %d failed%s" % (len(passed), len(failed), ", skipped: %s" % ", ".join(skipped) if skipped else ""))
     sys.exit(1 if failed else 0)

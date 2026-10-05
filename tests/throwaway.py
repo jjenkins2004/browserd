@@ -1,10 +1,10 @@
 """A Chrome of the checks' own, on a new folder and a free port, so no live check touches a profile's Chrome. It runs
-headless, with no window at all, so no check puts one on screen or takes the user's focus; with HEADED set (the
-checks' --headed), it has windows as a profile's Chrome does, for the checks of windows and the focus. Its profile asks
+headless, with no window at all, so no check puts one on screen or takes the user's focus; headed (the checks'
+--headed), it has windows as a profile's Chrome does, for the checks of windows and the focus. Its profile asks
 where to save each file from the start, so every live download shows a profile's downloads.Folder saves with no Save As
 window whatever the profile says.
 
-    with throwaway.chrome() as profile:  # None when Chrome is not installed
+    with throwaway.chrome(headed=False) as profile:  # None when Chrome is not installed
 """
 
 import contextlib
@@ -18,18 +18,6 @@ from browser import system
 from browser.chrome import cdp, chromes, launch
 from browser.chrome.profiles import Profile
 
-HEADED = False  # set by the checks' --headed before chrome() is called
-
-
-def flags():
-    """The switches the checks' Chrome starts with besides launch's own."""
-    return () if HEADED else ("--headless=new",)
-
-
-def start(profile):
-    """Start the checks' Chrome on profile, as chrome() does, as when a check has quit it."""
-    return launch.launch(profile, flags=flags())
-
 
 def asking(folder):
     """Set the Chrome profile in a new Chrome folder to ask where to save each file, before its Chrome first starts."""
@@ -41,7 +29,7 @@ def asking(folder):
 
 
 @contextlib.contextmanager
-def chrome():
+def chrome(headed=False):
     if not os.path.exists(cdp.CHROME):
         yield None
         return
@@ -54,7 +42,7 @@ def chrome():
     profile = Profile("Check", folder, port)
     try:
         asking(folder)
-        start(profile)
+        launch.launch(profile, flags=() if headed else ("--headless=new",))
         yield profile
     finally:
         pid = cdp.owner(folder)

@@ -1,8 +1,9 @@
 """What every group of checks shares: check and its tallies, parallel to run blocks of checks at once, chosen to pick
-groups by name, the stand-in profile and state, an MCP server to call tools on, and the stand-ins for Chrome and
+groups by name, the stand-in profile, state and clock, an MCP server to call tools on, and the stand-ins for Chrome and
 chrome-devtools-mcp more than one group uses.
 """
 
+import concurrent.futures
 import http.client
 import http.server
 import json
@@ -23,9 +24,8 @@ from browser.records.state import Session, State
 
 
 passed, failed, skipped = [], [], []
-_tallying = threading.Lock()  # check's, which blocks parallel runs call at once
 _held = threading.local()  # .lines: where check puts its lines on the thread parallel runs a block on
-AT_ONCE = 4  # blocks parallel runs at once
+AT_ONCE = 4  # the most blocks parallel runs at once
 
 
 STAND_IN = Profile("School", "/nowhere/Chrome-School", 9223)  # the profile offline checks name; no Chrome is behind it
@@ -40,7 +40,7 @@ def stand_in_state(workdir, profile=STAND_IN):
 
 
 def unsynced(state):
-    """state, its writes no longer waiting on the disk: each costs some 4ms on Windows, and a check's records need not
+    """state, its writes no longer waiting on the disk: each costs some milliseconds on Windows, and a check's records need not
     outlive a crash. A check that reopens the file keeps a State as the server has it."""
     state._db.execute("PRAGMA synchronous=OFF")
     state._db.execute("PRAGMA journal_mode=MEMORY")
@@ -54,10 +54,24 @@ def open_session(state, label="check run", profile=STAND_IN):
     return session
 
 
+class Clock:
+    """A module's time, stood in for: sleep moves it on at once, so a wait of seconds takes none."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def time(self):
+        return self.now
+
+    monotonic = time
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
 def check(name, condition, detail=""):
     """Tally a check and print its line, or on the thread parallel runs a block on, hold it for parallel to print."""
-    with _tallying:
-        (passed if condition else failed).append(name)
+    (passed if condition else failed).append(name)
     line = "%s %s%s" % ("ok  " if condition else "FAIL", name, ("  -- " + detail) if detail and not condition else "")
     held = getattr(_held, "lines", None)
     if held is None:
@@ -67,41 +81,26 @@ def check(name, condition, detail=""):
 
 
 def parallel(*blocks):
-    """Run each block, a callable taking nothing, on a thread of its own, at most AT_ONCE at once, started in the order
-    given, and return once all have ended. Each block's lines are printed in that order too: its own as soon as it and
-    every block before it have ended. A block that raises fails, its traceback the detail, and the rest run on.
+    """Run each block, a callable taking nothing, at most AT_ONCE at once, started in the order given, and return once
+    all have ended. Each block's lines are printed in that order too: its own as soon as it and every block before it
+    have ended. A block that raises fails, its traceback the detail, and the rest run on.
 
     Each block owns what it opens and closes it; what the blocks share must take calls from threads at once."""
-    slots = threading.Semaphore(AT_ONCE)
-    lines, ended, printed = [[] for _ in blocks], [False] * len(blocks), [0]
-    printing = threading.Lock()
-
-    def run(index, block):
-        _held.lines = lines[index]
+    def run(block):
+        _held.lines = lines = []
         try:
             block()
         except BaseException:
-            name = getattr(getattr(block, "func", block), "__name__", "")
-            check("block %d%s runs to its end" % (index + 1, " (%s)" % name if name.isidentifier() else ""), False,
-                  traceback.format_exc().rstrip())
+            check("%s runs to its end" % block.__name__, False, traceback.format_exc().rstrip())
         finally:
             _held.lines = None
-            slots.release()
-            with printing:
-                ended[index] = True
-                while printed[0] < len(blocks) and ended[printed[0]]:
-                    for line in lines[printed[0]]:
-                        print(line)
-                    printed[0] += 1
-                sys.stdout.flush()
+        return lines
 
-    threads = []
-    for index, block in enumerate(blocks):
-        slots.acquire()
-        threads.append(threading.Thread(target=run, args=(index, block), name="block %d" % (index + 1), daemon=True))
-        threads[-1].start()
-    for thread in threads:
-        thread.join()
+    with concurrent.futures.ThreadPoolExecutor(AT_ONCE) as pool:
+        for lines in pool.map(run, blocks):
+            for line in lines:
+                print(line)
+            sys.stdout.flush()
 
 
 def chosen(argv, groups, aliases, flags=()):
@@ -191,7 +190,6 @@ class FakeChrome:
         self.created = []
         self.activated = []
         self.window_state = "minimized"  # every window's, as an agent's work leaves it
-        self.restored = []  # windowIds setWindowBounds made normal
         self.navigate_error: str | None = None
         self.navigate_raises: Exception | None = None
         self.loads = True
@@ -255,7 +253,6 @@ class FakeConnection:
             chrome.find(params["targetId"])
             return {"windowId": 1, "bounds": {"windowState": chrome.window_state}}
         if method == "Browser.setWindowBounds":
-            chrome.restored.append(params["windowId"])
             chrome.window_state = params["bounds"]["windowState"]
             return {}
         if method == "Target.closeTarget":

@@ -143,7 +143,9 @@ class Chromes:
         try:
             targets = browser.call("Target.getTargets")["targetInfos"]
             page = next((target for target in targets if target.get("type") == "page"), None)
-            if not opens.show(browser, page["targetId"] if page else opens.window(browser, opens.PLACEHOLDER)):
+            target = page["targetId"] if page else opens.window(browser, opens.PLACEHOLDER)
+            # Not picked: the first page Chrome lists can be an agent's newest background tab.
+            if not opens.show(browser, target, pick=False):
                 raise cdp.CdpError("%s did not bring the %s Chrome to the front" % (system.NAME, profile.name))
         finally:
             browser.close()

@@ -5,9 +5,10 @@ on screen not minimized. Windows only.
     py -3 tests/popups.py --seconds 30          (watch alone, as while an agent works)
 
 A window is watched when its process is one this process started, or its children did (the checks' own Chrome, a
-console a helper flashed); run as a command, any Chrome started with --remote-debugging-port is
-too, a browserd profile's included. The user's own windows, open before or opened since, are never counted. Two ways see each pop-up: a WinEvent hook, called as the OS shows, restores or focuses a
-window, so a flash shorter than any poll is caught, and a poll of every top-level window every POLL seconds.
+console a helper flashed); run as a command, any Chrome started with --remote-debugging-port is too, a browserd
+profile's included. The user's own windows, open before or opened since, are never counted. Two ways see each pop-up:
+a WinEvent hook, called as the OS shows, restores or focuses a window, so a flash shorter than any poll is caught, and
+a poll of every top-level window every POLL seconds.
 """
 
 import contextlib
@@ -120,24 +121,26 @@ def on_screen(window):
     return rect.right - rect.left > 1 and rect.bottom - rect.top > 1 and bool(_user32.MonitorFromRect(ctypes.byref(rect), 0))
 
 
+def _still(kind, window):
+    """Whether a window still shows on screen ("shown"), or still has the focus ("focus")."""
+    if kind == "shown":
+        return on_screen(window)
+    return (_user32.GetAncestor(_user32.GetForegroundWindow(), _GA_ROOT) or 0) == window
+
+
 class Popup:
     """One pop-up: a watched window that took the focus ("focus") or came on screen ("shown"), and for how long."""
 
     def __init__(self, at, kind, pid, why, window):
         self.at, self.kind, self.pid, self.why, self.window = at, kind, pid, why, window
         self.title = _text(_user32.GetWindowTextW, window)
-        self.kind_of_window = _text(_user32.GetClassNameW, window)
+        self.window_class = _text(_user32.GetClassNameW, window)
         self.lasted = None  # seconds it stayed, once it has gone; None while it stays
-
-    def still(self):
-        if self.kind == "shown":
-            return on_screen(self.window)
-        return (_user32.GetAncestor(_user32.GetForegroundWindow(), _GA_ROOT) or 0) == self.window
 
     def __str__(self):
         lasted = "still" if self.lasted is None else "%dms" % round(self.lasted * 1000)
         return "%7.3fs %-5s for %-5s pid %d (%s) [%s] %r" % (
-            self.at, self.kind, lasted, self.pid, self.why, self.kind_of_window, self.title)
+            self.at, self.kind, lasted, self.pid, self.why, self.window_class, self.title)
 
 
 class Watch:
@@ -152,12 +155,12 @@ class Watch:
         self._every_chrome = every_chrome
         self.allowed = []  # (from, to, limit) in seconds since start: a pop-up begun in one is a check's own doing
         self._began = time.monotonic()
-        self._kinds = {}  # pid: why it is watched, or None
+        self._whys = {}  # pid: why it is watched, or None
         self._up = {}  # (kind, window): the Popup still up; another of the same window counts once this one has gone
         self._known = set()  # (kind, window) up as the watch began, the user's: never counted while it stays
         self._lock = threading.Lock()
         self._stopping = threading.Event()
-        self._threads = []
+        self._hook_thread = None  # the hooks' thread id, once it runs
 
     def watches(self, pid):
         """Whether the watch counts a process's windows."""
@@ -165,7 +168,7 @@ class Watch:
 
     def _why(self, pid):
         """Why a process's windows are watched ("debug Chrome", "new process: <image>"), or None."""
-        if pid not in self._kinds:
+        if pid not in self._whys:
             why = None
             try:
                 line = system.command(pid)
@@ -177,21 +180,18 @@ class Watch:
                 why = "debug Chrome"
             elif _descends(pid, os.getpid()):  # started before the watch or after, as the checks' Chrome is
                 why = "debug Chrome" if chrome else "new process: %s" % (line.split('" ')[0].strip('"')[:120] or pid)
-            self._kinds[pid] = why
-        return self._kinds[pid]
+            self._whys[pid] = why
+        return self._whys[pid]
 
     def _settle(self):
         """Mark each pop-up that has gone, and let go of known windows that have, so each may count when it comes back."""
         now = time.monotonic()
         with self._lock:
             for key, popup in list(self._up.items()):
-                if not popup.still():
+                if not _still(*key):
                     popup.lasted = now - self._began - popup.at
                     del self._up[key]
-            for kind, window in list(self._known):
-                if kind == "shown" and not on_screen(window) or kind == "focus" and (
-                        _user32.GetAncestor(_user32.GetForegroundWindow(), _GA_ROOT) or 0) != window:
-                    self._known.discard((kind, window))
+            self._known = {key for key in self._known if _still(*key)}
 
     def _record(self, kind, window):
         window = _user32.GetAncestor(window, _GA_ROOT) or window
@@ -260,9 +260,7 @@ class Watch:
         if foreground:
             self._known.add(("focus", _user32.GetAncestor(foreground, _GA_ROOT) or foreground))
         for target in (self._hooks, self._poll):
-            thread = threading.Thread(target=target, daemon=True)
-            thread.start()
-            self._threads.append(thread)
+            threading.Thread(target=target, daemon=True).start()
         return self
 
     @contextlib.contextmanager
@@ -286,7 +284,7 @@ class Watch:
         time.sleep(0.1)  # a pop-up under way is seen, and one going is seen go
         self._settle()
         self._stopping.set()
-        if getattr(self, "_hook_thread", None):
+        if self._hook_thread:
             _user32.PostThreadMessageW(self._hook_thread, _WM_QUIT, 0, 0)
         return self.popups
 
@@ -303,13 +301,13 @@ def watch():
 
 
 def allowing(limit=0.25):
-    """Watch.allowing on the watch running, or a block that does nothing while none runs. limit's default is twice the
-    longest measured, a page's popup window: on screen 75ms, then minimized."""
+    """Watch.allowing on the watch running, or a block that does nothing while none runs. limit's default is over three
+    times the longest measured, a page's popup window: on screen 75ms, then minimized."""
     return _current[0].allowing(limit) if _current else contextlib.nullcontext()
 
 
 def checked(watch, check):
-    """Stop a watch, and check that no window popped up while it ran.
+    """Stop a watch, and check that no window popped up while it ran, but for one an allowing block allows.
 
     Args:
         watch (Watch): a started watch.
@@ -339,7 +337,7 @@ def main(argv):
     try:
         if command:
             code = subprocess.call(command)
-        else:
+        elif seconds is not None:
             time.sleep(seconds)
     finally:
         popups = watch.stop()

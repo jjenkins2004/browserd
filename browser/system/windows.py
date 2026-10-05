@@ -23,7 +23,7 @@ from ctypes import wintypes
 
 from . import Unanswered
 
-__all__ = ["NAME", "CHROME", "CHROME_FLAGS", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
+__all__ = ["NAME", "CHROME", "CHROME_FLAGS", "BACKGROUND_WINDOWS", "CHROME_DATA", "DATA", "DESKTOP", "EXTRA_ROOTS", "COMMAND_KEY", "COMMAND_BIT",
            "COMMAND_PROPERTY", "REUSE_ADDRESS", "command", "switches", "listeners", "chrome_owner", "launch_chrome",
            "kill_chrome", "front", "bring", "happened", "minimize", "lock", "spawn_detached", "hidden", "remove_own_folder", "drop_from_user_path", "ansi", "listen_for_stop", "request_stop",
            "quit_hint", "remote_path", "python_problem", "clipboard_changes", "bind_exclusive"]
@@ -154,6 +154,7 @@ CHROME = _find_chrome()
 # Scrollbars that overlay the page, as a Mac's do: Windows' own take 15px of the viewport, and a background tab's
 # viewport flips between the two widths as it is laid out, which moves every point read off a screenshot.
 CHROME_FLAGS = ["--enable-features=OverlayScrollbar"]
+BACKGROUND_WINDOWS = False  # Chrome shows a background window on screen first, then minimizes it (measured)
 CHROME_DATA = os.path.realpath(os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local"),
                                             "Google"))
 DATA = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local"), "browserd")
@@ -311,10 +312,10 @@ def chrome_owner(folder):
 
 
 def launch_chrome(args):
-    # Chrome is started off the user's focus: no window at first (--no-startup-window), and every window it opens
-    # minimized (opens.window's) shown minimized from the start, never on screen first, which Chrome takes from how it
-    # was started (measured; README.md, "Agent Gotchas"). DETACHED_PROCESS and a group of its own keep it running past
-    # the server.
+    # Chrome is started off the user's focus: no window at first (--no-startup-window), and each window then asked
+    # minimized (opens.window's), and each the user opens (Ctrl+N), shown minimized from the start, never on screen
+    # first, which Chrome takes from how it was started (measured; README.md, "Agent Gotchas"); opens._by_user
+    # un-minimizes the user's. DETACHED_PROCESS and a group of its own keep it running past the server.
     startup = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=7)  # SW_SHOWMINNOACTIVE
     try:
         return _spawn([CHROME, *args], _DETACHED_PROCESS | _NEW_GROUP, startupinfo=startup, stdin=subprocess.DEVNULL,
@@ -400,7 +401,7 @@ def bring(pid):
 
 
 # Every top-level window that took the focus, was un-minimized or was shown, newest last, as (when, kind, pid, window,
-# the pid that had the focus before): Windows tells of these as they happen, 10 to 55ms before Chrome tells of the tab
+# the pid that had the focus before a "front"): Windows tells of these as they happen, 10 to 55ms before Chrome tells of the tab
 # that did it (measured), so happened can say what a tab did after the fact.
 _HISTORY = collections.deque(maxlen=4096)
 _watching = threading.Lock()
@@ -439,14 +440,13 @@ def happened(pid, since):
             _watcher.append(threading.Thread(target=_watch_windows, args=(ready,), daemon=True))
             _watcher[0].start()
             ready.wait(5)
-    return [(when, kind, window, before) for when, kind, owner, window, before in list(_HISTORY)
+    return [(kind, window, before) for when, kind, owner, window, before in list(_HISTORY)
             if owner == pid and when >= since]
 
 
 def minimize(window):
     if _IsWindowVisible(window) and not _IsIconic(window):
         _ShowWindow(window, 6)  # SW_MINIMIZE, which gives the focus to the window under it
-    return bool(_IsIconic(window))
 
 
 def lock(handle):

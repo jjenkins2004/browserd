@@ -78,8 +78,8 @@ def free_memory():
 
 
 def start_recorder(arm, run, profile):
-    """record.py on the run: browserd's on the session its transcript opens, the others' on the Chrome's visible tab,
-    which after clean_start can only be the run's own."""
+    """record.py on the run: browserd's on the session its transcript opens, the others' on the Chrome's tab, visible
+    or not, which after clean_start can only be the run's own."""
     follow = (["--transcript", str(run / "transcript.jsonl")] if arm == "browserd" else
               ["--cdp", str(profile.port), "--folder", profile.folder])
     return subprocess.Popen([sys.executable, str(HERE / "record.py"), str(run), *follow],

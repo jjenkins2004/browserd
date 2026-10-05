@@ -8,20 +8,21 @@ import shutil
 import tempfile
 import threading
 import time
+from unittest import mock
 
 from browser import system
-from browser.chrome import cdp, chromes, downloads, focus, opens, profiles
+from browser.chrome import cdp, chromes, downloads, opens, profiles
 from browser.protocol import mcp
 from browser.steps import steps
 from browser.records.state import State
 from browser.protocol.ws import WebSocketError
-from checks.steps import Clock
-from harness import FakeDevtools, STAND_IN, check, chrome_folder, refusal, text_of
+from harness import Clock, FakeDevtools, STAND_IN, check, chrome_folder, refusal, text_of
 
 
 class FakeEvents:
-    """The connection opens.watch reads: one old target, then the events given, then a closed websocket. Every window
-    is minimized until setWindowBounds says otherwise."""
+    """The connection opens.watch reads: one old target, then the events given, then a closed websocket. Every tab is
+    in window 7, but for those in popups, in window 8, and every window is minimized until setWindowBounds says
+    otherwise."""
 
     pid = 4242
 
@@ -29,13 +30,14 @@ class FakeEvents:
         self.events = list(events)
         self.calls = []
         self.state = "minimized"
+        self.popups = ()
 
     def call(self, method, session=None, **params):
         self.calls.append((method, params))
         if method == "Target.getTargets":
             return {"targetInfos": [{"targetId": "OLD", "type": "page"}]}
         if method == "Browser.getWindowForTarget":
-            return {"windowId": 7, "bounds": {"windowState": self.state}}
+            return {"windowId": 8 if params["targetId"] in self.popups else 7, "bounds": {"windowState": self.state}}
         if method == "Browser.setWindowBounds":
             self.state = params["bounds"]["windowState"]
         if method == "Target.createTarget":
@@ -56,22 +58,25 @@ def created(target, opener: "str | None" = "T1", kind="page"):
 
 
 def focus_offline():
-    """opens: what a tab a page opened did on screen put back, a window the user opened shown, and show, on a Clock."""
-    saved = (focus.front, focus.bring, system.happened, system.minimize, opens.time)
+    """opens: what a tab a page opened did on screen put back, a window the user opened shown, show and window, on a
+    Clock."""
+    saved = (system.front, system.bring, system.happened, system.minimize, opens.time)
     fronts, brought, minimized, record = [], [], [], []
-    focus.front = lambda: fronts.pop(0) if fronts else 77
-    focus.bring = lambda pid: brought.append(pid) or True
-    system.happened = lambda pid, since: [entry for entry in record if entry[0] >= since]
-    system.minimize = lambda window: minimized.append(window) or True
+    system.front = lambda: fronts.pop(0) if fronts else 77
+    system.bring = lambda pid: brought.append(pid) or True
     clock = opens.time = Clock()
+    # What the OS told of up to now: Windows tells of each as it happens.
+    system.happened = lambda pid, since: [entry[1:] for entry in record if since <= entry[0] <= clock.monotonic()]
+    system.minimize = minimized.append
     opens._shown.clear()  # what an earlier group's show left, stamped on another clock
+    opens._opened.clear()  # and the tabs an earlier group's opens.tab opened
 
-    def kept(events, in_front, happened=(), state="minimized"):
+    def kept(events, in_front, happened=(), state="minimized", popups=()):
         fronts[:], brought[:], minimized[:] = in_front, [], []
         now = clock.monotonic()
         record[:] = [(now + when, kind, window, before) for when, kind, window, before in happened]
         browser, lines = FakeEvents(events), []
-        browser.state = state
+        browser.state, browser.popups = state, popups
         try:
             for line in opens.watch(browser):
                 lines.append(line)
@@ -93,10 +98,10 @@ def focus_offline():
               minimized == [501] and brought == [77] and lines == [
                   "minimized 1 window and gave the focus back to pid 77, after a page opened https://example.com/P1"],
               repr((minimized, brought, lines)))
-        browser, lines = kept([created("P1")], [77], [(-0.03, "shown", 502, None)], "normal")
+        browser, lines = kept([created("P1")], [77], [(-0.03, "shown", 502, None)], "normal", ("P1",))
         check("one that showed a new window without the focus has that window minimized, through Chrome, which the OS "
               "would leave off screen half shown, and the focus left alone",
-              minimized == [] and ("Browser.setWindowBounds", {"windowId": 7, "bounds": {"windowState": "minimized"}})
+              minimized == [] and ("Browser.setWindowBounds", {"windowId": 8, "bounds": {"windowState": "minimized"}})
               in browser.calls and brought == [] and lines == ["minimized 1 window, after a page opened "
                                                                "https://example.com/P1"], repr((browser.calls, lines)))
         _, lines = kept([created("P1")], [77], [(-1.0, "restored", 503, None), (-0.9, "front", 503, 77)])
@@ -110,16 +115,38 @@ def focus_offline():
         _, lines = kept([created("P1")], [], [(-0.03, "restored", 504, None), (-0.02, "front", 504, FakeEvents.pid)])
         check("nor when the OS says the School Chrome had the focus before the tab took it", brought == []
               and minimized == [] and lines[0].startswith("left this Chrome as it was"), repr((minimized, lines)))
-        opens._shown[FakeEvents.pid] = clock.monotonic()
-        _, lines = kept([created("P1")], [77], [(-0.03, "restored", 505, None)])
+        _, lines = kept([created("P1")], [FakeEvents.pid], [(-0.02, "front", 506, 77)])
+        check("nor when Chrome took the focus with no window un-minimized or shown, as the user's own click on a link "
+              "in a Chrome on screen does", brought == [] and lines[0].startswith("left this Chrome as it was"),
+              repr((brought, lines)))
+        opens._opened.append("T1")
+        _, lines = kept([created("P1")], [FakeEvents.pid, 77], [(-0.02, "front", 507, 77)])
+        opens._opened.clear()
+        check("but a link in a tab opens opened, in a window on screen, which takes the focus alone, has it given back",
+              brought == [77] and lines[0].startswith("gave the focus back to pid 77"), repr((brought, lines)))
+        browser, lines = kept([created("P1")], [77], [(-0.03, "shown", 508, None)], "normal")
+        check("a link's tab, in its opener's window, minimizes no window another tab showed",
+              browser.state == "normal" and lines == [], repr((browser.calls, lines)))
+        opens.show(FakeEvents([]), "T1")
+        _, lines = kept([created("P1")], [77], [(0.01, "restored", 505, None), (0.02, "front", 505, 77)])
         opens._shown.clear()
-        check("nor a window Open Chrome or Show brought up just before", minimized == [], repr((minimized, lines)))
-        focus.front = lambda: None
+        check("nor what Open Chrome or Show did, which Windows tells of after show returns", minimized == []
+              and brought == [], repr((minimized, brought, lines)))
+        system.front = lambda: FakeEvents.pid
+        _, lines = kept([created("P1"), created("P2")], [], [
+            (-0.03, "restored", 601, None), (-0.02, "front", 601, 77), (0.58, "restored", 602, None),
+            (0.6, "front", 602, 77)])
+        system.front = lambda: fronts.pop(0) if fronts else 77
+        check("two tabs a page opened at once each have what they did put back, the second though watch reads it only "
+              "once from_page is done with the first", set(minimized) == {601, 602} and len(lines) == 2
+              and all("gave the focus back to pid 77, after a page opened https://example.com/%s" % tab in line
+                      for tab, line in zip(("P1", "P2"), lines)), repr((minimized, lines)))
+        system.front = lambda: None
         _, lines = kept([created("P1")], [])
         check("a front app the OS cannot tell is logged, and nothing is put back",
               brought == [] and lines == ["could not tell which app had the focus when a page opened "
                                           "https://example.com/P1"], repr((brought, lines)))
-        focus.front = lambda: fronts.pop(0) if fronts else 77
+        system.front = lambda: fronts.pop(0) if fronts else 77
         kept([created("OLD"), created("W1", kind="iframe"), {"method": "Target.targetInfoChanged", "params": {}}, None],
              [77, FakeEvents.pid])
         check("a target open before watch started, a frame, other events and a quiet minute are passed over",
@@ -135,19 +162,34 @@ def focus_offline():
         browser, lines = kept([created("N1", opener=None)], [77])
         check("but a tab or window opened while another app has the focus, as an agent's, stays minimized",
               browser.state == "minimized" and lines == [], repr(browser.calls))
+        opens._opened.append("N2")
+        browser, lines = kept([created("N2", opener=None)], [FakeEvents.pid])
+        check("and so does one window or tab opened, though Chrome has the focus, as the user's Incognito window can",
+              browser.state == "minimized" and lines == [], repr(browser.calls))
 
         browser = FakeEvents([])
         check("show un-minimizes the tab's window, picks the tab and brings its Chrome to the front",
               opens.show(browser, "T1") and browser.state == "normal" and brought[-1] == FakeEvents.pid
               and ("Target.activateTarget", {"targetId": "T1"}) in browser.calls, repr(browser.calls))
-        made = opens.window(browser, "https://example.com/w", "C1")
+        opens.show(browser, "T1")
+        check("and leaves a window already up as it is",
+              [call for call in browser.calls if call[0] == "Browser.setWindowBounds"] == [
+                  ("Browser.setWindowBounds", {"windowId": 7, "bounds": {"windowState": "normal"}})], repr(browser.calls))
+        browser = FakeEvents([])
+        opens.show(browser, "T1", pick=False)
+        check("show for Open Chrome leaves the tab picked in the window as it is, which may not be the one it names",
+              browser.state == "normal" and all(method != "Target.activateTarget" for method, _ in browser.calls),
+              repr(browser.calls))
+        with mock.patch.object(system, "BACKGROUND_WINDOWS", False):  # Windows' way; a Mac's adds background
+            made = opens.window(browser, "https://example.com/w", "C1")
         check("window opens a new window minimized from the start, never in the background, which Chrome shows on "
               "screen first", made == "W1" and browser.calls[-1] == ("Target.createTarget", {
                   "url": "https://example.com/w", "newWindow": True, "windowState": "minimized",
                   "browserContextId": "C1"}), repr(browser.calls[-1]))
     finally:
-        focus.front, focus.bring, system.happened, system.minimize, opens.time = saved
+        system.front, system.bring, system.happened, system.minimize, opens.time = saved
         opens._shown.clear()
+        opens._opened.clear()
 
 
 class FakeDownloads:
@@ -237,6 +279,7 @@ class FolderConnection:
         self.closed = True
 
 
+@mock.patch.object(steps, "GAP", 0)  # a stand-in page has nothing to react to between steps
 def downloads_offline():
     """downloads.Folder and downloads.Watcher against stand-in connections, and steps.run reporting what they took."""
     workdir = tempfile.mkdtemp(prefix="browser-downloads-")
@@ -414,9 +457,7 @@ def downloads_offline():
             return self.takes.pop(0) if self.takes else []
 
     workdir = tempfile.mkdtemp(prefix="browser-downloads-")
-    gap = steps.GAP
     try:
-        steps.GAP = 0  # a stand-in page has nothing to react to between steps
         called = lambda name: os.path.join(workdir, "001-" + name)
         fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False),
                              ([{"type": "text", "text": "Successfully clicked on the element"}], False)])
@@ -436,7 +477,6 @@ def downloads_offline():
         check("one no Folder heard says it went where Chrome's own settings say",
               report.endswith("--- downloaded note.txt, where Chrome's own download settings say"), report)
     finally:
-        steps.GAP = gap
         shutil.rmtree(workdir, ignore_errors=True)
 
 

@@ -9,13 +9,14 @@ import re
 import shutil
 import tempfile
 import time
+from unittest import mock
 
 from browser.chrome import cdp
 from browser.dashboard import page
 from browser.steps import checked, dialogs, hit, pointer, screenshot, steps
 from browser.tabs import devtools
 from browser.tabs.worker import Workers
-from harness import FakeDevtools, STAND_IN, check, failed, refusal, text_of, uid
+from harness import Clock, FakeDevtools, STAND_IN, check, failed, refusal, text_of, uid
 
 
 SCHEMAS = {  # the queue's tools as chrome-devtools-mcp describes them, cut to what the checks use
@@ -45,9 +46,9 @@ class Blocked:
         raise cdp.CdpError("# Open dialog\nalert: Heads up.\nCall handle_dialog to handle it before continuing.")
 
 
+@mock.patch.object(steps, "GAP", 0)  # a stand-in page has nothing to react to between steps
 def queue_offline():
     workdir = tempfile.mkdtemp(prefix="browser-steps-")
-    gap, steps.GAP = steps.GAP, 0  # a stand-in page has nothing to react to between steps
     try:
         def load(**arguments):
             return refusal(lambda: steps.load(arguments, workdir), steps.StepError)
@@ -293,7 +294,6 @@ def queue_offline():
               "--- 1 paste FAILED" in report and "not given" in report, report)
 
         views(workdir)
-        waits()
 
         workers = Workers(workdir)
         first = workers.get("ab12", "T1", STAND_IN)
@@ -334,7 +334,6 @@ def queue_offline():
         check("but stops none of a session a call has resumed since", workers.pause(["paus"], lambda: False) == 0
               and paused._devtools.alive())
     finally:
-        steps.GAP = gap
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -587,21 +586,6 @@ class Page:
         return "## Latest page snapshot\n" + self.page(self.taken)
 
 
-class Clock:
-    """A module's time, stood in for: sleep moves it on at once, so a wait of seconds takes none."""
-
-    def __init__(self):
-        self.now = 1000.0
-
-    def time(self):
-        return self.now
-
-    monotonic = time
-
-    def sleep(self, seconds):
-        self.now += seconds
-
-
 def waits():
     """checked.wait's snapshot conditions over pages whose text goes, stays, or always changes, on a Clock."""
     clock = Clock()
@@ -658,6 +642,7 @@ class FakeDialogs:
         pass
 
 
+@mock.patch.object(steps, "GAP", 0)  # a stand-in page has nothing to react to between steps
 def dialogs_offline():
     """dialogs.Answerer against a stand-in connection, and steps.run handing it a handle_dialog step."""
     connection = FakeDialogs(opens=3)
@@ -680,11 +665,21 @@ def dialogs_offline():
     answerer.start_listening()
     check("an answerer that cannot reach the tab answers nothing", answerer.answered(0.2) is None)
 
-    saved, gap = dialogs.Answerer, steps.GAP
+    saved = dialogs.Answerer
     workdir = tempfile.mkdtemp(prefix="browser-dialogs-")
     try:
-        steps.GAP = 0  # a stand-in page has nothing to react to between steps
         called = lambda name: os.path.join(workdir, "001-" + name)
+        later = FakeDialogs(opens=5)
+        fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False)])
+        result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "handle_dialog", "action": "dismiss"}],
+                           called, target="T1", connect=lambda: later)
+        report = text_of(result["content"])
+        check("a dialog that opens after its click is done is still answered by the handle_dialog step after it, "
+              "dismissed as it asks",
+              not result["isError"] and "--- 2 handle_dialog ok" in report
+              and 'the prompt "Your name?" was dismissed as it opened' in report
+              and [tool for tool, _ in fake.calls] == ["click"]
+              and ("Page.handleJavaScriptDialog", {"accept": False}) in later.calls, report)
         dialogs.Answerer = lambda target, handle, connect: saved(target, handle, lambda: FakeDialogs(opens=1))
         fake = FakeDevtools([([{"type": "text", "text": "Successfully clicked on the element"}], False)])
         result = steps.run(fake, 7, [{"tool": "click", "uid": "1_1"}, {"tool": "handle_dialog", "action": "accept"}],
@@ -713,7 +708,7 @@ def dialogs_offline():
               made == [] and not result["isError"] and [tool for tool, _ in fake.calls] == ["evaluate_script", "handle_dialog"],
               text_of(result["content"]))
     finally:
-        dialogs.Answerer, steps.GAP = saved, gap
+        dialogs.Answerer = saved
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -807,8 +802,8 @@ class Widget:
     recording each call as FakeDevtools does. Its dropdown, 1_1, lists the options holding what its text box holds once
     text is typed, as chrome-devtools-mcp lists them; a click on one closes the list and shows shows(text) beside the
     box, or with in_box puts the text in the box, unless takes is False. elsewhere are options already on the page, in
-    a <select multiple>. Its other fields are in fields; a click on 1_12, Parse resume, shows a status for its next
-    `parse` calls, then fills City, and one on 1_13, Warn later, opens nothing it can see."""
+    a <select multiple>. Its other fields are in fields; a click on 1_12, Parse resume, shows a status until its
+    `parse`-th call after, which fills City."""
 
     def __init__(self, options=(), takes=True, shows=lambda text: text, in_box=False, elsewhere=(), parse=4):
         self.options, self.takes, self.shows, self.in_box, self.elsewhere = options, takes, shows, in_box, elsewhere
@@ -911,12 +906,13 @@ class Widget:
         return found if function.startswith("(...els)") else found[0]
 
 
+@mock.patch.object(steps, "GAP", 0)  # a stand-in page has nothing to react to between steps
 def checked_offline():
-    """checked's pick, expect, type and wait, and the fills and the dialog a queue judges or answers itself, against a
-    Widget; live.checked_live has what only Chrome can say."""
+    """checked's pick, expect, type and wait, and the fills a queue judges itself, against a Widget;
+    live.checked_live has what only Chrome can say."""
+    waits()
     workdir = tempfile.mkdtemp(prefix="browser-checked-")
-    saved = checked.POLL, checked.SETTLE, steps.GAP
-    checked.POLL, checked.SETTLE, steps.GAP = 0.005, 0.02, 0  # what a stand-in needs; theirs are for real pages
+    saved, checked.time = checked.time, Clock()
     try:
         queue = lambda widget, *planned, **more: steps.run(widget, 7, list(planned), lambda name: os.path.join(
             workdir, "001-" + name), **more)
@@ -935,8 +931,8 @@ def checked_offline():
               not failed and said.endswith('the field now shows "+1"'), said)
 
         widget = Widget(near, in_box=True)
-        result = queue(widget, {"tool": "pick", "uid": "1_1", "text": "Los Angeles, Chile", "search": "Los Angeles",
-                                "wait": 0.02}, {"tool": "expect", "uid": "1_3", "value": "true"})
+        result = queue(widget, {"tool": "pick", "uid": "1_1", "text": "Los Angeles, Chile", "search": "Los Angeles"},
+                       {"tool": "expect", "uid": "1_3", "value": "true"})
         report = text_of(result["content"])
         check("a pick with no exact option fails the queue and says what typing showed",
               result["isError"] and 'no option is exactly "Los Angeles, Chile"' in report
@@ -945,7 +941,7 @@ def checked_offline():
         check("a failed pick leaves no typed text behind to pass for an answer, and closes the list",
               widget.typed == "" and not widget.listed() and "the text box was emptied" in report, report)
         widget = Widget(["Python"], takes=False)
-        said, failed = checked.run(widget, 7, {"tool": "pick", "uid": "1_1", "text": "Python", "wait": 0.02})
+        said, failed = checked.run(widget, 7, {"tool": "pick", "uid": "1_1", "text": "Python"})
         check("a pick whose option click takes nothing fails, though the box holds the typed text",
               failed and 'but the field holds "Python" (read as value; that is only what was typed' in said, said)
         check("and the typed text is cleared", widget.typed == "" and said.endswith("the text box was emptied"), said)
@@ -955,7 +951,7 @@ def checked_offline():
               not failed and clicked(widget) == ["1_1", "2_1"] and said == 'picked "Python"; the field holds "Python"',
               said)
         widget = Widget()
-        said, failed = checked.run(widget, 7, {"tool": "pick", "uid": "1_7", "text": "90210", "wait": 0.02})
+        said, failed = checked.run(widget, 7, {"tool": "pick", "uid": "1_7", "text": "90210"})
         check("pick on a field that lists nothing as you type says to fill or type it, and empties the field",
               failed and "fill or type it" in said and widget.fields["1_7"]["read"]["value"] == "", said)
         widget = Widget()
@@ -1003,18 +999,10 @@ def checked_offline():
               and all(read["function"] == checked.READ_JS for read in reads), report)
         widget = Widget(parse=8)
         report = text_of(queue(widget, {"tool": "click", "uid": "1_12"},
-                               {"tool": "wait", "still": 20, "timeout": 2000})["content"])
+                               {"tool": "wait", "still": 20, "timeout": 5000})["content"])
         check("wait for the page to stop changing waits out the changes, then still ms more",
               "--- 2 wait ok" in report and "has not changed for 20ms" in report and not widget.parsing
               and tools(widget).count("take_snapshot") > widget.parse, report)
-
-        widget = Widget()
-        result = queue(widget, {"tool": "click", "uid": "1_13"}, {"tool": "handle_dialog", "action": "dismiss"},
-                       target="T1", connect=lambda: FakeDialogs(opens=5))
-        report = text_of(result["content"])
-        check("a dialog that opens after its click is done is still answered by the handle_dialog step after it",
-              not result["isError"] and '--- 2 handle_dialog ok' in report
-              and 'the prompt "Your name?" was dismissed as it opened' in report and tools(widget) == ["click"], report)
 
         widget = Widget()
         reports = [text_of(queue(widget, {"tool": "fill", "uid": element, "value": "x"})["content"])
@@ -1030,13 +1018,14 @@ def checked_offline():
               result["isError"] and 'no option of the select 1_5 is exactly "Atlantis"' in report
               and "fill_form" not in tools(widget), report)
     finally:
-        checked.POLL, checked.SETTLE, steps.GAP = saved
+        checked.time = saved
         shutil.rmtree(workdir, ignore_errors=True)
 
 
 class Shots:
     """A connection to a profile's Chrome whose tab has a viewport of css CSS pixels at a device pixel ratio, scrolled
-    down 300; it records what it is asked, and answers a screenshot with the bytes b"img"."""
+    down 300; it records what it is asked, and answers a screenshot with the bytes b"img". With undrawn, it refuses
+    the screencast that has Chrome draw the tab."""
 
     def __init__(self, css=(1200, 792), ratio=2, fails=False, undrawn=False):
         self.calls, self.css, self.ratio, self.fails, self.undrawn = [], css, ratio, fails, undrawn
@@ -1374,12 +1363,12 @@ def on_offline():
           not failed and hand.events and "(browserd could not read what is there:" in content[0]["text"], repr(content))
 
 
+@mock.patch.object(steps, "GAP", 0)  # a stand-in page has nothing to react to between steps
 def limits_offline():
     """What a queue refuses or stops for: its time, a fill that would do harm, a chrome-devtools-mcp timeout too long."""
     workdir = tempfile.mkdtemp(prefix="browser-limits-")
-    saved, gap = steps.QUEUE_MOST, steps.GAP
+    saved = steps.QUEUE_MOST
     try:
-        steps.GAP = 0  # a stand-in page has nothing to react to between steps
         called = lambda name: os.path.join(workdir, "001-" + name)
 
         class Slow(FakeDevtools):
@@ -1453,5 +1442,5 @@ def limits_offline():
         check("a dialog answered for a step that then failed is still reported",
               "was accepted as it opened, though its handle_dialog step did not run" in report, report)
     finally:
-        steps.QUEUE_MOST, steps.GAP = saved, gap
+        steps.QUEUE_MOST = saved
         shutil.rmtree(workdir, ignore_errors=True)

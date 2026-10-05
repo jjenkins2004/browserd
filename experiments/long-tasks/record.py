@@ -81,14 +81,15 @@ class SessionTab:
 
 class VisibleTab:
     """The Chrome's visible page, as (DevTools target, its URL), of those not in ignore; of several (one per window),
-    the one whose URL changed last."""
+    the one whose URL changed last, and with none visible, as in a minimized window, the page whose URL changed
+    last."""
 
     def __init__(self, ignore=()):
         self.ignore = set(ignore)
         self.urls, self.changed = {}, {}  # target: its URL, and when that last changed
 
     def __call__(self, browser, attached):
-        visible = []
+        visible, pages = [], []
         for info in browser.call("Target.getTargets")["targetInfos"]:
             target = info["targetId"]
             if info["type"] != "page" or info["url"].startswith(("chrome:", "devtools:")) or target in self.ignore:
@@ -103,9 +104,11 @@ class VisibleTab:
             except cdp.CdpError:
                 attached.pop(target, None)  # closed, or busy with a dialog
                 continue
+            pages.append(target)
             if shown.get("result", {}).get("value") == "visible":
                 visible.append(target)
-        target = max(visible, key=lambda t: self.changed[t], default=None)
+        # A tab in a minimized window, as opens.window opens, is hidden.
+        target = max(visible or pages, key=lambda t: self.changed[t], default=None)
         return target, self.urls.get(target)
 
 
