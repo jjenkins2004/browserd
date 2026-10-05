@@ -16,7 +16,6 @@ import venv
 
 import paths
 import procs
-import sites
 
 REPOS = {  # folder: (repo, commit)
     "MCP-Universe": ("https://github.com/SalesforceAIResearch/MCP-Universe.git", "48b4530"),
@@ -54,7 +53,7 @@ def main():
     if hashlib.sha256(tasks.read_bytes()).hexdigest() != WEBGAMES_SHA256:
         raise SystemExit("%s is not the task file this bench was built against" % tasks)
 
-    python = sites._venv_python()
+    python = procs.venv_python(paths.DATA / ".venv")
     if not (os.path.exists(python) and subprocess.run([python, "-c", "import flask"], capture_output=True).returncode == 0):
         venv.create(paths.DATA / ".venv", with_pip=True)
         run([python, "-m", "pip", "install", "-q", "Flask==2.3.3"])
