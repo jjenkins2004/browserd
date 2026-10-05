@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Tool-use breakdown of an experiment: per arm, the tools called, errors, result sizes, queue batching.
+"""Tool-use breakdown of an experiment: per arm, the tools called, errors, result sizes, and steps per queue or
+tab_open call.
 
     python3 experiments/bench/tools/analyze.py ff1
 """
@@ -54,8 +55,8 @@ def main():
         for call in calls.values():
             tool = call["name"].split("__")[-1]
             a["tools"][tool] += 1
-            if tool == "queue":
-                steps = call["input"].get("steps") or []
+            steps = call["input"].get("steps") or []
+            if tool == "queue" or (tool == "tab_open" and steps):  # tab_open runs steps on the new tab too
                 a["steps"].append(len(steps))
                 for s in steps:
                     if isinstance(s, dict):
@@ -71,7 +72,7 @@ def main():
         print("   tools:", dict(a["tools"].most_common()))
         print("   errors:", dict(a["errors"].most_common()))
         if a["steps"]:
-            print("   queue steps: median %.0f, mean %.1f, max %d; step tools %s" % (
+            print("   steps per queue or tab_open with steps: median %.0f, mean %.1f, max %d; step tools %s" % (
                 statistics.median(a["steps"]), statistics.mean(a["steps"]), max(a["steps"]),
                 dict(a["step_tools"].most_common())))
         if "-v" in sys.argv:

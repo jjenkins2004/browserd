@@ -25,7 +25,7 @@ MAX_TURNS = 40
 def load():
     """Every challenge, as {id: task}, in the dataset's order."""
     tasks = {}
-    for line in TASKS_FILE.read_text().splitlines():
+    for line in TASKS_FILE.read_text(encoding="utf-8").splitlines():
         task = json.loads(line)
         tasks[task["id"].replace("/*", "")] = task
     return tasks

@@ -183,7 +183,7 @@ def fields(template):
     if template == "A12":
         return [dict(f, labels=[f["label"]], options=f.get("options", []), multiple=False, members=1) for f in A12_FIELDS]
     parser = _Template()
-    parser.feed((FF / "templates" / ("%s.html" % template)).read_text())
+    parser.feed((FF / "templates" / ("%s.html" % template)).read_text(encoding="utf-8"))
     groups = {}
     for f in parser.fields:
         if not f["name"]:
@@ -296,8 +296,8 @@ def load():
     holds at least half their values."""
     tasks = {}
     for template, (route, stem) in FORMS.items():
-        gold = json.loads((FF / "data" / "data1" / ("%s.json" % stem)).read_text())
-        documents = _cut((FF / "data" / "data2" / ("%s.txt" % stem)).read_text(), 6)
+        gold = json.loads((FF / "data" / "data1" / ("%s.json" % stem)).read_text(encoding="utf-8"))
+        documents = _cut((FF / "data" / "data2" / ("%s.txt" % stem)).read_text(encoding="utf-8"), 6)
         kept = 0
         for i, (record, document) in enumerate(zip(gold, documents)):
             if kept < INSTANCES and _covers(document, record) >= 0.5:

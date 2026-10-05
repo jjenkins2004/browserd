@@ -29,7 +29,7 @@ def load():
     """Every task the bench can score, as {name: task}, in name order."""
     tasks = {}
     for path in sorted(TASK_DIR.glob("*.json")):
-        task = json.loads(path.read_text())
+        task = json.loads(path.read_text(encoding="utf-8"))
         if {ev["op"] for ev in task["evaluators"] if "op" in ev} <= SCORED_OPS:
             tasks[path.stem] = dict(task, name=path.stem)
     return tasks
