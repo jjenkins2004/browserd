@@ -23,7 +23,7 @@ def taken(step):
     return step["tool"] == "take_screenshot" and "uid" not in step and not step.get("fullPage")
 
 
-def viewport(step, target, connect, guard=None):
+def viewport(step, target, connect):
     """(content, failed): the viewport at one pixel per CSS pixel (fewer past LONGEST, times the step's scale), saved to
     the step's filePath, and returned as a line saying so and the image.
 
@@ -31,7 +31,6 @@ def viewport(step, target, connect, guard=None):
         step (dict): a take_screenshot that taken passes, its filePath placed by steps.place_screenshots.
         target (str | None): the tab's target id.
         connect (callable | None): opens a proven connection to the tab's Chrome, a cdp.Browser.
-        guard (Guard | None): the queue's click guard, which takes the capture itself, so it is the tab's next reference.
     """
     if target is None or connect is None:
         return _said("this queue was not given the tab's target id, so no screenshot was taken"), True
@@ -40,8 +39,7 @@ def viewport(step, target, connect, guard=None):
         browser = connect()
         try:
             session = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
-            data, css, fit = (guard.capture if guard else capture)(browser, session, kind, step.get("quality", QUALITY),
-                                                                   step.get("scale", 1))
+            data, css, fit = capture(browser, session, kind, step.get("quality", QUALITY), step.get("scale", 1))
         finally:
             browser.close()
         with open(step["filePath"], "wb") as handle:

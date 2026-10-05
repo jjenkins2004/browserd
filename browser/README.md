@@ -59,7 +59,6 @@ parts.
         checked.py   the queue's checked steps: pick, expect, type, paste, wait; fill_refused, read_fills
         pointer.py   the queue's pointer steps: move_at, click_down, click_up
         hit.py       what a press lands on, read off the accessibility tree just before it goes out
-        guard.py     the click guard: a press or keys stopped when the page changed since the agent's screenshot
         screenshot.py  a queue's take_screenshot of the viewport: CSS pixels, saved and sent back as an image
         dialogs.py   answers a dialog the moment it opens, for a handle_dialog step
       dashboard/     the browserd page
@@ -225,8 +224,7 @@ for both (measured: a fill on a date's Month part failed after 30.1s unselected,
 runs out its timeout still reports ok, on a page half loaded, so `steps.run` gives a `navigate_page` that names no
 `timeout` `steps.NAVIGATE_TIMEOUT` (30s), what it had before. The first report on a tab older than this
 server (carried over: `Workers.get`'s `made` is before `Workers.started`) also says its uids are gone, since an
-earlier server's process may have given some out. It also keeps the last viewport screenshots its tab's replies gave
-the agent, and where the focus was as the last one went out, for `guard.Guard`. **`worker.Workers`** holds
+earlier server's process may have given some out. **`worker.Workers`** holds
 one per tab id. `tab_close`, the page's Close, Close session, Quit Chrome and Delete profile, `/close-paused`, `tab_list` (for tabs found closed) and a
 queue on a tab found closed drop it;
 any other failure to reach a tab leaves its process and uids alone. `Workers.pause` stops the processes of a
@@ -474,11 +472,11 @@ same tabs under the same ids. A crash leaves the same.
   frame that, measured, sometimes never came (one in two clipped captures hung for 60s, and every capture after the
   first to hang); a second capture brings it. So a capture is asked again every `screenshot.NUDGE` (0.5s) until one
   answers (`cdp.Browser.call`'s `nudge`; answers to the others are dropped): 48 of 48 then answered, the longest in
-  2s, the median 0.2s. A step that waits on a frame (a screenshot, the guard's capture, chrome-devtools-mcp's wait
+  2s, the median 0.2s. A step that waits on a frame (a screenshot, chrome-devtools-mcp's wait
   after a click) may so take up to about 2s more on Windows than on a Mac. Every profile's Chrome on Windows also
   starts with overlay scrollbars (`system.CHROME_FLAGS`), as a Mac's are: Windows' own take 15px of the viewport, and
-  a background tab's viewport flipped between the two widths as it was laid out (1234 to 1219 CSS px), which the guard
-  reads as the viewport changing size.
+  a background tab's viewport flipped between the two widths as it was laid out (1234 to 1219 CSS px), which moves a
+  centred page's content between a screenshot and a press read off it.
 - **The pointer steps are a hand's three moves: `move_at x,y`, `click_down` and `click_up`.** A click is the three
   in turn, a drag puts a second `move_at` between the press and the let-go, and a hover is a `move_at` alone, so no
   step repeats another's work. `pointer.run` sends each as one `Input.dispatchMouseEvent` on a connection of its own
@@ -505,26 +503,12 @@ same tabs under the same ids. A crash leaves the same.
   or less on Windows). chrome-devtools-mcp's own `click_at` (behind `--experimental-vision`, which browserd does
   not pass) cannot hover or drag: WebGames' herding needs the pointer moved over a canvas, and an agent given
   `click_at` spent 40 of them standing in for moves.
-- **The click guard stops a press, or keys, that the page changed under since the agent's last screenshot.** A point
-  read off a screenshot can meet a popup that opened while the agent thought, or one its own last click opened. Each
-  queue gets a `guard.Guard` over its tab's Worker; its reference is the last viewport screenshot a reply gave before
-  the queue arrived, each taken through `Guard.capture`, which first bumps a counter that `guard.PAGE_JS`, a
-  MutationObserver kept in the page, stamps changes with. Measured in `../experiments/findings/real-sites.md` (19 sites, 126 agent
-  runs), its setting is:
-  - **pixels (S1):** over 10% of the 24 CSS px square around the point, or 75% of its central 8 px, changed by more
-    than 64 in a channel, against a fresh capture of the same format and scale;
-  - **the page (S2):** an element added, shown or hidden around the point, or text changed within 3 levels of it;
-  - **layout (S6):** a layout shift from or onto the point;
-  - **the page itself:** a new document, a scroll or a resize, or a check that could not tell, which stops too.
-
-  The check runs before a `move_at` that a `click_down` follows, since the hover the move causes is the agent's own,
-  or before a `click_down` whose pointer an earlier queue placed; a `click_down` of count 2 or 3 goes on its first.
-  S2, S6 and the document are read again just before the input goes out (a few ms, against the check's ~100). A press
-  with no reference is stopped too. On a tab a screenshot came back from, `press_key` and `type_text` are stopped when
-  the focus is not where the last reply, key or step left it, or not in what the queue's last press hit, or when
-  something entered the top layer since the screenshot; a tab driven by snapshots alone is never read. A stopped step
-  fails, saying why, with a screenshot of the page now, saved as `<n>-step<k>-stopped.<format>` and the next
-  reference. It forgets its references when browserd restarts, so the first press after a restart is stopped.
+- **No check compares a press with the agent's last screenshot.** browserd had one, a click guard that stopped a
+  press, or keys, when the page had changed there since that screenshot (`../experiments/findings/click-guard.md`,
+  `real-sites.md`). It was removed: on a Slides deck it made 22 stops, none needed, since Slides types into a frame it
+  could not follow, and a press after a step of the same queue that changed the page always looked changed; the agent
+  stopped chaining clicks and took twice Playwright's deck turns (`trip-compare.md`). A press's report names what it
+  landed on instead (above).
 - **Every snapshot a queue reports is a view**: `take_snapshot`'s, `wait_for`'s, an `includeSnapshot`
   step's and the failed queue's. A reply's snapshot runs from chrome-devtools-mcp's
   `## Latest page snapshot` line to the next of the headers it can put after one
@@ -697,8 +681,8 @@ same tabs under the same ids. A crash leaves the same.
     canvas down a scrolled page in a viewport screenshot's own pixels, and click it there with `move_at`,
     `click_down` and `click_up`; its pointer checks drag across a pad that records trusted mouse events, click a
     button whose alert holds the let-go, and then try a `move_at` and a screenshot with that alert still open. Its
-    guard checks press with no screenshot, on an unchanged spot, on a button that turns blue on hover, under a modal
-    raised after the screenshot, and twice for a double click, and type with the focus kept and moved.
+    press checks press with no screenshot, under a layer raised since, and twice for a double click, and read what
+    each press landed on.
   - **Tabs:** live checks open scratch tabs and a throwaway browser context, work only inside
     them, and close them; their downloads go in a `Folder` of their own in a temporary folder, never `~/Downloads`
     (`downloads_live`, run last, sets the throwaway profile to ask where to save each file, and quits and starts

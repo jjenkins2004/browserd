@@ -55,17 +55,6 @@ class Worker:
         self._carried = carried
         self.page_id = None
         self.watcher = None  # the tab's downloads.Watcher, from ensure until stop or pause
-        self._shots = []  # (returned at, capture): the viewport screenshots this tab's replies gave, for the guard
-        self.focus_mark = None  # the guard's counter as the last reply went out: where the keys' focus should be
-
-    def keep_reference(self, capture, returned):
-        """Keep a viewport screenshot a reply gave the agent (guard.Guard.capture's), and when the reply went out."""
-        self._shots = self._shots[-4:] + [(returned, capture)]
-
-    def reference_before(self, arrived):
-        """The last viewport screenshot a reply gave the agent before a queue's request arrived, or None."""
-        given = [capture for returned, capture in self._shots if returned < arrived]
-        return given[-1] if given else None
 
     def ensure(self):
         """(Devtools, page id, restarted): the running process, starting and pairing one when there is none.

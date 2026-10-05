@@ -12,7 +12,7 @@ from .config import paths, ports
 from .dashboard import page
 from .protocol import mcp
 from .records import record
-from .steps import guard, steps
+from .steps import steps
 from .tabs import devtools, sessions
 from .records.state import Session
 from .tabs.tabs import NOT_AN_ID, NOT_YOURS, is_id
@@ -394,7 +394,6 @@ def queue_steps(state, tabs, workers, allowed, calls=CALLS):
             of their own.
     """
     def queue(session, arguments, began=None):
-        arrived = time.time()  # before the tab's lock: the guard's reference is what a reply gave before this
         tab = _text(arguments, "tab")
         if not is_id(tab):  # it names a folder, so "../x" must not reach os.path.join
             raise mcp.ToolError(NOT_AN_ID % tab)
@@ -425,7 +424,7 @@ def queue_steps(state, tabs, workers, allowed, calls=CALLS):
             with worker.lock:
                 devtools, page_id, restarted = worker.ensure()
                 result = steps.run(devtools, page_id, planned, call.path, restarted, worker.target_id, worker.connect,
-                                   began, worker.watcher, guard.Guard(worker, arrived, call.path))
+                                   began, worker.watcher)
                 if result["isError"] and "No page found" in result["content"][0]["text"]:
                     # It renumbered its pages after reconnecting; the next queue pairs a new process and notes the
                     # restart.

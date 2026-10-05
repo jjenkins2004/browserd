@@ -1,5 +1,5 @@
 """The queue and its steps, offline, against a stand-in chrome-devtools-mcp: checked steps, dialogs, paste,
-screenshots, the pointer and the click guard, and what a queue refuses.
+screenshots, the pointer, and what a queue refuses.
 """
 
 import base64
