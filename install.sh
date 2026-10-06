@@ -8,7 +8,7 @@
 # ~/.local/bin to the shell's PATH if it is missing. A server already running is restarted on the new version, and every
 # Chrome and session kept. Its records stay in ~/Library/Application Support/browserd, whichever version runs.
 #
-#     BROWSERD_REF       what to install: v0.2.0, main, ...; the latest release otherwise
+#     BROWSERD_REF       what to install: v1.0.0, main, ...; the latest release otherwise
 #     BROWSERD_PREFIX    where the code goes, ~/.local/share/browserd otherwise
 #     BROWSERD_BIN       where the browserd command goes, ~/.local/bin otherwise
 #     BROWSERD_PYTHON    the Python 3.10 or later to run it with, python3 otherwise

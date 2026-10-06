@@ -64,7 +64,7 @@ A git checkout runs as it is, and keeps its records in `.run/` beside the code: 
 `./browserd start`, or on Windows `browserd start` from its folder (browserd.cmd, from cmd or PowerShell);
 `./browserd` also runs in Git Bash. `python3 -m browser.dashboard.preview` (`py -3 -m` on Windows) shows every state
 of the page's parts from made-up data at http://127.0.0.1:9320/. `browserd uninstall` refuses a checkout. A release
-is cut with `scripts/release 0.2.0`, which tags it, pushes it, and points the Homebrew formula at it.
+is cut with `scripts/release 1.1.0`, which tags it, pushes it, and points the Homebrew formula at it.
 
 ## Layout
 

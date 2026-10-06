@@ -8,7 +8,7 @@
 # will not replace a folder a running server works in. A server already running is restarted on the new version, and
 # every Chrome and session kept. Its records stay in %LOCALAPPDATA%\browserd, whichever version runs.
 #
-#     $env:BROWSERD_REF       what to install: v0.2.0, main, ...; the latest release otherwise
+#     $env:BROWSERD_REF       what to install: v1.0.0, main, ...; the latest release otherwise
 #     $env:BROWSERD_PYTHON    the Python 3.10 or later to run it with, as a command line; py -3 otherwise
 #     $env:BROWSERD_ARCHIVE   a .zip of browserd to install instead of downloading one, as git archive makes
 #     $env:BROWSERD_NO_PATH   set to leave the user's PATH alone

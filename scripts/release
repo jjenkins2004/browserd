@@ -1,9 +1,9 @@
 #!/bin/sh
 # Cut a release of browserd, from a clean main that matches origin's:
 #
-#     scripts/release 0.2.0
+#     scripts/release 1.1.0
 #
-# It sets VERSION, commits it and tags v0.2.0, and pushes both at once: install.sh and install.ps1 install the tag that
+# It sets VERSION, commits it and tags v1.1.0, and pushes both at once: install.sh and install.ps1 install the tag that
 # VERSION on main names, so they have the release from then on. Then it points Formula/browserd.rb at the tag's archive,
 # with the sha256 GitHub serves it with, and pushes that, for Homebrew. Runs on macOS and in Git Bash.
 set -eu
@@ -12,7 +12,7 @@ REPO=jjenkins2004/browserd
 fail() { printf 'release: %s\n' "$*" >&2; exit 1; }
 
 version=${1:-}
-printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || fail "usage: scripts/release <version>, like 0.2.0"
+printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || fail "usage: scripts/release <version>, like 1.1.0"
 tag=v$version
 cd "$(dirname "$0")/.."
 
