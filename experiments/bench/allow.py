@@ -7,7 +7,9 @@ TOOL = {"name": "approve", "description": "Answers claude -p's permission prompt
         "inputSchema": {"type": "object", "properties": {"tool_name": {"type": "string"}, "input": {"type": "object"},
                                                          "tool_use_id": {"type": "string"}}}}
 
-for line in sys.stdin:
+# Read bytes, which json.loads decodes as UTF-8: Windows' sys.stdin decodes with the ANSI code page, garbling the
+# non-ASCII input the reply hands back as updatedInput.
+for line in sys.stdin.buffer:
     msg = json.loads(line)
     method, ident = msg.get("method"), msg.get("id")
     if ident is None:
