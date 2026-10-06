@@ -11,8 +11,9 @@ otherwise. `python` is Python 3: `python3` where `python` is not on PATH.
 
 ## 1. Before anything
 
-- Run one batch at a time, 2 runs at a time: `run.py` checks neither memory nor other `claude -p` batches, and other
-  agents on browserd (a batch of job applications, say) load the same machine.
+- Run one batch at a time; `--jobs 2`, or one per arm when each arm has a browser of its own: `run.py` checks
+  neither memory nor other `claude -p` batches, and other agents on browserd (a batch of job applications, say) load
+  the same machine.
 - Never restart the main server on 9230. Never delete a run: set it aside in `<data>/results/_invalid/`.
 - Ask the user which suites and arms, and say the cost first. On 2026-09-29 (`final2`), MCP-Universe cost $0.45 a run
   on average ($0.33 Playwright to $0.68 agent-browser; $87 for 4 arms × 48 runs), FormFactory $0.47 a form ($0.19

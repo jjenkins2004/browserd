@@ -42,7 +42,7 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
 ## Directory Layout
 
     bench/
-      run.py          ARMS and SUITES, the claude -p call, 2 runs at a time, cleanup, the stops
+      run.py          ARMS and SUITES, the claude -p call, the rounds, cleanup, the stops
       chain.py        several suites as one detached batch, each resumed once if it stops
       report.py       results/<exp>/scores.json, the per-arm summary, the task-by-arm table
       setup.py        clones each benchmark at its pinned commit, builds WebGames, fetches its tasks, Flask venv
@@ -104,7 +104,7 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
     `--remote-debugging-port=9295`; after each run the runner closes its tabs over that port. Claude Code asks before
     each action on a site no `ClaudeInChromeDomain` rule names, whatever the permission mode, so `allow.py`, its
     `--permission-prompt-tool`, allows every ask; claude.ai, where that Chrome is signed in, is denied. One extension
-    serves one run, so the arm is `solo`: its runs take turns, whatever `--jobs` says.
+    serves one run, and the rounds give each arm one run at a time.
   - `experiments`: the main server (9230) on the profile signed in to Google, for `slides`.
   - `trap-on`, `trap-none`, `trap-guard`: the text-check experiment's arms (`../findings/text-check.md`), worktrees of
     their own served by `nextserver.py` on 9250, 9260 and 9270.
@@ -112,9 +112,10 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
 - **A run** is `run.run_one`: `claude -p` (PATH's, or `$BROWSERD_BENCH_CLAUDE`) with the arm's servers only
   (`--strict-mcp-config`), the model (`--model`, default `claude-sonnet-5`), the suite's max turns, and its transcript
   streamed to `results/<exp>/<arm>/<task>-r<n>.part`, each line stamped `_t` (when it arrived), renamed `.jsonl` once
-  its collect and cleanup are done. Arms interleave task by task, so each sees a live site at about the same time. A
-  run whose `.jsonl` ends in a result is done, so running an experiment again runs only what is missing, a run cut off
-  before its cleanup included.
+  its collect and cleanup are done. Runs go in rounds: a round is one task on every arm (up to `--jobs` at once), and
+  the next starts when all are done, so the arms see a live site at about the same time and no arm has two runs at
+  once. A run whose `.jsonl` ends in a result is done, so running an experiment again runs only what is missing, a run
+  cut off before its cleanup included.
 - **Scoring** is `report.py`, through each suite's `score`. For MCP-Universe it gives the benchmark's own strict score
   and `mcpuniverse.lenient`, which forgives formatting alone:
   - the JSON is taken from any text around it, unless the text holds several JSON values that differ;
@@ -137,9 +138,9 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
 
 ## Agent Gotchas & Invariants (⚠️)
 
-- **One batch at a time, 2 runs at a time.** A batch of 6 at a time that cleaned nothing up ran a Mac out of memory,
-  and several agents opening heavy pages at once crashed a profile's Chrome out of memory on Windows (2026-10-04), so
-  run `--jobs 2` or fewer, and one batch at a time; `run.py` checks neither memory nor other batches itself.
+- **One batch at a time; `--jobs 2`, or one per arm when each arm has a browser of its own.** A batch of 6 at a time
+  that cleaned nothing up ran a Mac out of memory, and several agents opening heavy pages at once crashed a profile's
+  Chrome out of memory on Windows (2026-10-04); `run.py` checks neither memory nor other batches itself.
 - **Never restart the main server (9230) for a run.** Measure a commit with the `next` arm: a worktree of its own
   served by `nextserver.py --tree`, which uses that worktree's own `.run/` (state, profiles, records). Never serve the
   checkout 9230 runs from: the two servers would share its `.run/`. A bench profile takes a Chrome port from

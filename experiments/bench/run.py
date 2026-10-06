@@ -86,7 +86,7 @@ ARMS = {
     "claudechrome": {
         # Claude in Chrome: Claude Code's own --chrome tools, through the Claude extension in a headed Chrome of the
         # bench's own (the data folder's chrome-claude, signed in to Claude, every site allowed), started with a
-        # DevTools port so each run's tabs can be closed after it. One extension serves one run, so its runs take turns.
+        # DevTools port so each run's tabs can be closed after it.
         # Claude Code asks before each of its actions on a site no rule names, and bypassPermissions does not answer
         # it, so allow.py answers every ask with allow, hidden from the model; claude.ai, where that Chrome is signed
         # in, is denied.
@@ -95,7 +95,6 @@ ARMS = {
                   "--disallowedTools", "mcp__allow__approve", "ClaudeInChromeDomain(claude.ai)"],
         "system": "",
         "cdp": "http://127.0.0.1:9295",
-        "solo": True,
     },
 }
 
@@ -111,7 +110,6 @@ IDLE = ("session_start", "tab_list", "list_connected_browsers")
 DEAD_AFTER = 2  # runs in a row of one arm that reached no browser, after which the batch stops
 dead = {}  # arm name -> its runs in a row that reached no browser
 dead_lock = threading.Lock()
-solo = {name: threading.Lock() for name, arm in ARMS.items() if arm.get("solo")}  # arm name -> the turn its runs take
 stop = threading.Event()
 
 
@@ -260,12 +258,6 @@ def prepare(suite, task, arm, run_token):
     return None
 
 
-def run_in_turn(suite, arm_name, *rest):
-    """run_one, waiting first for any run of the same solo arm to end."""
-    with solo.get(arm_name) or contextlib.nullcontext():
-        return run_one(suite, arm_name, *rest)
-
-
 def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
     arm = ARMS[arm_name]
     path = out / arm_name / ("%s-r%d.jsonl" % (task_name, rep))
@@ -391,17 +383,19 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     chosen = {name: task for name, task in suite.load().items()
               if not args.tasks or any(part in name for part in args.tasks.split(","))}
-    arms = args.arms.split(",")
+    arms = list(dict.fromkeys(args.arms.split(",")))  # an arm named twice would have two runs at once
     (out / "config.json").write_text(encoding="utf-8", data=json.dumps({
         "suite": args.suite, "model": args.model, "system": suite.SYSTEM, "max_turns": max_turns, "k": args.k,
         "arms": {a: ARMS[a] for a in arms}, "tasks": list(chosen)}, indent=2))
-    # Arms interleave task by task, so both see the same sites at about the same time.
-    runs = [(arm, name, task, rep) for rep in range(1, args.k + 1) for name, task in chosen.items() for arm in arms]
-    print("%d runs, %d at a time" % (len(runs), args.jobs), flush=True)
+    # A round is one task on every arm, the next round starting when all are done: the arms see each site at about
+    # the same time, and no arm has two runs at once, as Claude in Chrome's one extension serves one run.
+    rounds = [(name, task, rep) for rep in range(1, args.k + 1) for name, task in chosen.items()]
+    print("%d runs, %d at a time" % (len(rounds) * len(arms), min(args.jobs, len(arms))), flush=True)
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
-        pending = [pool.submit(run_in_turn, suite, *r, args.model, max_turns, out) for r in runs]
-        for done in concurrent.futures.as_completed(pending):
-            print(done.result(), flush=True)
+        for name, task, rep in rounds:
+            pending = [pool.submit(run_one, suite, arm, name, task, rep, args.model, max_turns, out) for arm in arms]
+            for done in concurrent.futures.as_completed(pending):
+                print(done.result(), flush=True)
 
 
 if __name__ == "__main__":
