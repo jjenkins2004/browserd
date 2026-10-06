@@ -165,7 +165,7 @@ def require(profile):
     try:
         check_folder(profile.folder)
     except CdpError as exc:
-        raise CdpError("%s. Stop and tell Joshua" % exc)
+        raise CdpError("%s. Stop and tell the user" % exc)
     info = _get(profile, "/json/version")
     if not isinstance(info, dict) or "webSocketDebuggerUrl" not in info:
         raise CdpError("the %s Chrome holds port %d, but what answers there is not DevTools" % (profile.name, profile.port))
