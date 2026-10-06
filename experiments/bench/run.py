@@ -286,9 +286,9 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
            "--permission-mode", "bypassPermissions",
            "--setting-sources", "project",
            "--no-session-persistence",
-           "--max-turns", str(max_turns)])
-    cmd += arm.get("flags", [])
-    cmd += ["--append-system-prompt", " ".join(filter(None, [suite.SYSTEM, arm["system"]]))]
+           "--max-turns", str(max_turns),
+           *arm.get("flags", []),
+           "--append-system-prompt", " ".join(filter(None, [suite.SYSTEM, arm["system"]]))])
     started = time.time()
     timed_out = False
     if hasattr(suite, "RECORDS"):

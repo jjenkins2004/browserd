@@ -25,12 +25,23 @@ DETACHED: dict[str, Any] = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROU
 
 def command(argv):
     """argv with its program found on PATH; a Windows .cmd or .bat shim (npm's npx, claude's) runs through cmd, which
-    is the only way Windows starts one."""
+    is the only way Windows starts one. Raises ValueError for a shim's command line over 8191 characters, which cmd
+    refuses, or holding a line break, %, ^, &, |, <, > or /?, which it may change: it cuts the line at a line break,
+    expands %NAME% even in quotes, runs what follows an unquoted &, |, < or > (and arguments are quoted only for a
+    space), drops a ^ outside quotes while call doubles one inside them, and call shows its own help for a /?."""
     found = shutil.which(argv[0])
     if found is None:
         return list(argv)
     if WINDOWS and found.lower().endswith((".cmd", ".bat")):
-        return ["cmd", "/c", found] + list(argv[1:])
+        # /d skips any AutoRun command, which would write into the shim's output; call keeps a shim path with a space
+        # working when another argument is quoted, where cmd /c would strip the line's first and last quote.
+        cmd = ["cmd", "/d", "/c", "call", found] + list(argv[1:])
+        line = subprocess.list2cmdline(cmd)
+        bad = [mark for mark in ("\r", "\n", "%", "^", "&", "|", "<", ">", "/?") if mark in line]
+        if len(line) > 8191 or bad:
+            raise ValueError("cmd would refuse or change this %d-character command line (%s): %s"
+                             % (len(line), " ".join(map(repr, bad)), line[:200]))
+        return cmd
     return [found] + list(argv[1:])
 
 
