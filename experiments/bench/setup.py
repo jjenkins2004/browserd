@@ -23,6 +23,7 @@ REPOS = {  # folder: (repo, commit)
     "formfactory": ("https://github.com/formfactory-ai/formfactory", "b7ef0d6"),
     "miniwob-plusplus": ("https://github.com/Farama-Foundation/miniwob-plusplus", "33c3b4d"),
 }
+TOOLS = {"git": "git-scm.com", "pnpm": "npm i -g pnpm@9", "npx": "comes with Node.js"}  # tool: how to get it
 WEBGAMES_TASKS = "https://huggingface.co/datasets/convergence-ai/webgames/resolve/main/test.jsonl"
 WEBGAMES_SHA256 = "d76d51fffb6e69dba399f658a1fca80b0501703d7e46e20fd6848f8d81a3a03c"
 
@@ -32,6 +33,9 @@ def run(argv, cwd=None):
 
 
 def main():
+    missing = ["%s (%s)" % (tool, how) for tool, how in TOOLS.items() if shutil.which(tool) is None]
+    if missing:
+        raise SystemExit("setup needs on PATH: %s" % "; ".join(missing))
     for folder in ("results", "webgames-data", "assets"):
         (paths.DATA / folder).mkdir(parents=True, exist_ok=True)
     upload = paths.DATA / "assets" / "sample.pdf"  # formfactory.UPLOAD
@@ -40,7 +44,9 @@ def main():
 
     for folder, (repo, commit) in REPOS.items():
         if not (paths.DATA / folder / ".git").exists():
-            run(["git", "clone", "-q", repo, str(paths.DATA / folder)])
+            # LF as committed, whatever this git's core.autocrlf or core.eol, so every OS runs the same files.
+            run(["git", "clone", "-q", "-c", "core.autocrlf=false", "-c", "core.eol=lf", repo,
+                 str(paths.DATA / folder)])
         run(["git", "-C", str(paths.DATA / folder), "checkout", "-q", commit])
 
     site = paths.DATA / "webgames" / "webgames"
