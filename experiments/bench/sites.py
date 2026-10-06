@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Start or stop the local sites the suites run against, each detached with its log in the data folder:
 
-    python experiments/bench/sites.py start     WebGames 4380, FormFactory 5055, MiniWoB++ 4390, clicks 4395, haystack 4396, traps 4397
+    python experiments/bench/sites.py start [site...]   all the sites in SITES below, or only those named
     python experiments/bench/sites.py stop
 
-Each site's process id is kept in the data folder's sites.json, so stop ends exactly what start began.
+Each site's process id is kept in the data folder's sites.json, so stop ends exactly what each start began.
 """
 import json
 import os
@@ -37,12 +37,18 @@ def _listening(port):
         return probe.connect_ex(("127.0.0.1", port)) == 0
 
 
-def start():
-    taken = [port for port, _, _ in SITES.values() if _listening(port)]
+def start(names):
+    unknown = set(names) - set(SITES)
+    if unknown:
+        raise SystemExit("no such site: %s; the sites: %s" % (", ".join(sorted(unknown)), ", ".join(SITES)))
+    chosen = {name: SITES[name] for name in names or SITES}
+    taken = [port for port, _, _ in chosen.values() if _listening(port)]
     if taken:
         raise SystemExit("ports %s are taken already; stop what holds them first" % ", ".join(map(str, taken)))
-    started = {}
-    for name, (port, folder, argv) in SITES.items():
+    started = json.loads(PIDS.read_text(encoding="utf-8")) if PIDS.exists() else {}
+    # A site that is down left its id free for any other process to take, so stop must not have it.
+    started = {name: pid for name, pid in started.items() if _listening(SITES[name][0])}
+    for name, (port, folder, argv) in chosen.items():
         try:
             with (paths.DATA / ("%s.log" % name)).open("a", encoding="utf-8") as log:
                 proc = subprocess.Popen(procs.command(argv), cwd=folder, stdin=subprocess.DEVNULL, stdout=log,
@@ -53,7 +59,7 @@ def start():
         started[name] = proc.pid
     PIDS.write_text(json.dumps(started), encoding="utf-8")
     time.sleep(5)
-    for name, (port, _, _) in SITES.items():
+    for name, (port, _, _) in chosen.items():
         if not _listening(port):
             print("port %d did not come up; see %s" % (port, paths.DATA / ("%s.log" % name)))
 
@@ -68,5 +74,9 @@ def stop():
 
 
 if __name__ == "__main__":
-    {"start": start, "stop": stop}.get(sys.argv[1] if len(sys.argv) > 1 else "",
-                                      lambda: sys.exit("usage: python experiments/bench/sites.py start|stop"))()
+    if sys.argv[1:2] == ["start"]:
+        start(sys.argv[2:])
+    elif sys.argv[1:] == ["stop"]:
+        stop()
+    else:
+        sys.exit("usage: python experiments/bench/sites.py start [site...] | stop")

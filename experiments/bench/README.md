@@ -28,7 +28,7 @@ The last run of the other servers' arms (2026-09-29, `final2`) was `mcpuniverse`
 `miniwob` (drills) and `botwall` have not been run in full.
 
     python experiments/bench/setup.py                      fill the data folder once
-    python experiments/bench/sites.py start                the local sites the suites need (WebGames, FormFactory, MiniWoB++, ...)
+    python experiments/bench/sites.py start [site...]      the local sites the suites need, all or those named
     python experiments/bench/nextserver.py --tree <tree>   browserd from a worktree of its own, on 9250, for the next arm
     python experiments/bench/chain.py <name> <arms> "<suite>[:<run.py args>]"...     suites one after another, detached
     python experiments/bench/run.py --exp <name> --suite <suite> --arms <arms>    one suite, in the foreground
