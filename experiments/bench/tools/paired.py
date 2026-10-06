@@ -3,7 +3,7 @@
 is the arm named browserd, or else next; key is the scores.json field compared, passed unless named (lenient on
 MCP-Universe, whose runs without one are left out).
 
-    python3 experiments/bench/tools/paired.py [--key lenient] ff1 [more experiments...]
+    python experiments/bench/tools/paired.py [--key lenient] ff1 [more experiments...]
 Reads each experiment's scores.json (run report.py first).
 """
 import collections

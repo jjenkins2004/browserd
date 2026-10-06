@@ -2,11 +2,13 @@
 """Tool-use breakdown of an experiment: per arm, the tools called, errors, result sizes, and steps per queue or
 tab_open call.
 
-    python3 experiments/bench/tools/analyze.py ff1
+    python experiments/bench/tools/analyze.py ff1
 """
 import collections
+import io
 import statistics
 import sys
+import typing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # experiments/bench/, for paths and transcripts
@@ -37,6 +39,9 @@ def runs(exp):
 
 
 def main():
+    # -v prints failed tool results, which may quote a page in any language, and Windows' piped stdout uses the
+    # ANSI code page.
+    typing.cast(io.TextIOWrapper, sys.stdout).reconfigure(encoding="utf-8", errors="replace")
     exp = sys.argv[1]
     per = collections.defaultdict(lambda: {"tools": collections.Counter(), "errors": collections.Counter(),
                                            "chars": [], "steps": [], "step_tools": collections.Counter(),

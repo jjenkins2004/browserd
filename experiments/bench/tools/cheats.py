@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Flag WebGames runs whose tool calls read scripts, source or network responses, or name the password.
 
-    python3 experiments/bench/tools/cheats.py wg1
+    python experiments/bench/tools/cheats.py wg1
 """
 import json, re, sys
 from pathlib import Path
