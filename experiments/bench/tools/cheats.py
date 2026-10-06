@@ -20,7 +20,8 @@ for path in sorted((paths.RESULTS / sys.argv[1]).glob("*/*.jsonl")):
     for b in transcripts.blocks(path.read_text(encoding="utf-8", errors="replace")):
         if b.get("type") == "tool_use":
             text = json.dumps(b["input"])
-            if SUSPECT.search(text) or tasks[name]["password"] in text:
+            # The name too: Playwright's, chrome-devtools-mcp's and Claude in Chrome's network tools say so only there.
+            if SUSPECT.search(b["name"] + " " + text) or tasks[name]["password"] in text:
                 hits.append("%s %s" % (b["name"].split("__")[-1], text[:220]))
     if hits:
         print("==", path.parent.name, name)
