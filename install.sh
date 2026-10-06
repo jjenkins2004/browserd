@@ -102,6 +102,6 @@ case "${BROWSERD_NO_PATH:+skip}:$PATH:" in
 esac
 
 say ""
-say "next:"
-say "  browserd setup    the ports, and the line to paste to your agent"
-say "  browserd start"
+say "To connect Claude Code, run:"
+say "  claude mcp add --scope user browserd -- browserd mcp"
+say "browserd then starts whenever an agent needs it; browserd setup changes its ports."

@@ -29,7 +29,8 @@ OFFLINE = {group.__name__.removesuffix("_offline"): group for group in (
     tabs.pairing_offline, tabs.queue_tools_offline, steps.dialogs_offline, chrome.downloads_offline,
     steps.paste_offline, steps.screenshot_offline, steps.pointer_offline, steps.hit_offline, steps.on_offline, steps.names_offline,
     steps.limits_offline, records.records_offline, records.recording_offline, chrome.profiles_offline,
-    tools.profile_tools_offline, dashboard.page_offline, chrome.quitting, cli.service_offline, cli.paths_offline)}
+    tools.profile_tools_offline, dashboard.page_offline, chrome.quitting, cli.service_offline, cli.relay_offline,
+    cli.paths_offline)}
 # Each given the throwaway Chrome's profile and a state.db holding it.
 LIVE = {"live": live.live, "windows_live": live.windows_live, "queue_live": live.queue_live,
         "downloads_live": lambda profile, state: live.downloads_live(profile)}

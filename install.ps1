@@ -148,7 +148,7 @@
     if (-not (($env:Path -split ';') -contains $BinDir)) { $env:Path = "$env:Path;$BinDir" }
 
     Write-Host ''
-    Write-Host 'next:'
-    Write-Host '  browserd setup    the ports, and the line to paste to your agent'
-    Write-Host '  browserd start'
+    Write-Host 'To connect Claude Code, run:'
+    Write-Host '  claude mcp add --scope user browserd -- browserd mcp'
+    Write-Host 'browserd then starts whenever an agent needs it; browserd setup changes its ports.'
 }

@@ -44,4 +44,5 @@ live groups.
 - **What a live group needs**: an installed Chrome, else every live group skips; for `queue_live`, `npm ci` done and
   Node at `devtools.NODE_LEAST` or later, else it skips.
 - **Never against the real browserd**: `browserd start`, `stop`, `restart`, `status` and `version` are checked against
-  stand-ins and a records folder of the checks' own; `setup` and `uninstall` are not checked.
+  stand-ins and a records folder of the checks' own, and `mcp` against a stand-in server with its start stood in;
+  `setup` and `uninstall` are not checked.

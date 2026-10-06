@@ -3,7 +3,8 @@
 ## Module TL;DR
 
 The browser MCP server: it starts and owns one Chrome per profile and serves tools to agents over HTTP on `ports.MCP`
-(9230 unless `browserd setup` chose another), so pages are read and driven with that profile's logins. An agent calls
+(9230 unless `browserd setup` chose another), so pages are read and driven with that profile's logins; `browserd mcp`
+relays an agent's MCP over stdio to that port, starting the server when nothing listens. An agent calls
 `session_start {profile, label}` first and passes the session id it gets to every other tool but `profile_new` and
 `profile_delete`. `tab_open`, `tab_list`, `tab_close` and `tab_needs_input` work on the session's own tabs by short tab
 ids; `queue` runs a list of steps on one tab, and records each call in that tab's record folder,
@@ -38,6 +39,7 @@ A folder per domain; each folder, and tools.py and server.py, imports only those
       cli/
         service.py   the browserd command; its help lists its commands
         installs.py  what each installer put where, for uninstall
+        relay.py     browserd mcp: MCP over stdio, relayed to the HTTP port
 
 ## Core Abstractions & Shared Pieces
 
@@ -52,8 +54,9 @@ A folder per domain; each folder, and tools.py and server.py, imports only those
   its rules), a `Tab` one page of a profile's Chrome (`tabs/tabs.py` gives out its ids).
 - **The records folder** is `paths.RUN`: `config/paths.py` says where, and `../README.md`'s Use what it holds. Record
   folders and devtools logs are never removed.
-- **The ports** change only through `browserd setup` (`service.setup`). browserd never edits an agent's settings, so
-  after the MCP port changes an agent needs `service.CONNECT`'s line again.
+- **The ports** change only through `browserd setup` (`service.setup`). browserd never edits an agent's settings. An
+  agent registered with `service.CONNECT` runs `browserd mcp` (`cli/relay.py`), which reads the port for every message,
+  so only an agent connected over HTTP needs the new port.
 - **The browserd page.** `page.Page` serves it on a thread of the server's own; `Page.snapshot`'s docstring says what
   `GET /state` answers, `Page.act` what each POST does, and `dashboard/ui/README.md` the browserd page itself.
 - **`browserd uninstall`**: `service.uninstall` and `installs.py` say what it removes and keeps.

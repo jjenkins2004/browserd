@@ -24,14 +24,16 @@ Windows, from PowerShell (into `%LOCALAPPDATA%\Programs\browserd`, with its `bin
 
     irm https://raw.githubusercontent.com/jjenkins2004/browserd/main/install.ps1 | iex
 
-Then, from any terminal:
+Then connect Claude Code, from a new terminal:
 
-    browserd setup
-    browserd start
+    claude mcp add --scope user browserd -- browserd mcp
 
-`browserd setup` asks for the MCP and dashboard ports, Enter keeping 9230 and 9231, and prints a line to paste
-to your agent (Claude Code or any other MCP client), which registers browserd itself. Run it again to change
-the ports.
+That is all: Claude Code runs `browserd mcp` as it starts, which starts the server whenever it is not running, so
+there is no `browserd start` to remember. If Claude Code already has a browserd from an earlier version, `claude mcp
+add` refuses the name: run `claude mcp remove browserd` first. Another agent runs the same command over stdio, or
+connects over HTTP at `http://127.0.0.1:9230/mcp` while the server runs. An agent's first `session_start` needs a
+profile: ask the agent to make one, or make one on the dashboard, `http://127.0.0.1:9231/`, once Claude Code has
+started the server (or after `browserd start`). `browserd setup` changes the ports, 9230 and 9231.
 
 Running an installer again updates browserd, and a server that was running is restarted on the new version
 with every Chrome and session kept; after `brew upgrade browserd`, run `browserd restart`. Each installer's
@@ -39,8 +41,8 @@ header lists its settings (a version to pin, where it goes); `browserd uninstall
 
 ## Use
 
-    browserd setup    the ports, 9230 for MCP and 9231 for the dashboard unless changed, and the line to
-                      paste to your agent; a running server restarts on new ones
+    browserd setup    the ports, 9230 for MCP and 9231 for the dashboard unless changed, and the command
+                      that connects Claude Code; a running server restarts on new ones
     browserd start    the server, in the background; each profile's Chrome starts on its first use. The
                       dashboard, http://127.0.0.1:9231/, makes profiles and shows their sessions and tabs
     browserd stop     stops the server, which quits every profile's Chrome with it and closes every session
@@ -48,7 +50,9 @@ header lists its settings (a version to pin, where it goes); `browserd uninstall
     browserd status   whether the server is running, on which ports, and where its records are
     browserd version  which browserd this is, and where it is installed
     browserd uninstall  stops the server and removes browserd and its command, after asking, and prints the
-                      line for your agent to remove it; the records and every profile's Chrome folder stay
+                      command that disconnects Claude Code; the records and every profile's Chrome folder stay
+    browserd mcp      for an agent to run: MCP over stdin and stdout, relayed to the server, which it starts
+                      when nothing listens; the server runs on after the agent quits
 
 Its records (server.pid, server.log, start.lock, state.db, ports.json, devtools-*.log, calls/, and downloads/<profile>/,
 where each profile's Chrome saves its downloads, with no Save As window) go in `~/Library/Application Support/browserd`
@@ -76,8 +80,8 @@ is cut with `scripts/release 0.2.0`, which tags it, pushes it, and points the Ho
     experiments/            what measures browserd: bench/, the benchmarks against other browser MCP servers; long-tasks/, the demo tasks; findings/, what each found
     .claude/skills/         benchmark: a rerun's steps, for an agent
 
-Before changing `browser/`, read `browser/README.md` and the README of the folder you change. Agents connect over HTTP
-at `http://127.0.0.1:9230/mcp`, or the port `browserd setup` chose.
+Before changing `browser/`, read `browser/README.md` and the README of the folder you change. Agents connect through
+`browserd mcp`, or over HTTP at `http://127.0.0.1:9230/mcp`, or the port `browserd setup` chose.
 After a restart that changed the tools, a Claude Code session already open lists them again at its next
 browserd call and has them from its next turn; one that connected to a browserd from before
 `tools.listChanged` needs `/mcp` to reconnect once. `browser/README.md` says why.

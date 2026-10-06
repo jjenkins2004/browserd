@@ -1,6 +1,9 @@
-"""browserd start, stop, restart, status and version against stand-in servers, and where the records go.
+"""browserd start, stop, restart, status, version and mcp against stand-in servers, and where the records go.
 """
 
+import contextlib
+import io
+import json
 import os
 import shutil
 import subprocess
@@ -8,9 +11,11 @@ import sys
 import tempfile
 import time
 import types
+import urllib.error
+from unittest import mock
 
 from browser import server, system
-from browser.cli import service
+from browser.cli import relay, service
 from browser.config import paths
 from browser.dashboard import page
 from browser.protocol import mcp
@@ -130,6 +135,83 @@ def service_offline():
         (server.URL, server.PORT, server.ROOT, server.RUN, server.PID_FILE, server.LOG_FILE, service.LOCK_FILE,
          service.time, subprocess.Popen) = saved
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def relay_offline():
+    """browserd mcp against a stand-in server: each message relayed, each answer a line, the session the server gave
+    kept, the tool list's change passed on, and the server started when nothing listens, its start stood in."""
+    echo = {"name": "echo", "description": "", "inputSchema": {"type": "object"}, "run": lambda arguments: arguments["text"]}
+    ours = serving([echo], server.NAME)
+    served = "http://127.0.0.1:%d%s" % (ours.server_address[1], mcp.PATH)
+    where = [served]  # the endpoint the relay reads for each message, in place of ports.json
+    out = io.BytesIO()
+    link = relay.Relay(out)
+    real_post = link.post
+
+    def post(message):
+        """Refused at once while the endpoint is "refused", as a real refusal is only after 2s on Windows."""
+        if where[0] == "refused":
+            raise urllib.error.URLError(ConnectionRefusedError())
+        return real_post(message)
+
+    def lines():
+        said = [json.loads(line) for line in out.getvalue().splitlines()]
+        out.seek(0)
+        out.truncate()
+        return said
+
+    patched = mock.patch.object(relay, "_url", lambda: where[0])
+    patched.start()
+    try:
+        link.answer({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        said = lines()
+        check("an initialize is relayed, its answer is one line, and the session the server gave is kept",
+              len(said) == 1 and said[0]["result"]["serverInfo"]["name"] == server.NAME
+              and link.session in ours.sessions, str(said))
+        link.answer({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        check("a notification gets no line back", lines() == [])
+        link.answer({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                     "params": {"name": "echo", "arguments": {"text": "hi"}}})
+        said = lines()
+        check("a tool's result comes back",
+              said == [{"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "hi"}]}}], str(said))
+
+        link.session = "from-before-a-restart"
+        link.answer({"jsonrpc": "2.0", "id": 3, "method": "ping"})
+        said = lines()
+        check("a session the server did not give is told the tool list changed, then answered, a line each",
+              said == [mcp.LIST_CHANGED, {"jsonrpc": "2.0", "id": 3, "result": {}}], str(said))
+
+        started = []
+
+        def start():
+            started.append(where[0])
+            where[0] = served
+
+        def unstartable():
+            raise OSError("the browser MCP server stopped while starting: port 9230 is held")
+
+        with mock.patch.object(link, "post", post), contextlib.redirect_stderr(io.StringIO()) as stderr:
+            where[0] = "refused"
+            with mock.patch.object(link, "start", start):
+                link.answer({"jsonrpc": "2.0", "id": 4, "method": "ping"})
+            said = lines()
+            check("when nothing listens, the server is started and the message sent again, to the port read anew",
+                  started == ["refused"] and said == [{"jsonrpc": "2.0", "id": 4, "result": {}}], str(said))
+
+            where[0] = "refused"
+            with mock.patch.object(link, "start", unstartable):
+                link.answer({"jsonrpc": "2.0", "id": 5, "method": "ping"})
+                link.answer({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            said = lines()
+            check("a start that fails answers the request with why, and the notification with nothing",
+                  len(said) == 1 and said[0]["id"] == 5 and "port 9230 is held" in said[0]["error"]["message"],
+                  str(said))
+            check("and says why on stderr too, where the agent's logs keep it", "port 9230 is held" in stderr.getvalue())
+    finally:
+        patched.stop()
+        ours.shutdown()
+        ours.server_close()
 
 
 def paths_offline():

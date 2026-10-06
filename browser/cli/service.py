@@ -1,6 +1,7 @@
 """browserd start, stop and restart: run the browser MCP server in the background; stop it and every profile's Chrome
 with it; or restart the server alone. browserd status and version say whether it runs, and which browserd this is;
-browserd setup chooses its ports, with ports, and browserd uninstall removes an installed browserd, with installs."""
+browserd setup chooses its ports, with ports, browserd uninstall removes an installed browserd, with installs, and
+browserd mcp relays an agent's MCP over stdio to it, with relay."""
 
 import json
 import os
@@ -15,15 +16,15 @@ from ..chrome import cdp
 from ..config import paths, ports
 from ..dashboard import page
 from ..protocol import mcp
-from . import colors, installs
+from . import colors, installs, relay
 from ..records.state import State
 
 START_WAIT = 40.0
 STOP_WAIT = 25.0
 LOCK_FILE = os.path.join(server.RUN, "start.lock")
-CONNECT = ('Add an MCP server named "browserd", or update it if one exists, using HTTP transport at %s, available in '
-           'all my projects.')
-DISCONNECT = 'Remove the MCP server named "browserd".'
+# The same on macOS and Windows; install.sh, install.ps1, Formula/browserd.rb and README.md print CONNECT too.
+CONNECT = "claude mcp add --scope user browserd -- browserd mcp"
+DISCONNECT = "claude mcp remove --scope user browserd"
 
 
 def answering():
@@ -199,6 +200,9 @@ def uninstall():
         print("  " + line)
     print(colors.paint("It keeps your records, %s, and each profile's Chrome-<name> folder in %s, logins and all."
                        % (_home(server.RUN), _home(system.CHROME_DATA)), "dim"))
+    if install.by == "install.ps1":
+        print(colors.paint("Quit every Claude Code session first: each runs browserd mcp from this folder, and Windows "
+                           "keeps a folder a running program works in.", "yellow"))
     try:
         answer = input(colors.paint("Uninstall? [y/N] ", "bold"))
     except EOFError:
@@ -208,12 +212,12 @@ def uninstall():
     if _locked(lambda: _stop(restart=False)):
         print(_STOPPED)
     said = installs.remove(install)
-    return "\n".join(said + ["", "To disconnect your agent, paste this to it:", "  " + colors.paint(DISCONNECT, "cyan")])
+    return "\n".join(said + ["", "To disconnect Claude Code, run:", "  " + colors.paint(DISCONNECT, "cyan")])
 
 
 def setup():
     """Ask for the MCP and dashboard ports, Enter keeping each, save them, restart a running server on them, and return
-    the line that connects an agent."""
+    how an agent connects."""
     mcp_now, page_now = ports.load()
     running = answering() == server.NAME
     taken = _profile_ports()
@@ -228,13 +232,16 @@ def setup():
             if subprocess.run([sys.executable, "-m", "browser.cli.service", "restart"], cwd=paths.ROOT).returncode:
                 raise SystemExit("saved the ports, but browserd restart did not finish; run it yourself")
             if mcp_port != mcp_now:
-                print(colors.paint("The MCP port changed: agents connected already need the line below, then to "
-                                   "reconnect.", "yellow"))
+                print(colors.paint("The MCP port changed: an agent that runs browserd mcp follows it, but one connected "
+                                   "over HTTP needs the new address.", "yellow"))
         else:
             print(_block("saved", None, mcp_port, page_port))
             print(colors.paint("browserd start serves on them", "dim"))
-    return "\nTo connect your agent, paste this to it:\n  " + colors.paint(
-        CONNECT % ("http://%s:%d%s" % (server.HOST, mcp_port, mcp.PATH)), "cyan")
+    return "\n".join([
+        "", "To connect Claude Code, run:", "  " + colors.paint(CONNECT, "cyan"),
+        colors.paint("Claude Code then runs browserd mcp, which starts the server whenever it is not running. Another agent runs that "
+                     "command too, or connects over HTTP at http://%s:%d%s while the server runs."
+                     % (server.HOST, mcp_port, mcp.PATH), "dim")])
 
 
 def _profile_ports():
@@ -296,17 +303,19 @@ def _program(pid):
 def usage(err=False):
     """browserd's help, its commands picked out for stdout, or stderr when err."""
     commands = [
-        ("setup", "choose the ports, and get the line that connects your agent"),
+        ("setup", "choose the ports, and get the command that connects Claude Code"),
         ("start", "start the server in the background; each profile's Chrome starts on its first use"),
         ("stop", "stop the server, which quits every profile's Chrome with it and closes every session"),
         ("restart", "restart the server alone: every Chrome keeps running and every session stays open"),
         ("status", "say whether the server is running, on which ports, and where its records are"),
         ("version", "say which browserd this is, and where it is installed"),
         ("uninstall", "stop the server and remove browserd, keeping its records and every profile's Chrome folder"),
+        ("mcp", "for an agent to run: MCP over stdin and stdout, starting the server when it is not running"),
     ]
     lines = ["usage: browserd <command>", ""]
     lines += ["  %s %s" % (colors.paint("%-9s" % name, "bold", err=err), said) for name, said in commands]
-    lines += ["", "Agents connect at %s; browserd setup gives the line to paste to yours." % server.URL]
+    lines += ["", "To connect Claude Code: %s" % CONNECT,
+              "Other agents run browserd mcp too, or connect over HTTP at %s while the server runs." % server.URL]
     return "\n".join(lines)
 
 
@@ -322,6 +331,8 @@ def main():
         return
     if args == ["--version"]:
         args = ["version"]
+    if args == ["mcp"]:
+        return relay.main()  # stdout carries MCP alone
     if len(args) != 1 or args[0] not in commands:
         if args:
             print(colors.paint("browserd: no command %s" % " ".join(args), "red", err=True), file=sys.stderr)
