@@ -102,9 +102,11 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   - `claudechrome`: Claude in Chrome, Claude Code's own `--chrome` tools, through the Claude extension signed in on
     profile lt-trip. Every profile's extension connects to every `claude --chrome`, and a run acts in none until it
     selects one, so its system line names lt-trip's device id, from the long-tasks batch's `claude-devices.json`
-    (`../long-tasks/README.md`); a run that selects another stops the batch. Claude Code asks before each action on a
-    site no `ClaudeInChromeDomain` rule names, whatever the permission mode, so `allow.py`, its
-    `--permission-prompt-tool`, allows every ask; claude.ai, where the extension is signed in, is denied.
+    (`../long-tasks/README.md`); a run that selects another stops the batch. It works in a tab of its own, opened behind
+    the blank one `run.clear_chrome` leaves, so the runner closes that blank tab once the run's own appears (`own_tab`):
+    Chrome draws only a window's front tab. Claude Code asks before each action on a site no `ClaudeInChromeDomain` rule
+    names, whatever the permission mode, so `allow.py`, its `--permission-prompt-tool`, allows every ask; claude.ai,
+    where the extension is signed in, is denied.
   - `experiments`: the main server (9230) on the profile signed in to Google, for `slides`.
   - `trap-on`, `trap-none`, `trap-guard`: the text-check experiment's arms (`../findings/text-check.md`), worktrees of
     their own served by `nextserver.py` on 9250, 9260 and 9270.

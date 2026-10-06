@@ -107,6 +107,8 @@ ARMS = {
                   "--disallowedTools", "mcp__allow__approve", "ClaudeInChromeDomain(claude.ai)"],
         "system": SELECT,
         "chrome": "lt-trip",
+        # It works in a tab of its own, opened behind the blank one, and Chrome draws only a window's front tab.
+        "own_tab": True,
     },
 }
 
@@ -270,12 +272,13 @@ def ready(names):
 def clear_chrome(arm):
     """Leave the arm's Chrome holding one blank tab, in a new window at the arm's slot in the cascade (WINDOW):
     Playwright and chrome-devtools-mcp see every tab of it, and an earlier run's tab could still submit a form or post
-    a reward under that run's token. A tab an open browserd session owns is someone else's and stays."""
+    a reward under that run's token. A tab an open browserd session owns is someone else's and stays. Returns the blank
+    tab's target."""
     state = State(STATE_FILE)
     browser = cdp.Browser(state.profile(arm["chrome"]))
     try:
-        fresh = browser.call("Target.createTarget", url="about:blank", newWindow=True)["targetId"]
-        window = browser.call("Browser.getWindowForTarget", targetId=fresh)["windowId"]
+        blank = browser.call("Target.createTarget", url="about:blank", newWindow=True)["targetId"]
+        window = browser.call("Browser.getWindowForTarget", targetId=blank)["windowId"]
         # browserd starts its Chromes so that each new window opens minimized, and a minimized window keeps its
         # bounds until it is made normal.
         browser.call("Browser.setWindowBounds", windowId=window, bounds={"windowState": "normal"})
@@ -284,8 +287,30 @@ def clear_chrome(arm):
         live = {session.id for session in state.open_sessions()}
         owned = {tab.target for tab in state.open_tabs(arm["chrome"]) if tab.session in live}
         for info in browser.call("Target.getTargets")["targetInfos"]:
-            if info["type"] == "page" and info["targetId"] not in owned | {fresh}:
+            if info["type"] == "page" and info["targetId"] not in owned | {blank}:
                 browser.call("Target.closeTarget", targetId=info["targetId"])
+        return blank
+    finally:
+        browser.close()
+
+
+def close_when_replaced(arm, blank, done):
+    """Close the blank tab clear_chrome left once the run has opened a tab of its own, so that tab comes to the front
+    of the window; give up when done is set."""
+    browser = cdp.Browser(State(STATE_FILE).profile(arm["chrome"]))
+
+    def pages():
+        return {info["targetId"] for info in browser.call("Target.getTargets")["targetInfos"]
+                if info["type"] == "page"}
+
+    try:
+        kept = pages()  # the blank tab, and any an open browserd session owns, which clear_chrome keeps
+        while not done.wait(2):
+            now = pages()
+            if now - kept:
+                if blank in now:
+                    browser.call("Target.closeTarget", targetId=blank)
+                return
     finally:
         browser.close()
 
@@ -328,13 +353,16 @@ def run_one(suite, arm_name, arm, task_name, task, rep, model, max_turns, out):
         return "%s %s r%d: not run, the batch stopped" % (arm_name, task_name, rep)
     path.parent.mkdir(parents=True, exist_ok=True)
     run_token = token(out.name, arm_name, task_name, rep)
+    done = threading.Event()  # the run has ended
     if "chrome" in arm:
         try:
-            clear_chrome(arm)
+            blank = clear_chrome(arm)
         except (OSError, cdp.CdpError, WebSocketError) as exc:
             stop.set()
             return "%s %s r%d: not run: could not clear its Chrome (%s), so the batch stops" % (
                 arm_name, task_name, rep, exc)
+        if arm.get("own_tab"):
+            threading.Thread(target=close_when_replaced, args=(arm, blank, done), daemon=True).start()
     cmd = procs.command([CLAUDE, "-p",
            "--model", model,
            "--output-format", "stream-json", "--verbose",
@@ -376,6 +404,7 @@ def run_one(suite, arm_name, arm, task_name, task, rep, model, max_turns, out):
         except subprocess.TimeoutExpired:
             timed_out = True
         finally:
+            done.set()
             procs.stop_tree(proc.pid)
             proc.wait()
             copier.join(timeout=30)  # a process outside the stopped tree may still hold claude's stdout
