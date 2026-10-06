@@ -85,30 +85,30 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   scoring reads what the run did on a page (formfactory, miniwob, clicks, traps, canvas, popups, slides) finds that
   run's own record. `run.SUITES` lists them.
 - **An arm** is one entry of `run.ARMS`: its MCP config, a system line, and for a browserd arm (`run._browserd`) the
-  page URL whose Close session the run's cleanup uses and the profile its runs use. The current arms:
+  page URL whose Close session the run's cleanup uses and the profile its runs use, or for an arm on a Chrome profile
+  of its own (`chrome`, a main-server browserd profile's name) that profile, whose DevTools port `run.ready` reads
+  from browserd's records as a batch starts. The lineup is `browserd`, `playwright`, `devtools` and `claudechrome`,
+  each on a Chrome of its own, so `--jobs 4` runs a round at once. The current arms:
   - `next`: browserd from a worktree, served by `nextserver.py` on 9250 with profile Bench, so the main server (9230)
     and its profiles are never touched. Point the worktree at the commit to measure (`git worktree add`, then
     `git -C <worktree> switch --detach <commit>`) and restart `nextserver.py`, which keeps the code it started with.
     A new worktree needs `node_modules/` (a symlink to the main checkout's will do) and its own Bench profile
     (`--profile Bench`, which takes over the Chrome-Bench folder an earlier worktree made). A server beside another
     takes ports of its own (`--port`, and `--from` for its profile's Chrome).
-  - `playwright`: `npx @playwright/mcp@0.0.82 --headless --isolated`, MCP-Universe's own config, pinned so a release
-    mid-batch cannot change the arm.
-  - `devtools`: this checkout's chrome-devtools-mcp (`../../node_modules`), stock, `--headless --isolated`: browserd's
-    engine without browserd's layer.
-  - `agentbrowser`: Vercel's agent-browser (0.38.1), `agent-browser mcp`, headless. Its browser lives in a daemon
-    outside the run's process tree, so each run gets a session of its own (`AGENT_BROWSER_SESSION`, the run's
-    token), and `agent-browser close` ends it after the run.
-  - `claudechrome`: Claude in Chrome, Claude Code's own `--chrome` tools. Its browser is a headed Chrome of the
-    bench's own, `<data>/chrome-claude/`, with the Claude extension signed in, started by hand with
-    `--remote-debugging-port=9295`; after each run the runner closes its tabs over that port. Claude Code asks before
-    each action on a site no `ClaudeInChromeDomain` rule names, whatever the permission mode, so `allow.py`, its
-    `--permission-prompt-tool`, allows every ask; claude.ai, where that Chrome is signed in, is denied. One extension
-    serves one run, and the rounds give each arm one run at a time.
+  - `playwright`: `npx @playwright/mcp@0.0.82 --cdp-endpoint`, pinned so a release mid-batch cannot change the arm,
+    on profile lt-capex's Chrome.
+  - `devtools`: this checkout's chrome-devtools-mcp (`../../node_modules`), stock, `--browserUrl`, on profile
+    lt-parks's Chrome: browserd's engine without browserd's layer.
+  - `claudechrome`: Claude in Chrome, Claude Code's own `--chrome` tools, through the Claude extension signed in on
+    profile lt-trip. Every profile's extension connects to every `claude --chrome`, and a run acts in none until it
+    selects one, so its system line names lt-trip's device id, from the long-tasks batch's `claude-devices.json`
+    (`../long-tasks/README.md`); a run that selects another stops the batch. Claude Code asks before each action on a
+    site no `ClaudeInChromeDomain` rule names, whatever the permission mode, so `allow.py`, its
+    `--permission-prompt-tool`, allows every ask; claude.ai, where the extension is signed in, is denied.
   - `experiments`: the main server (9230) on the profile signed in to Google, for `slides`.
   - `trap-on`, `trap-none`, `trap-guard`: the text-check experiment's arms (`../findings/text-check.md`), worktrees of
     their own served by `nextserver.py` on 9250, 9260 and 9270.
-  - `browserd`: the main server (9230) on profile research, for `canvas` and `popups`.
+  - `browserd`: the main server (9230) on profile research: the lineup's, and `canvas` and `popups`.
 - **A run** is `run.run_one`: `claude -p` (PATH's, or `$BROWSERD_BENCH_CLAUDE`) with the arm's servers only
   (`--strict-mcp-config`), the model (`--model`, default `claude-sonnet-5`), the suite's max turns, and its transcript
   streamed to `results/<exp>/<arm>/<task>-r<n>.part`, each line stamped `_t` (when it arrived), renamed `.jsonl` once
@@ -154,20 +154,30 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
 - **A module in `suites/` runs only with `experiments/bench/` on the import path:** run.py and the tools put it there,
   and sites.py starts each server as `python -m suites.<server>` from it, so never run one as a script.
 - **The stops.** A batch stops at the first run that `claude -p` ended in an error before its first tool call (logged
-  out, a used-up plan) or whose transcript says a browserd profile's Chrome stopped answering; such a run does not
-  count as done and runs again. It stops too at a run whose sessions could not be closed, which does count as done. It
-  also stops after `run.DEAD_AFTER` (2) runs in a row of one arm that reached no browser (its server did not connect,
-  or every call needing a Chrome failed): those count as done, so move their `.jsonl` and `.err` to
-  `results/_invalid/<exp>-<why>/<arm>/` to rerun them. A rerun keeps the run's token (`run.token`), so before it
-  starts the runner moves what an earlier attempt left in the suite's `RECORDS` to the folder of the same name in
-  `results/_invalid/`. A wifi outage looks the same: set aside the runs of every arm in the outage's
-  window, not just the flagged ones, and resume. A run the plan's session limit cuts off part way counts as done, and only the
-  next run stops the batch: set aside each run whose transcript says "session limit", as well as the flagged ones.
-- **Cleanup is the runner's.** After each run it stops the run's process tree (`procs.stop_tree`), closes the
-  agent-browser session, and closes each browserd session the run started on the browserd page (Close session), only
-  those. A run killed by hand leaves its sessions open: close them with
-  `run.close_sessions(browserd_call.SESSION.findall(<transcript>), <page>)`, and an agent-browser run's with
-  `AGENT_BROWSER_SESSION=<its token> agent-browser close`. Close only a run's own sessions: every other session on the page is the user's.
+  out, a used-up plan) or whose transcript says a browserd profile's Chrome stopped answering; such a run does not count
+  as done and runs again. It stops too at a run whose sessions could not be closed, which does count as done. It stops
+  too at a `chrome` arm's run whose Chrome could not be cleared (before it: not run; after it: done), and after a
+  claudechrome run that selected another arm's browser, which counts as done: set it aside. It also stops after
+  `run.DEAD_AFTER` (2) runs in a row of one arm that reached no browser (its server did not connect, or every call
+  needing a Chrome failed): those count as done, so move their `.jsonl` and `.err` to
+  `results/_invalid/<exp>-<why>/<arm>/` to rerun them. A rerun keeps the run's token (`run.token`), so before it starts
+  the runner moves what an earlier attempt left in the suite's `RECORDS` to the folder of the same name in
+  `results/_invalid/`. A wifi outage looks the same: set aside the runs of every arm in the outage's window, not just
+  the flagged ones, and resume. A run the plan's session limit cuts off part way counts as done, and only the next run
+  stops the batch: set aside each run whose transcript says "session limit", as well as the flagged ones.
+- **Cleanup is the runner's.** After each run it stops the run's process tree (`procs.stop_tree`) and closes each
+  browserd session the run started on the browserd page (Close session), only those; before and after each run of a
+  `chrome` arm, `run.clear_chrome` clears that Chrome, leaving a new window. A run killed by hand leaves its sessions
+  open: close them with `run.close_sessions(browserd_call.SESSION.findall(<transcript>), <page>)`. Close only a run's
+  own sessions: every other session on the page is the user's.
+- **The lineup's profiles are the long-tasks batch's too** (lt-capex, lt-parks, lt-trip; `../long-tasks/README.md`):
+  never run the two at once, since each clears those Chromes' tabs and drives lt-trip's extension. They stay signed
+  in to Google, and the runner resets no site's cookies or storage: WebGames' Patience keeps its start time in
+  127.0.0.1:4380's localStorage, so clear that origin's data in each arm's profile before running WebGames there
+  again. Their windows are normal and cascaded (`run.WINDOW`), since Chrome draws no tab in a minimized or fully
+  covered one: they come to the front as runs open them, and an app covering them all stops their screenshots, so run
+  the lineup while no one uses the machine. MiniWoB++'s copy-paste tasks use the OS clipboard, which every arm
+  shares: run them first with `--tasks copy-paste --jobs 1`.
 - **A run times out after `run.TIMEOUT` (900s)** and has no result, so it runs again when the experiment is resumed.
 - **An experiment's name is its identity:** running a name again resumes it, keeping its done runs from whatever
   commit made them, so a new measurement needs a new name.
@@ -176,8 +186,9 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   memory", after MCP-Universe's instruction; without it an arm can pass from memory. `report.py`'s `noBrowse`
   counts runs with no tool call.
 - **Deviations from MCP-Universe:** only its 24 tasks scored by `playwright.is_dict_equal` run (7 Google Maps tasks need
-  an API key, 4 booking tasks re-scrape booking.com when scored); the `date` server is left out; the agent is Claude
-  Code, not its ReAct agent, with 30 turns, not 20.
+  an API key, 4 booking tasks re-scrape booking.com when scored); the `date` server is left out; Playwright attaches to
+  a signed-in profile's headed Chrome (`--cdp-endpoint`), not `--headless --isolated`; the agent is Claude Code, not its
+  ReAct agent, with 30 turns, not 20.
 - **WebGames** passwords sit in its site's bundle, so its system line forbids reading the source, scripts or network
   responses; `tools/cheats.py` checks transcripts for it. **MiniWoB++** episodes start with the page (no START cover)
   and last 30 minutes, not 10 to 30 seconds; only the first counts. **botwall** answers are not checked against the

@@ -1,6 +1,6 @@
 ---
 name: benchmark
-description: Rerun browserd's benchmarks against Playwright MCP, chrome-devtools-mcp and agent-browser (MCP-Universe, FormFactory, botwall, and more) and score them. Use when asked to benchmark browserd, rerun the benchmarks, measure a browserd change on them, or compare browser MCP servers.
+description: Rerun browserd's benchmarks against Playwright MCP, chrome-devtools-mcp and Claude in Chrome (MCP-Universe, FormFactory, botwall, and more) and score them. Use when asked to benchmark browserd, rerun the benchmarks, measure a browserd change on them, or compare browser MCP servers.
 ---
 
 # Rerun the benchmarks
@@ -24,10 +24,11 @@ otherwise. `python` is Python 3: `python3` where `python` is not on PATH.
 ## 2. Set up (once, and after a pull)
 
 - `python experiments/bench/setup.py` fills the data folder; it skips what is there.
-- `npm ci` in the repo root, for the devtools arm; `npm i -g agent-browser@0.38.1 && agent-browser install` for the
-  agentbrowser arm.
+- `npm ci` in the repo root, for the devtools arm. The playwright, devtools and claudechrome arms run on the main
+  server's profiles lt-capex, lt-parks and lt-trip (`experiments/bench/README.md`, "An arm"): their Chromes running,
+  lt-trip's signed in to the Claude extension, its device id in the long-tasks data folder's `claude-devices.json`.
 
-## 3. Serve the browserd to measure (the `next` arm)
+## 3. To measure a commit other than the main server's, serve it (the `next` arm, named in place of `browserd`)
 
 - Use a worktree of its own, never the main checkout (`nextserver.py` refuses one):
   - an existing bench worktree: `git -C <tree> switch --detach <commit>`;
@@ -52,7 +53,7 @@ otherwise. `python` is Python 3: `python3` where `python` is not on PATH.
 - `python experiments/bench/sites.py start` for a suite with a local site (formfactory, webgames, miniwob, clicks, haystack,
   traps).
 - `python experiments/bench/chain.py <name> <arms> "<suite>[:<run.py args>]"...`, for example
-  `python experiments/bench/chain.py final3 next,playwright,devtools,agentbrowser "mcpuniverse:--k 2" formfactory webgames`. Give each
+  `python experiments/bench/chain.py final3 browserd,playwright,devtools,claudechrome "mcpuniverse:--k 2 --jobs 4" formfactory webgames`. Give each
   measurement a `<name>` not yet in `<data>/results/`: a used one resumes that experiment, keeping its done runs from
   whatever commit made them. It detaches itself; progress is in `<data>/results/chain.log` and each suite's
   `<data>/results/<name>-<suite>.log`.
@@ -70,8 +71,7 @@ otherwise. `python` is Python 3: `python3` where `python` is not on PATH.
   every run whose transcript says "session limit", then resume after the reset or under another account.
 - The machine short on memory: stop the batch (stop the chain, its `run.py`, and each `claude -p` run's process tree
   with `procs.stop_tree`), close the cut-off runs' browserd sessions with
-  `run.close_sessions(browserd_call.SESSION.findall(<transcript>), <page>)` and their agent-browser sessions with
-  `AGENT_BROWSER_SESSION=<run token> agent-browser close`, and resume later.
+  `run.close_sessions(browserd_call.SESSION.findall(<transcript>), <page>)`, and resume later.
 
 ## 6. Score and report
 

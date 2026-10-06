@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fill the bench's data folder (paths.DATA): each benchmark's own repo at the commit this bench was built against,
 WebGames' site built, WebGames' task file, a venv with Flask for ffserver.py, and the file a form run uploads; then
-fetch the playwright arm's pinned package and say what the agentbrowser and devtools arms still need. Safe to run
-again: it skips what is there.
+fetch the playwright arm's pinned package and say what the devtools arm still needs. Safe to run again: it skips
+what is there.
 
     python experiments/bench/setup.py
 """
@@ -65,8 +65,6 @@ def main():
         run([python, "-m", "pip", "install", "-q", "Flask==2.3.3"])
 
     run(["npx", "-y", "@playwright/mcp@0.0.82", "--help"])  # the playwright arm's pinned version, fetched before any run
-    if shutil.which("agent-browser") is None:
-        print("the agentbrowser arm needs: npm i -g agent-browser@0.38.1 && agent-browser install")
     if shutil.which(str(paths.ROOT / "node_modules" / ".bin" / "chrome-devtools-mcp")) is None:
         print("the devtools arm needs browserd's own: npm ci, in %s" % paths.ROOT)
     print("data folder ready: %s" % paths.DATA)

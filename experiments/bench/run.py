@@ -7,12 +7,12 @@ Each run's stream-json transcript lands in the data folder's results/<exp>/<arm>
 transcript already ends in a result is skipped, so running the same --exp again finishes what is missing.
 
 Every run cleans up after itself: its whole process tree is stopped (its MCP servers, and through them any Chrome they
-started), its agent-browser session is closed, and each browserd session it started is closed on the browserd page,
-which closes that session's tabs. Before a run starts, what an earlier attempt of it left in its suite's RECORDS (its
-<token>.* files) is moved to results/_invalid/. A suite with a prepare(task, mcp_url, session, token) sets its page up
-before the run, in a browserd session of the runner's own, and one with a collect(task, token, transcript, mcp_url)
-reads what the run left on its tabs first, both through browserd. The batch stops at the first sign that the runs are
-broken.
+started), each browserd session it started is closed on the browserd page, which closes that session's tabs, and a
+`chrome` arm's Chrome is left holding one blank tab, as each of its runs begins too. Before a run
+starts, what an earlier attempt of it left in its suite's RECORDS (its <token>.* files) is moved to results/_invalid/. A
+suite with a prepare(task, mcp_url, session, token) sets its page up before the run, in a browserd session of the
+runner's own, and one with a collect(task, token, transcript, mcp_url) reads what the run left on its tabs first, both
+through browserd. The batch stops at the first sign that the runs are broken.
 """
 import argparse
 import concurrent.futures
@@ -29,6 +29,7 @@ import time
 import typing
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import browserd_call
 import paths
@@ -36,6 +37,12 @@ import procs
 import transcripts
 from suites import (botwall, canvas, clicks, formfactory, haystack, mcpuniverse, miniwob, popups, slides, traps,
                     webgames)
+
+sys.path.insert(0, str(paths.ROOT))  # the repo, for browserd's DevTools connection and records
+from browser.chrome import cdp  # noqa: E402
+from browser.protocol.ws import WebSocketError  # noqa: E402
+from browser.config.paths import RUN  # noqa: E402
+from browser.records.state import State  # noqa: E402
 
 SUITES = {"mcpuniverse": mcpuniverse, "webgames": webgames, "formfactory": formfactory, "botwall": botwall,
           "miniwob": miniwob, "clicks": clicks, "haystack": haystack, "canvas": canvas, "popups": popups,
@@ -49,8 +56,19 @@ def _browserd(port, profile):
             "page": "http://127.0.0.1:%d" % (port + 1), "profile": profile}
 
 
+STATE_FILE = os.path.join(RUN, "state.db")  # browserd's records: each profile's Chrome folder and DevTools port
+# {profile: its Claude extension's device id}: the long-tasks batch's own file, as the lineup runs on its profiles.
+DEVICES = Path(os.environ.get("BROWSERD_LONG_TASKS_DATA", paths.ROOT.parent / "browserd-long-tasks"),
+               "claude-devices.json")
+# Each `chrome` arm's window, in DIP, and how far each is set from the last: Chrome draws no tab in a minimized or a
+# fully covered window, and Playwright's and Claude in Chrome's screenshots wait for a frame.
+WINDOW, CASCADE = (1280, 900), (240, 60)
+# claudechrome's system line; ready() fills in its profile's device id from DEVICES.
+SELECT = ("Claude in Chrome's browser for this task is the one whose deviceId is {device}: select it with "
+          "select_browser before any other browser action.")
+
 ARMS = {
-    # The main server, on the research profile, for canvas and popups.
+    # The main server, on the research profile: the lineup's browserd, and canvas and popups.
     "browserd": _browserd(9230, "research"),
     # browserd from the worktree nextserver.py serves, beside the main server, on a Chrome of its own.
     "next": _browserd(9250, "Bench"),
@@ -62,39 +80,33 @@ ARMS = {
     "trap-on": _browserd(9250, "BenchA"),
     "trap-none": _browserd(9260, "BenchB"),
     "trap-guard": _browserd(9270, "BenchC"),
+    # The other three arms each drive the headed Chrome of a main-server browserd profile of their own ("chrome"):
+    # playwright and devtools over DevTools at "{cdp}", which ready() fills in from browserd's records as a batch
+    # starts, and claudechrome through the Claude extension signed in there.
     "playwright": {
-        # MCP-Universe's own entry for this domain, mcpuniverse/mcp/configs/server_list.json, with its @latest pinned
-        # so a release mid-batch cannot change the arm.
-        "mcp": {"playwright": procs.server(["npx", "@playwright/mcp@0.0.82", "--headless", "--isolated"])},
+        # Playwright MCP, pinned so a release mid-batch cannot change the arm.
+        "mcp": {"playwright": procs.server(["npx", "@playwright/mcp@0.0.82", "--cdp-endpoint", "{cdp}"])},
         "system": "",
-    },
-    "agentbrowser": {
-        # Vercel's agent-browser (npm i -g agent-browser, then agent-browser install), its MCP server with its default
-        # core tools, headless. Its browser lives in a daemon outside the run's process tree, so each run gets a
-        # session of its own, named by the run's token in session_env, and the close command ends it after the run.
-        "mcp": {"agent-browser": procs.server(["agent-browser", "mcp"])},
-        "system": "",
-        "session_env": "AGENT_BROWSER_SESSION",
-        "close": ["agent-browser", "close"],
+        "chrome": "lt-capex",
     },
     "devtools": {
-        # The chrome-devtools-mcp browserd pins and runs under each tab, on its own: stock tools, its own Chrome.
-        "mcp": {"devtools": procs.server([str(paths.ROOT / "node_modules/.bin/chrome-devtools-mcp"), "--headless",
-                                          "--isolated", "--no-usage-statistics"])},
+        # The chrome-devtools-mcp browserd pins and runs under each tab, on its own: stock tools.
+        "mcp": {"devtools": procs.server([str(paths.ROOT / "node_modules/.bin/chrome-devtools-mcp"), "--browserUrl",
+                                          "{cdp}", "--no-usage-statistics"])},
         "system": "",
+        "chrome": "lt-parks",
     },
     "claudechrome": {
-        # Claude in Chrome: Claude Code's own --chrome tools, through the Claude extension in a headed Chrome of the
-        # bench's own (the data folder's chrome-claude, signed in to Claude, every site allowed), started with a
-        # DevTools port so each run's tabs can be closed after it.
-        # Claude Code asks before each of its actions on a site no rule names, and bypassPermissions does not answer
-        # it, so allow.py answers every ask with allow, hidden from the model; claude.ai, where that Chrome is signed
-        # in, is denied.
+        # Claude in Chrome: Claude Code's own --chrome tools, through the Claude extension signed in on the profile.
+        # Every profile's extension connects to every claude --chrome, and a run acts in none until it selects one, so
+        # its system line names the profile's (SELECT). Claude Code asks before each of its actions on a site no rule
+        # names, and bypassPermissions does not answer it, so allow.py answers every ask with allow, hidden from the
+        # model; claude.ai, where the extension is signed in, is denied.
         "mcp": {"allow": {"command": sys.executable, "args": [str(paths.BENCH / "allow.py")]}},
         "flags": ["--chrome", "--permission-prompt-tool", "mcp__allow__approve",
                   "--disallowedTools", "mcp__allow__approve", "ClaudeInChromeDomain(claude.ai)"],
-        "system": "",
-        "cdp": "http://127.0.0.1:9295",
+        "system": SELECT,
+        "chrome": "lt-trip",
     },
 }
 
@@ -104,9 +116,9 @@ TIMEOUT = 900  # seconds a run may take before it is killed and counted as timed
 # logged in · Please run /login"; "Not logged in" alone also turns up when an agent reports a site it is logged out of.
 BROKEN = {"Please run /login": "claude -p is not logged in",
           "DevTools did not answer": "a browserd profile's Chrome has stopped answering"}
-# Calls that need no Chrome, so they succeed while it cannot start: browserd's, and Claude in Chrome's list of the
-# browsers its extension connected.
-IDLE = ("session_start", "tab_list", "list_connected_browsers")
+# Calls that can succeed with no page reached: browserd's, and Claude in Chrome's that list or pick the browsers its
+# extension connected, or find its tab group.
+IDLE = ("session_start", "tab_list", "list_connected_browsers", "select_browser", "tabs_context_mcp")
 DEAD_AFTER = 2  # runs in a row of one arm that reached no browser, after which the batch stops
 dead = {}  # arm name -> its runs in a row that reached no browser
 dead_lock = threading.Lock()
@@ -152,9 +164,9 @@ def refusal(text):
 
 
 def reached_browser(text):
-    """Whether a run's browser answered: False when its MCP server did not connect, or when every call it made that
-    needs a Chrome failed. A run that made no such call reached it, since answering from memory is the run's failure,
-    not the browser's.
+    """Whether a run's browser answered: False when its MCP server did not connect, or when a call failed and none
+    that needs a Chrome succeeded. A run that made no call reached it, since answering from memory is the run's
+    failure, not the browser's.
 
     Args:
         text (str): the run's stream-json transcript.
@@ -168,10 +180,11 @@ def reached_browser(text):
         for block in content if isinstance(content, list) else []:
             if block.get("type") == "tool_use":
                 names[block["id"]] = block.get("name", "")
-            elif block.get("type") == "tool_result" and not names.get(block.get("tool_use_id"), "").endswith(IDLE):
-                if not block.get("is_error"):
+            elif block.get("type") == "tool_result":
+                if block.get("is_error"):
+                    tried = True
+                elif not names.get(block.get("tool_use_id"), "").endswith(IDLE):
                     return True
-                tried = True
     return not tried
 
 
@@ -223,15 +236,64 @@ def close_sessions(sessions, page_url):
     return closed
 
 
-def close_tabs(cdp):
-    """Close every tab of the Chrome at cdp but a new blank one, leaving the extension's own pages, and return how many
-    it closed: an arm whose Chrome outlives its runs leaves each run's tabs open."""
-    pages = [target for target in json.loads(urllib.request.urlopen(cdp + "/json/list", timeout=10).read())
-             if target.get("type") == "page" and not target.get("url", "").startswith("chrome-extension://")]
-    urllib.request.urlopen(urllib.request.Request(cdp + "/json/new?about:blank", method="PUT"), timeout=10).read()
-    for page in pages:
-        urllib.request.urlopen(cdp + "/json/close/" + page["id"], timeout=10).read()
-    return len(pages)
+def ready(names):
+    """{name: arm} for the arms named, each `chrome` arm's "{cdp}" and "{device}" filled in: its profile's DevTools
+    port from browserd's records, and its extension's device id from DEVICES; and its "slot" in the windows' cascade.
+    Exits when an arm's Chrome is down or is not its profile's, or when a device id is missing."""
+    state = State(STATE_FILE)
+    devices = json.loads(DEVICES.read_text(encoding="utf-8")) if DEVICES.exists() else {}
+    arms = {}
+    for name in names:
+        arm = ARMS[name]
+        if "chrome" in arm:
+            profile = state.profile(arm["chrome"])
+            if profile is None:
+                raise SystemExit("browserd has no profile %s, the %s arm's" % (arm["chrome"], name))
+            try:
+                cdp.Browser(profile).close()
+            except (OSError, cdp.CdpError, WebSocketError) as exc:
+                raise SystemExit("the %s arm's Chrome: %s" % (name, exc))
+            endpoint = "http://127.0.0.1:%d" % profile.port
+            arm = dict(arm, slot=sum("chrome" in a for a in arms.values()),
+                       mcp={server: dict(entry, args=[arg.replace("{cdp}", endpoint) for arg in entry["args"]])
+                            for server, entry in arm["mcp"].items()})
+            system = typing.cast(str, arm["system"])
+            if "{device}" in system:
+                if arm["chrome"] not in devices:
+                    raise SystemExit("%s gives no device id for %s, the %s arm's" % (DEVICES, arm["chrome"], name))
+                arm = dict(arm, system=system.replace("{device}", devices[arm["chrome"]]),
+                           device=devices[arm["chrome"]])
+        arms[name] = arm
+    return arms
+
+
+def clear_chrome(arm):
+    """Leave the arm's Chrome holding one blank tab, in a new window at the arm's slot in the cascade (WINDOW):
+    Playwright and chrome-devtools-mcp see every tab of it, and an earlier run's tab could still submit a form or post
+    a reward under that run's token. A tab an open browserd session owns is someone else's and stays."""
+    state = State(STATE_FILE)
+    browser = cdp.Browser(state.profile(arm["chrome"]))
+    try:
+        fresh = browser.call("Target.createTarget", url="about:blank", newWindow=True)["targetId"]
+        window = browser.call("Browser.getWindowForTarget", targetId=fresh)["windowId"]
+        # browserd starts its Chromes so that each new window opens minimized, and a minimized window keeps its
+        # bounds until it is made normal.
+        browser.call("Browser.setWindowBounds", windowId=window, bounds={"windowState": "normal"})
+        browser.call("Browser.setWindowBounds", windowId=window, bounds={
+            "left": CASCADE[0] * arm["slot"], "top": CASCADE[1] * arm["slot"], "width": WINDOW[0], "height": WINDOW[1]})
+        live = {session.id for session in state.open_sessions()}
+        owned = {tab.target for tab in state.open_tabs(arm["chrome"]) if tab.session in live}
+        for info in browser.call("Target.getTargets")["targetInfos"]:
+            if info["type"] == "page" and info["targetId"] not in owned | {fresh}:
+                browser.call("Target.closeTarget", targetId=info["targetId"])
+    finally:
+        browser.close()
+
+
+def selected(text):
+    """The device ids a run's select_browser calls named."""
+    return {(block.get("input") or {}).get("deviceId") for block in transcripts.blocks(text)
+            if block.get("type") == "tool_use" and block.get("name", "").endswith("select_browser")}
 
 
 def set_aside(records, run_token):
@@ -258,8 +320,7 @@ def prepare(suite, task, arm, run_token):
     return None
 
 
-def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
-    arm = ARMS[arm_name]
+def run_one(suite, arm_name, arm, task_name, task, rep, model, max_turns, out):
     path = out / arm_name / ("%s-r%d.jsonl" % (task_name, rep))
     if finished(path):
         return "%s %s r%d: already done" % (arm_name, task_name, rep)
@@ -267,13 +328,17 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
         return "%s %s r%d: not run, the batch stopped" % (arm_name, task_name, rep)
     path.parent.mkdir(parents=True, exist_ok=True)
     run_token = token(out.name, arm_name, task_name, rep)
-    servers = arm["mcp"]
-    if "session_env" in arm:
-        servers = {name: dict(server, env={arm["session_env"]: run_token}) for name, server in servers.items()}
+    if "chrome" in arm:
+        try:
+            clear_chrome(arm)
+        except (OSError, cdp.CdpError, WebSocketError) as exc:
+            stop.set()
+            return "%s %s r%d: not run: could not clear its Chrome (%s), so the batch stops" % (
+                arm_name, task_name, rep, exc)
     cmd = procs.command([CLAUDE, "-p",
            "--model", model,
            "--output-format", "stream-json", "--verbose",
-           "--mcp-config", json.dumps({"mcpServers": servers}), "--strict-mcp-config",
+           "--mcp-config", json.dumps({"mcpServers": arm["mcp"]}), "--strict-mcp-config",
            "--tools", "",
            "--permission-mode", "bypassPermissions",
            "--setting-sources", "project",
@@ -322,12 +387,6 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
             suite.collect(task, run_token, transcript, arm["mcp"]["browserd"]["url"])
         except (OSError, ValueError, RuntimeError) as exc:
             notes.append("could not collect what it left on its tabs (%s)" % exc)
-    if "close" in arm:
-        try:
-            subprocess.run(procs.command(arm["close"]), env=dict(os.environ, **{arm["session_env"]: run_token}),
-                           capture_output=True, timeout=60)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            notes.append("could not close its %s session (%s)" % (arm_name, exc))
     try:
         closed = close_sessions(browserd_call.SESSION.findall(transcript), arm["page"]) if "page" in arm else []
         if closed:
@@ -335,12 +394,16 @@ def run_one(suite, arm_name, task_name, task, rep, model, max_turns, out):
     except (OSError, ValueError) as exc:
         stop.set()
         notes.append("could not close its browserd sessions (%s), so the batch stops" % exc)
-    if "cdp" in arm:
+    if "chrome" in arm:
         try:
-            notes.append("closed %d tabs" % close_tabs(arm["cdp"]))
-        except (OSError, ValueError) as exc:
+            clear_chrome(arm)
+        except (OSError, cdp.CdpError, WebSocketError) as exc:
             stop.set()
-            notes.append("could not close its tabs (%s), so the batch stops" % exc)
+            notes.append("could not clear its Chrome (%s), so the batch stops" % exc)
+    strays = selected(out) - {arm["device"]} if "device" in arm else set()
+    if strays:
+        stop.set()
+        notes.append("the batch stops: it selected another arm's browser (%s)" % ", ".join(map(str, strays)))
     for line, why in BROKEN.items():
         if line in transcript:
             stop.set()
@@ -383,17 +446,19 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     chosen = {name: task for name, task in suite.load().items()
               if not args.tasks or any(part in name for part in args.tasks.split(","))}
-    arms = list(dict.fromkeys(args.arms.split(",")))  # an arm named twice would have two runs at once
+    arms = ready(list(dict.fromkeys(args.arms.split(","))))  # an arm named twice would have two runs at once
     (out / "config.json").write_text(encoding="utf-8", data=json.dumps({
         "suite": args.suite, "model": args.model, "system": suite.SYSTEM, "max_turns": max_turns, "k": args.k,
-        "arms": {a: ARMS[a] for a in arms}, "tasks": list(chosen)}, indent=2))
+        "arms": arms, "tasks": list(chosen)}, indent=2))
     # A round is one task on every arm, the next round starting when all are done: the arms see each site at about
-    # the same time, and no arm has two runs at once, as Claude in Chrome's one extension serves one run.
+    # the same time, and no arm has two runs at once: clear_chrome would close another run's tabs, and Claude in
+    # Chrome's one extension serves one run.
     rounds = [(name, task, rep) for rep in range(1, args.k + 1) for name, task in chosen.items()]
     print("%d runs, %d at a time" % (len(rounds) * len(arms), min(args.jobs, len(arms))), flush=True)
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
         for name, task, rep in rounds:
-            pending = [pool.submit(run_one, suite, arm, name, task, rep, args.model, max_turns, out) for arm in arms]
+            pending = [pool.submit(run_one, suite, arm_name, arm, name, task, rep, args.model, max_turns, out)
+                       for arm_name, arm in arms.items()]
             for done in concurrent.futures.as_completed(pending):
                 print(done.result(), flush=True)
 

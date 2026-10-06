@@ -3,7 +3,7 @@
 Claude Code window does not stop it:
 
     python experiments/bench/chain.py <name> <arms> "<suite>[:<run.py arguments>]"...
-    python experiments/bench/chain.py final next,playwright,devtools,agentbrowser "mcpuniverse:--k 2" formfactory botwall
+    python experiments/bench/chain.py final browserd,playwright,devtools,claudechrome "mcpuniverse:--k 2" formfactory
 
 Suite <suite> runs as experiment <name>-<suite>, its log in the data folder's results/<name>-<suite>.log; each start,
 stop and end goes to results/chain.log. A suite whose batch stopped is resumed once, 2 minutes later, since

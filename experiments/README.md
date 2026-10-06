@@ -27,4 +27,5 @@ the user's own browsing.
   the root.
 - Never commit run data (transcripts, records, screenshots, videos): it holds the user's accounts and browsing.
 - Every window and tab the code here opens in a profile's Chrome comes from `opens.window` or `opens.tab`
-  (`../browser/chrome/README.md`); in `long-tasks/compare.py` the other arms' own servers open theirs.
+  (`../browser/chrome/README.md`); in `long-tasks/compare.py` the other arms' own servers open theirs, and
+  `bench/run.py`'s `clear_chrome` opens each `chrome` arm's window itself, normal and on screen (`bench/README.md`).
