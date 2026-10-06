@@ -192,4 +192,4 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
 - **WebGames** passwords sit in its site's bundle, so its system line forbids reading the source, scripts or network
   responses; `tools/cheats.py` checks transcripts for it. **MiniWoB++** episodes start with the page (no START cover)
   and last 30 minutes, not 10 to 30 seconds; only the first counts. **botwall** answers are not checked against the
-  sites.
+  sites. **FormFactory**'s pages are served with no file field required (`suites/ffserver.py` says why).

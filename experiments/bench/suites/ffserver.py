@@ -7,8 +7,13 @@ the same form at once would land together, and request.form.to_dict() keeps only
 This replaces that function: the whole POST (every value of every field, and the uploaded files' names) is
 appended to results/formfactory-submissions/<token>.jsonl, the token read from the page's ?run= query, which a
 form's POST carries in its own URL (action="") or else in its Referer.
+
+Every page it serves has its file fields' required attribute taken out: formfactory.py never scores a file field, and
+Claude in Chrome cannot upload a file from the data folder, so a required one (on F13, G13 and H11) would keep that
+arm alone from submitting forms the others can.
 """
 import json
+import re
 import sys
 import time
 import urllib.parse
@@ -43,6 +48,16 @@ def save_submission(template_name, data):
 
 
 formfactory.save_submission_to_json = save_submission
+
+FILE_REQUIRED = re.compile(r'(<input type="file"[^>]*) required\b')  # as the pinned templates write it
+
+
+@formfactory.app.after_request
+def optional_files(response):
+    if response.mimetype == "text/html":
+        response.set_data(FILE_REQUIRED.sub(r"\1", response.get_data(as_text=True)))
+    return response
+
 
 if __name__ == "__main__":
     formfactory.app.run(host="127.0.0.1", port=PORT, threaded=True)
