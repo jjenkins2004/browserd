@@ -6,7 +6,8 @@ Measures browserd against other browser MCP servers on public benchmarks. Every 
 built-in tool off (`--tools ""`), so the browser MCP server is the only way to the web. The model, prompt and scoring
 stay the same across arms; only the server changes. This folder holds the code; the data (the benchmarks' own repos,
 every run's transcript, the scores) lives in a data folder outside the repo (`paths.DATA`, below). The comparisons'
-results are in `../findings/benchmark.md`, and the bench's other experiments are written up in `../findings/` too.
+results are in `../findings/benchmark.md` and, for the lineup on the user's own profiles, `../findings/own-profiles.md`;
+the bench's other experiments are written up in `../findings/` too.
 `../../.claude/skills/benchmark/SKILL.md` walks an agent through a rerun.
 
 The suites, each `--suite` of `run.py`:
@@ -24,8 +25,8 @@ The suites, each `--suite` of `run.py`:
 | `slides` | edits to a new, blank Google Slides deck per run, on the `experiments` arm's profile signed in to Google | 6 | the deck's own pptx export, read in the run's tab after the run |
 | `traps` | clicks an agent never meant: a fake editor whose timed traps go up over its next target | 12 seeds | the page's own log of every trusted click and key |
 
-The last run of the other servers' arms (2026-09-29, `final2`) was `mcpuniverse`, `formfactory` and `webgames`.
-`miniwob` (drills) and `botwall` have not been run in full.
+The last run of the other servers' arms (2026-10-06, `pub3`) was `mcpuniverse`, `formfactory`, `webgames` and
+`miniwob`. `botwall` has not been run in full.
 
     python experiments/bench/setup.py                      fill the data folder once
     python experiments/bench/sites.py start [site...]      the local sites the suites need, all or those named
@@ -173,13 +174,15 @@ tree is started and stopped, keeping the machine awake, where a venv keeps its P
   open: close them with `run.close_sessions(browserd_call.SESSION.findall(<transcript>), <page>)`. Close only a run's
   own sessions: every other session on the page is the user's.
 - **The lineup's profiles are the long-tasks batch's too** (lt-capex, lt-parks, lt-trip; `../long-tasks/README.md`):
-  never run the two at once, since each clears those Chromes' tabs and drives lt-trip's extension. They stay signed
-  in to Google, and the runner resets no site's cookies or storage: WebGames' Patience keeps its start time in
-  127.0.0.1:4380's localStorage, so clear that origin's data in each arm's profile before running WebGames there
-  again. Their windows are normal and cascaded (`run.WINDOW`), since Chrome draws no tab in a minimized or fully
-  covered one: they come to the front as runs open them, and an app covering them all stops their screenshots, so run
-  the lineup while no one uses the machine. MiniWoB++'s copy-paste tasks use the OS clipboard, which every arm
-  shares: run them first with `--tasks copy-paste --jobs 1`.
+  never run the two at once, since each clears those Chromes' tabs and drives lt-trip's extension. They stay signed in
+  to Google, and the runner resets no site's cookies or storage: WebGames' Patience keeps its start time in
+  127.0.0.1:4380's localStorage, so clear that origin's data in each arm's profile before running WebGames there again.
+  Their windows are normal and cascaded (`run.WINDOW`), since Chrome draws no tab in a minimized or fully covered one:
+  they come to the front as runs open them, and an app covering them all stops their screenshots, so run the lineup
+  while no one uses the machine. `pub3` restarted the three Chromes by hand with
+  `--disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows`, which keeps a covered
+  window's screenshots working but not its wheel input. MiniWoB++'s copy-paste tasks use the OS clipboard, which every
+  arm shares: run them first with `--tasks copy-paste --jobs 1`.
 - **A run times out after `run.TIMEOUT` (900s)** and has no result, so it runs again when the experiment is resumed.
 - **An experiment's name is its identity:** running a name again resumes it, keeping its done runs from whatever
   commit made them, so a new measurement needs a new name.

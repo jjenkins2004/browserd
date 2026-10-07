@@ -32,7 +32,9 @@ The bench is `../bench/`, whose README says how to run it:
   `tools/miscalls.py`, which counted calls of a name browserd does not serve, and `probes/`, the pairing bug's replays
   and probes (below), are in `../bench/` at b58ef7b.
 
-The tool-description experiment that followed is [queue-descriptions.md](queue-descriptions.md).
+The tool-description experiment that followed is [queue-descriptions.md](queue-descriptions.md). A later run on the
+user's own Chrome profiles, with Claude in Chrome in agent-browser's place and MiniWoB++ added, is
+[own-profiles.md](own-profiles.md) (`pub3`, 2026-10-06).
 
 ## Setup
 
@@ -394,14 +396,13 @@ cost from $24.06 to $18.49 on MCP-Universe, $11.79 to $9.43 on FormFactory and $
 
 - **botwall:** 20 live sites known for bot checks, where browserd's real Chrome should do best. The bench's own probe,
   not a public benchmark.
-- **MiniWoB++:** 38 form and widget tasks with autocompletes, date pickers and book-flight.
 - **A form test that separates the arms on accuracy:** custom dropdowns, date pickers, autocompletes, multi-step forms
   and fields the page locks, where browserd's fill checks (a `fill` reads its field first and refuses one it cannot
   fill) would count. FormFactory has none of them.
 - **A field's placeholder in browserd's view** (above).
 
-botwall and MiniWoB++ are built and smoke-tested (`botwall.py`, `miniwob.py` with `mwserver.py`). The first batch
-stopped when `claude -p` began failing with "Not logged in" (the keychain seemed to have locked) and the Research
+botwall is built and smoke-tested (`botwall.py`); MiniWoB++ ran in `pub3` ([own-profiles.md](own-profiles.md)). The
+first botwall and MiniWoB++ batch stopped when `claude -p` began failing with "Not logged in" (the keychain seemed to have locked) and the Research
 Chrome hung; those runs are in `results/_invalid/`.
 
 ## Incidents
