@@ -339,9 +339,16 @@ def connecting():
             del started[:]
             launch._open = start
 
+        local_state = os.path.join(folder, "Local State")
+        with open(local_state, "w", encoding="utf-8") as handle:  # as a Chrome left it, with a restart pending
+            json.dump({"profile": {"info_cache": {"Default": {"name": "Default"}}},
+                       "restart": {"last": {"session": {"on": {"shutdown": True}}}}}, handle)
         starting(machine(owner=501, listening=[501], processes={501: school}, answer=VERSION))
         said = refusal(lambda: launch.launch(profile))
-        check("launch leaves a running School Chrome alone", not said and not started, said)
+        with open(local_state, encoding="utf-8") as handle:
+            left = json.load(handle)
+        check("launch leaves a running School Chrome alone, its Local State too",
+              not said and not started and "restart" in left, said)
         starting(machine(owner=501, listening=[501], processes={501: school.replace(" " + cdp.INPUT_FLAG, "")},
                          answer=VERSION))
         said = refusal(lambda: launch.launch(profile))
@@ -353,6 +360,10 @@ def connecting():
         starting(machine(answer=VERSION))
         said = refusal(lambda: launch.launch(profile, wait=5))
         check("launch starts Chrome once when nothing is up, and waits for its port", not said and started == [True], said)
+        with open(local_state, encoding="utf-8") as handle:
+            left = json.load(handle)
+        check("and first drops the restart a Chrome left pending in its Local State, keeping the rest",
+              "restart" not in left and "Default" in left["profile"]["info_cache"], left)
         starting(machine(listening=[777], processes={777: OTHER}, answer=VERSION))
         said = refusal(lambda: launch.launch(profile))
         check("launch refuses when another program holds the port, and starts nothing", "pid 777" in said and not started, said)
@@ -531,11 +542,13 @@ def owning_mac(folder, profile):
         subprocess.run = lambda args, **kw: (ran.append(args), subprocess.CompletedProcess(args, 0, "", ""))[1]
         said = refusal(lambda: launch._open(profile))
         check("Chrome is started as a new copy of the app, in the background, with no window, the port, the folder, "
-              "the profile, and input let through before a page draws",
+              "the profile, input let through before a page draws, and no restart of its own for an update",
               not said and bool(ran) and ran[0][:4] == ["/usr/bin/open", "-gna", macos.APP, "--args"] and {
                   "--remote-debugging-port=%d" % profile.port, "--user-data-dir=%s" % profile.folder,
-                  "--profile-directory=Default", "--no-startup-window", cdp.INPUT_FLAG
+                  "--profile-directory=Default", "--silent-launch", cdp.INPUT_FLAG, "--disable-features=SmartRestart"
               } <= set(ran[0][4:]), repr(ran))
+        check("and without --no-startup-window, which beside the port keeps Chrome running past Cmd+Q",
+              bool(ran) and "--no-startup-window" not in ran[0], repr(ran))
         subprocess.run = lambda args, **kw: subprocess.CompletedProcess(args, 1, "", "Unable to find application")
         check("a Chrome that will not start says so", "Unable to find application" in refusal(lambda: launch._open(profile)))
         subprocess.run = saved[1]
@@ -650,11 +663,13 @@ def owning_windows(folder, profile):
         said = refusal(lambda: launch._open(profile))
         args, kw = ran[-1] if ran else ([], {})
         check("Chrome is started as its own process, detached, with no window yet and each it opens minimized shown "
-              "minimized without the focus, the port, the folder, the profile, and input let through before a page draws",
+              "minimized without the focus, the port, the folder, the profile, input let through before a page draws, "
+              "and no restart of its own for an update",
               not said and args[0] == cdp.CHROME and kw["creationflags"] & windows._DETACHED_PROCESS
               and kw["startupinfo"].wShowWindow == 7 and {
                   "--remote-debugging-port=%d" % profile.port, "--user-data-dir=%s" % profile.folder,
-                  "--profile-directory=Default", "--no-startup-window", cdp.INPUT_FLAG} <= set(args[1:]), repr(ran))
+                  "--profile-directory=Default", "--no-startup-window", cdp.INPUT_FLAG,
+                  "--disable-features=SmartRestart"} <= set(args[1:]), repr(ran))
         check("out of the job it runs in if the job lets it, and in it if not",
               len(ran) == 2 and ran[0][1]["creationflags"] & windows._BREAKAWAY
               and not ran[1][1]["creationflags"] & windows._BREAKAWAY, repr([kw["creationflags"] for _, kw in ran]))

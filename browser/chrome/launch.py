@@ -1,6 +1,7 @@
 """Start a profile's Chrome, or say why it cannot be started. chromes.Chromes.ensure calls it before each tab_open and
 Open Chrome; README.md names its other callers."""
 
+import json
 import os
 import time
 
@@ -11,18 +12,36 @@ IN_USE = 21  # chrome.exe's exit code when another Chrome holds the folder under
 
 
 def _open(profile, flags=()):
-    """Start the profile's Chrome off the user's focus, with no window: README.md, "Agent Gotchas & Invariants". The Popen
-    of it, or None where the OS hands Chrome off (macOS's open)."""
+    """Start the profile's Chrome off the user's focus, with no window (the switch for it is in system.CHROME_FLAGS):
+    README.md, "Agent Gotchas & Invariants". The Popen of it, or None where the OS hands Chrome off (macOS's open)."""
     try:
         return system.launch_chrome([
             "--remote-debugging-port=%d" % profile.port,
             "--user-data-dir=%s" % profile.folder,
             "--profile-directory=%s" % cdp.PROFILE,
-            "--no-first-run", "--no-default-browser-check", "--no-startup-window", cdp.INPUT_FLAG,
+            "--no-first-run", "--no-default-browser-check", cdp.INPUT_FLAG,
+            # README.md, "Agent Gotchas & Invariants", says why. Chrome reads only the last --disable-features, so
+            # another feature joins this one, comma-separated.
+            "--disable-features=SmartRestart",
             *system.CHROME_FLAGS, *flags,
         ])
     except system.Unanswered as exc:
         raise cdp.CdpError(str(exc))
+
+
+def _drop_restart(folder):
+    """Forget a restart a Chrome left pending in the folder's Local State, which would start a Chrome browserd never
+    launched at the next quit: README.md, "Agent Gotchas & Invariants"."""
+    path = os.path.join(folder, "Local State")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            state = json.load(handle)
+    except FileNotFoundError:
+        return  # a new folder's Chrome has not written it yet
+    if state.pop("restart", None) is not None:
+        with open(path + ".tmp", "w", encoding="utf-8") as handle:
+            json.dump(state, handle)
+        os.replace(path + ".tmp", path)
 
 
 def launch(profile, wait=15.0, flags=()):
@@ -44,6 +63,7 @@ def launch(profile, wait=15.0, flags=()):
         # profile's Chrome with its port and cdp.INPUT_FLAG, or require says what it is instead.
         cdp.require(profile)
         return "already running: %s" % profile.endpoint
+    _drop_restart(profile.folder)  # no Chrome holds the folder, so its Local State is ours to change
     started = _open(profile, flags)
     deadline = time.time() + wait
     while True:

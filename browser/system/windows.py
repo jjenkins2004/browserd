@@ -154,7 +154,9 @@ NAME = "Windows"
 CHROME = _find_chrome()
 # Scrollbars that overlay the page, as a Mac's do: Windows' own take 15px of the viewport, and a background tab's
 # viewport flips between the two widths as it is laid out, which moves every point read off a screenshot.
-CHROME_FLAGS = ["--enable-features=OverlayScrollbar"]
+# --no-startup-window: Chrome starts with no window and, beside the debugging port, keeps running after its last
+# window closes.
+CHROME_FLAGS = ["--enable-features=OverlayScrollbar", "--no-startup-window"]
 BACKGROUND_WINDOWS = False  # Chrome shows a background window on screen first, then minimizes it (measured)
 # Resolved, so every profile's folder, made in it, is given in one spelling: README.md says why.
 CHROME_DATA = os.path.realpath(os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local"),
@@ -316,7 +318,7 @@ def chrome_owner(folder):
 
 def launch_chrome(args):
     # SW_SHOWMINNOACTIVE: Chrome opens the windows opens.window asks for, and the user's Ctrl+N ones, in the show state
-    # it was started with, so they open minimized, never on screen first (measured with launch's --no-startup-window:
+    # it was started with, so they open minimized, never on screen first (measured with --no-startup-window:
     # the first window, a second, and one after all had closed). opens._by_user un-minimizes the user's.
     # DETACHED_PROCESS and a group of its own keep Chrome running past the server.
     startup = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=7)  # SW_SHOWMINNOACTIVE

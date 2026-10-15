@@ -43,20 +43,29 @@ it first.
   profile, and `Local State` reaches disk seconds after a Chrome profile is added, so for those seconds a new Chrome
   profile's tab would pass. No Chrome profile is ever to be added to a profile's folder.
 - **A Chrome with no window open has no Chrome profile loaded.** Chrome keeps running after its last window closes (a
-  Mac keeps every app running; on Windows the debugging port keeps it, measured) and unloads its Chrome profile, so
-  `Target.getBrowserContexts` names no default context. With no page open either, `Tabs` lists no tabs rather than
-  refusing, and `opens.tab` loads it again. A Chrome with pages open but no default context is still refused, since
-  its tabs cannot be told apart.
+  Mac keeps every app running; on Windows `--no-startup-window` beside the debugging port keeps it, measured) and
+  unloads its Chrome profile, so `Target.getBrowserContexts` names no default context. With no page open either, `Tabs`
+  lists no tabs rather than refusing, and `opens.tab` loads it again. A Chrome with pages open but no default context is
+  still refused, since its tabs cannot be told apart.
 - **Every window and tab is opened in `opens.py`, and only the browserd page's Open Chrome and Show bring one forward.**
   The checks (`../../tests/`) and the experiments (`../../experiments/`) keep this too, but for the bench's `chrome`
   arms, whose windows `run.clear_chrome` opens and puts on screen itself (`../../experiments/bench/README.md`).
   `opens.window` asks Chrome for a minimized window, in the background where the OS needs it
-  (`system.BACKGROUND_WINDOWS`). `launch` starts Chrome with no window (`--no-startup-window`), so the tabs it had open
-  when it last quit do not come back. On Windows it starts Chrome with `SW_SHOWMINNOACTIVE`, so windows open minimized
-  without showing on screen first (`system.launch_chrome`). On a Mac, Chrome raises itself over the app in front when it
+  (`system.BACKGROUND_WINDOWS`). `launch` starts Chrome with no window (`system.CHROME_FLAGS`: `--silent-launch` on a
+  Mac, `--no-startup-window` on Windows), so the tabs it had open when it last quit do not come back. On Windows it
+  starts Chrome with `SW_SHOWMINNOACTIVE`, so windows open minimized without showing on screen first
+  (`system.launch_chrome`). On a Mac, Chrome raises itself over the app in front when it
   shows a window, which macOS allows at launch, even under `open -g`, and afterwards only once Chrome has been in front;
   so Show brings it forward through the OS (`system.bring`). Chrome still shows a tab a page opens (a `target=_blank`
   link, `window.open`), and `opens.from_page` puts back what it did on screen.
+- **On a Mac a profile's Chrome quits when the user quits it, and on every OS it stays quit.** `--no-startup-window`
+  beside a debugging port makes Chrome hold itself open until DevTools' `Browser.close` or a signal, so on a Mac, where
+  Cmd+Q and the Dock's Quit are how the user quits it, it starts with `--silent-launch` instead. Every profile's Chrome
+  starts with `--disable-features=SmartRestart`: with an update waiting and no window open, Chrome otherwise restarts
+  itself, and the hold leaves that restart half done until the next quit, which then starts a Chrome browserd never
+  launched on the profile's port. Chrome keeps the restart in the folder's `Local State`
+  (`restart.last.session.on.shutdown`), and a Chrome that ended without clearing it would restart itself once more at
+  the quit after its next start, so `launch` clears it first.
 - **Only `check_server.py --headed` puts windows on screen.** The offline checks hold `opens.py`, `launch.py` and the
   OS's window code to what they ask of Chrome and the OS (`focus_offline`, `owning_windows`, `owning_mac`), but the
   live checks run headless by default, so whether a real Chrome then shows a window or takes the focus is seen only

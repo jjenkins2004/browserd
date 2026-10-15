@@ -4,7 +4,8 @@ says what each OS does in its place.
 
     NAME             the OS, as a sentence names it: "macOS" or "Windows"
     CHROME           Chrome's binary; a profile's Chrome is a process of it
-    CHROME_FLAGS     switches every profile's Chrome starts with on this OS, besides launch's own
+    CHROME_FLAGS     switches every profile's Chrome starts with on this OS, besides launch's own, the one that starts
+                     it with no window among them
     BACKGROUND_WINDOWS  whether opens.window asks for its new window in the background
     CHROME_DATA      the folder holding Chrome's own folder, where each profile's Chrome-<name> folder sits beside it
     DATA             where an installed browserd keeps its records, the user's own; a git checkout keeps them in .run

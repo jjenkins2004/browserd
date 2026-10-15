@@ -18,7 +18,9 @@ __all__ = ["NAME", "CHROME", "CHROME_FLAGS", "BACKGROUND_WINDOWS", "APP", "CHROM
 NAME = "macOS"
 APP = "/Applications/Google Chrome.app"
 CHROME = APP + "/Contents/MacOS/Google Chrome"
-CHROME_FLAGS = []  # scrollbars on a Mac already overlay the page
+# No window at launch: ../chrome/README.md, "Agent Gotchas & Invariants", says why not --no-startup-window.
+# Scrollbars on a Mac already overlay the page.
+CHROME_FLAGS = ["--silent-launch"]
 BACKGROUND_WINDOWS = True  # without it, Target.createTarget brings Chrome to the front, as it does for a tab
 CHROME_DATA = os.path.expanduser("~/Library/Application Support/Google")
 DATA = os.path.expanduser("~/Library/Application Support/browserd")
