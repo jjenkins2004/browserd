@@ -317,8 +317,9 @@ class Process:
 
     wait = 0.0
 
-    def __init__(self, log_path, endpoint=None):
+    def __init__(self, log_path, endpoint=None, no_runtime_enable=False):
         self.running = True
+        self.no_runtime_enable = no_runtime_enable
 
     def call(self, tool, arguments, wait=None):
         time.sleep(Process.wait)
@@ -338,9 +339,9 @@ class Process:
 
 
 def queue_tools_offline():
-    """tab_open's steps, queues on two tabs at once, a tab's process started again once it died, and the tab tools
-    stopping a closed tab's process: over HTTP against a stand-in Chrome, each tab's process a Process that pairs at
-    once."""
+    """tab_open's steps, a School tab's process started with no_runtime_enable and another profile's without, queues on
+    two tabs at once, a tab's process started again once it died, and the tab tools stopping a closed tab's process:
+    over HTTP against a stand-in Chrome, each tab's process a Process that pairs at once."""
     workdir = tempfile.mkdtemp(prefix="browser-queue-tools-")
     state = stand_in_state(workdir)
     chrome, root = FakeChrome(), os.path.join(workdir, "calls")
@@ -369,6 +370,14 @@ def queue_tools_offline():
         check("and records them as that tab's first queue call",
               sorted(os.listdir(os.path.join(home, a))) == ["001-queue.json", "001-queue.txt", "001-step1-snapshot.txt"],
               repr(os.listdir(os.path.join(home, a))))
+        process = workers.get(a, tabs.target(mine, a), STAND_IN)._devtools
+        check("a School tab's process is started to send pages no Runtime.enable",
+              isinstance(process, Process) and process.no_runtime_enable)
+        jobs = Worker("j0bs", "T9", Profile("Jobs", "/nowhere/Chrome-Jobs", 9224), workdir, unreachable)
+        process = jobs.ensure()[0]
+        check("and another profile's tab's process is not",
+              isinstance(process, Process) and not process.no_runtime_enable)
+        jobs.stop()
         text, is_error = call(httpd, "tab_open", session=session, url="https://example.com/b",
                               steps=[{"tool": "new_page", "url": "about:blank"}])
         b = text.split()[0] if text else ""

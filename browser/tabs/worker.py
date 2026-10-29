@@ -14,6 +14,9 @@ PROBE_WAIT = 15.0
 PAGE_LINE = re.compile(r"^(\d+): (.*)$", re.M)
 RETURNED = re.compile(r"```json\s*(.*?)\s*```", re.S)
 MARK = "Symbol.for('resume-tools-tab')"
+# The profiles whose tabs' processes send pages no Runtime.enable (no_runtime_enable), lowercase, matched whatever the
+# profile name's case: bot checks on their sites refused form submits while the processes sent it.
+NO_RUNTIME_ENABLE = {"school"}
 
 
 def returned(text):
@@ -69,7 +72,8 @@ class Worker:
         # _devtools keeps an ended process (died, paused, or closed after "No page found") until a new one pairs, so
         # not None here means one ended.
         restarted = self._devtools is not None or self._carried
-        devtools = Devtools(os.path.join(self._log_dir, "devtools-%s.log" % self.tab), self.profile.endpoint)
+        devtools = Devtools(os.path.join(self._log_dir, "devtools-%s.log" % self.tab), self.profile.endpoint,
+                            no_runtime_enable=self.profile.name.lower() in NO_RUNTIME_ENABLE)
         try:
             self.page_id = self._pair(devtools)
             # Selected, so chrome-devtools-mcp gives the page its own timeouts: a click or fill fails after 5s, not

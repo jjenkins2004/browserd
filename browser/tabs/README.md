@@ -41,6 +41,7 @@ time. `../README.md`'s Gotchas bind this folder too: read it first.
   sends it to a page or its workers (an extension's service worker, which no page sees, still gets it), through
   `patch_devtools.mjs`, and so hears no console messages or uncaught errors and evaluates nothing in a worker; the
   patch is exact text for the pinned chrome-devtools-mcp, and `npm ci` fails when a new pin breaks it.
+  `Worker.ensure` passes `no_runtime_enable=True` for the tabs of each profile named in `worker.NO_RUNTIME_ENABLE`.
 - **chrome-devtools-mcp's file tools may touch only `devtools.FILE_ROOTS`** (each passed as `--workspace`) **and the
   temporary folder.** `steps.check` refuses a `filePath` or `filePaths` anywhere else, or relative, before any step runs
   (`devtools.may_touch`).
