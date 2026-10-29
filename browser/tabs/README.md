@@ -15,6 +15,7 @@ time. `../README.md`'s Gotchas bind this folder too: read it first.
       tabs.py      Tabs: tab ids in state.db; open, list, show, close, hand over
       worker.py    Worker: one tab's process, paired with its page; Workers, one per tab id
       devtools.py  Devtools: an MCP client for one chrome-devtools-mcp over stdio; FILE_ROOTS
+      patch_devtools.mjs  npm ci's postinstall: chrome-devtools-mcp, patched to send pages no Runtime.enable when asked
 
 ## Core Abstractions & Shared Pieces
 
@@ -35,6 +36,11 @@ time. `../README.md`'s Gotchas bind this folder too: read it first.
   saying so (`steps.RESTARTED`).
 - **A tab opened by hand belongs to no session** until `Tabs.hand_over` gives it to one; no tool does. A tab closed
   outside browserd is marked closed at the next listing or use.
+- **A page sees that a chrome-devtools-mcp has sent Runtime.enable**: Chrome then serializes every console call's
+  arguments, and bot checks log an Error to see it. `Devtools(..., no_runtime_enable=True)` starts one that never
+  sends it to a page or its workers (an extension's service worker, which no page sees, still gets it), through
+  `patch_devtools.mjs`, and so hears no console messages or uncaught errors and evaluates nothing in a worker; the
+  patch is exact text for the pinned chrome-devtools-mcp, and `npm ci` fails when a new pin breaks it.
 - **chrome-devtools-mcp's file tools may touch only `devtools.FILE_ROOTS`** (each passed as `--workspace`) **and the
   temporary folder.** `steps.check` refuses a `filePath` or `filePaths` anywhere else, or relative, before any step runs
   (`devtools.may_touch`).

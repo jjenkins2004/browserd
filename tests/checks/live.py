@@ -1,5 +1,5 @@
 """The live checks, on the throwaway Chrome: tabs, windows and the focus (--headed only), the queue on scratch
-pages, and downloads.
+pages, chrome-devtools-mcp without Runtime.enable, and downloads.
 """
 
 import base64
@@ -25,7 +25,7 @@ from browser.tabs import devtools, sessions
 from browser.tabs import devtools as devtools_module  # queue_live names its own chrome-devtools-mcp devtools
 from browser.tabs.devtools import Devtools, PACKAGE
 from browser.tabs.tabs import Tabs
-from browser.tabs.worker import Workers, returned
+from browser.tabs.worker import PAGE_LINE, Workers, returned
 from browser.tools import queue_tool, tab_tools
 from browser.protocol.ws import WebSocketError
 import popups
@@ -532,6 +532,65 @@ def queue_live(profile, state):
         httpd.shutdown()
         httpd.server_close()
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+# A page that counts the stacks its Errors have formatted, as bot checks do: Chrome formats a logged Error's stack only
+# to serialize the console call for a CDP client that has sent Runtime.enable (measured: once with one, never without).
+# Its button counts its clicks.
+PROBE = ("<title>runtime probe</title><button onclick='clicks++'>Count</button><script>window.clicks = 0; "
+         "window.formats = 0; Error.prepareStackTrace = () => { formats++; return 'Error'; }</script>")
+LOGGED = ("async () => { formats = 0; console.debug(new Error()); await new Promise(done => setTimeout(done, 100)); "
+          "return formats; }")
+
+
+def runtime_live(profile, state):
+    """chrome-devtools-mcp on one tab with no_runtime_enable and without: a console call is serialized only without
+    it, and with it the steps still reach the page's own globals and its elements, and the new document after a
+    reload."""
+    if not os.path.exists(PACKAGE):
+        skipped.append("runtime")
+        print("skipped the live Runtime.enable checks: chrome-devtools-mcp is not installed; run npm ci")
+        return
+    node = shutil.which("node")
+    problem = "node is not installed" if node is None else devtools_module._node_problem(node)
+    if problem:
+        skipped.append("runtime")
+        print("skipped the live Runtime.enable checks: %s" % problem)
+        return
+    workdir = tempfile.mkdtemp(prefix="browser-runtime-")
+    browser = cdp.Browser(profile)
+    target = opens.tab(browser)
+    try:
+        attached = browser.call("Target.attachToTarget", targetId=target, flatten=True)["sessionId"]
+        browser.call("Page.enable", session=attached)
+        browser.call("Page.navigate", session=attached, url="data:text/html," + urllib.parse.quote(PROBE))
+        browser.wait_for("Page.loadEventFired", session=attached, timeout=5)
+        formats, clicked, reloaded = {}, None, None
+        for no_runtime_enable in (True, False):
+            devtools = Devtools(os.path.join(workdir, "devtools.log"), profile.endpoint,
+                                no_runtime_enable=no_runtime_enable)
+            try:
+                page = next(int(found.group(1)) for found in PAGE_LINE.finditer(devtools.text("list_pages", {}))
+                            if "runtime probe" in found.group(2))
+                formats[no_runtime_enable] = returned(devtools.text("evaluate_script", {"pageId": page,
+                                                                                        "function": LOGGED}))
+                if no_runtime_enable:
+                    snapshot = devtools.text("take_snapshot", {"pageId": page})
+                    devtools.text("click", {"pageId": page, "uid": uid(snapshot, "button", "Count")})
+                    clicked = returned(devtools.text("evaluate_script", {"pageId": page, "function": "() => clicks"}))
+                    devtools.text("navigate_page", {"pageId": page, "type": "reload"})
+                    reloaded = returned(devtools.text("evaluate_script", {"pageId": page, "function": LOGGED}))
+            finally:
+                devtools.close()
+    finally:
+        browser.call("Target.closeTarget", targetId=target)
+        browser.close()
+        shutil.rmtree(workdir, ignore_errors=True)
+    check("without no_runtime_enable, chrome-devtools-mcp has a page's console calls serialized, which bot checks see",
+          (formats[False] or 0) > 0, repr(formats))
+    check("with it, they are not", formats[True] == 0, repr(formats))
+    check("and a step still clicks the page's elements and reads its own globals", clicked == 1, repr(clicked))
+    check("and reads them in the new document after a reload, still unserialized", reloaded == 0, repr(reloaded))
 
 
 class Queuing:

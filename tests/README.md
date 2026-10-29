@@ -41,8 +41,8 @@ live groups.
   (`../browser/chrome/README.md`).
 - **No offline check waits more than a moment on a real clock**: a wait or a retry runs on `harness.Clock`, or a
   module's waits are cut for the check.
-- **What a live group needs**: an installed Chrome, else every live group skips; for `queue_live`, `npm ci` done and
-  Node at `devtools.NODE_LEAST` or later, else it skips.
+- **What a live group needs**: an installed Chrome, else every live group skips; for `queue_live` and `runtime_live`,
+  `npm ci` done and Node at `devtools.NODE_LEAST` or later, else each skips.
 - **Never against the real browserd**: `browserd start`, `stop`, `restart`, `status` and `version` are checked against
   stand-ins and a records folder of the checks' own, and `mcp` against a stand-in server with its start stood in;
   `setup` and `uninstall` are not checked.

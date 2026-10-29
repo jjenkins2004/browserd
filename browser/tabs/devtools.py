@@ -77,7 +77,7 @@ def _node_problem(node):
 
 
 class Devtools:
-    def __init__(self, log_path, endpoint=None):
+    def __init__(self, log_path, endpoint=None, no_runtime_enable=False):
         """Start chrome-devtools-mcp pointed at a profile's Chrome, which it connects to on its first tool call, and
         finish the MCP handshake.
 
@@ -85,6 +85,8 @@ class Devtools:
             log_path (str): where the process's stderr goes.
             endpoint (str | None): the Chrome's DevTools address, like http://127.0.0.1:9223; None only to list the
                 tools, which needs no browser.
+            no_runtime_enable (bool): True to have it never send Runtime.enable to a page or its workers
+                (patch_devtools.mjs); README.md, "Agent Gotchas & Invariants", says why and what that costs.
         """
         node = shutil.which("node")
         if node is None:
@@ -101,7 +103,8 @@ class Devtools:
                 [node, PACKAGE, *FLAGS, *(["--browser-url=%s" % endpoint] if endpoint else [])], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
                 # Node speaks UTF-8 whatever the OS's code page; no window of its own on Windows.
                 text=True, encoding="utf-8", errors="replace",
-                env=dict({key: value for key, value in os.environ.items() if key != "NODE_DEBUG"}, **QUIET),
+                env=dict({key: value for key, value in os.environ.items() if key != "NODE_DEBUG"}, **QUIET,
+                         BROWSERD_NO_RUNTIME_ENABLE="1" if no_runtime_enable else "0"),
                 **system.hidden(),
             )
         self._messages = queue.Queue()

@@ -71,7 +71,8 @@ is cut with `scripts/release 1.1.0`, which tags it, pushes it, and points the Ho
     browserd, browserd.cmd  the command, which runs browser/cli/service.py
     browser/                the server, a folder per domain (chrome/, tabs/, steps/, dashboard/, cli/, ...), and its own
                             README, whose Directory Layout maps them; browser/system/ is what differs by OS
-    package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/
+    package.json            chrome-devtools-mcp, pinned; `npm ci` once, into node_modules/, and its postinstall
+                            patches it (browser/tabs/patch_devtools.mjs)
     VERSION                 the version on main, which install.sh and install.ps1 install as its tag, v<VERSION>
     install.sh, install.ps1 the macOS and Windows installers, run from GitHub; Formula/browserd.rb is Homebrew's
     scripts/release         cuts a release: VERSION, the tag, and the formula's archive and sha256

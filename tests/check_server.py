@@ -33,7 +33,7 @@ OFFLINE = {group.__name__.removesuffix("_offline"): group for group in (
     cli.paths_offline)}
 # Each given the throwaway Chrome's profile and a state.db holding it.
 LIVE = {"live": live.live, "windows_live": live.windows_live, "queue_live": live.queue_live,
-        "downloads_live": lambda profile, state: live.downloads_live(profile)}
+        "runtime_live": live.runtime_live, "downloads_live": lambda profile, state: live.downloads_live(profile)}
 
 
 def live_groups(names, headed):
