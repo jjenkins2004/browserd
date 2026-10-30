@@ -41,6 +41,8 @@ same logged-in Chrome, to compare them.
       judge.py      grades a trip Doc: claude-opus-5-5 on browserd with rubric.md and the run's evidence
       compare.py    a task on each arm (browserd, playwright, devtools, claudechrome) k times, one at a time in
                     browserd's Chrome, each recorded and graded; gallery
+      drawn.py      times the other arms' most-used calls in a minimized window, with browserd's screencast on its
+                    tab, and on screen
 
 ## Core Abstractions & Shared Pieces
 

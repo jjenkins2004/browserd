@@ -48,8 +48,9 @@ FETCH = """(async () => {
   return [reply.status, btoa(text)];
 })()"""
 # Drive's web API as drive.google.com calls it: with a copy of its page's own public key, and the profile's cookies
-# authorized by a SAPISIDHASH (a SHA-1 of the time, the SAPISID cookie and the page's origin).
-TITLED = """(async (title, trash) => {
+# authorized by a SAPISIDHASH (a SHA-1 of the time, the SAPISID cookie and the page's origin). DRIVE is the head of an
+# async function on a drive.google.com page: key, headers and call(method, path) for the rest of its body.
+DRIVE = """
   const key = 'AIzaSyD_InbmSFufIEps5UAt2NmB_3LvBH3Sz_8';
   const sapisid = document.cookie.split('; ').find(c => c.startsWith('SAPISID=')).slice(8);
   const time = Math.floor(Date.now() / 1000);
@@ -58,7 +59,8 @@ TITLED = """(async (title, trash) => {
   const hash = [...digest].map(b => b.toString(16).padStart(2, '0')).join('');
   const headers = {'Authorization': 'SAPISIDHASH ' + time + '_' + hash, 'X-Goog-AuthUser': '0'};
   const call = (method, path) => fetch('https://clients6.google.com/drive/v2internal/' + path + '&key=' + key,
-                                       {method, headers, credentials: 'include'});
+                                       {method, headers, credentials: 'include'});"""
+TITLED = "(async (title, trash) => {" + DRIVE + """
   const query = "title = '" + title + "' and 'me' in owners and trashed = false";
   const found = await call('GET', 'files?fields=items(id)&q=' + encodeURIComponent(query));
   if (!found.ok) return [found.status, []];

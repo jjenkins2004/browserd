@@ -158,9 +158,10 @@ else:
             time.sleep(3)
 
 
-def claude(arm, run, servers):
-    """One headless Claude Code, as run.sh's interactive one: no user settings, the arm's server its only tools
-    (claudechrome's are Claude in Chrome's, from --chrome). Returns whether it timed out."""
+def start_claude(arm, servers, cwd, stdout, stderr):
+    """The headless Claude Code a run of the arm starts, as run.sh's interactive one: no user settings, the arm's server
+    its only tools (claudechrome's are Claude in Chrome's, from --chrome), stream-json out, its prompt on stdin.
+    stop_tree stops it."""
     tools = "mcp__claude-in-chrome" if arm == "claudechrome" else "mcp__" + next(iter(servers))
     cmd = judge.command([judge.CLAUDE, "-p", "--model", MODEL, "--output-format", "stream-json", "--verbose",
                          "--setting-sources", "", "--tools", "", "--strict-mcp-config",
@@ -174,12 +175,17 @@ def claude(arm, run, servers):
         cmd += ["--chrome", "--permission-prompt-tool", "mcp__allow__approve",
                 "--disallowedTools", "mcp__allow__approve", "ClaudeInChromeDomain(claude.ai)",
                 "--append-system-prompt", SELECT % device()]
+    # Out of the terminal's Ctrl-C, as on macOS: there a session of its own, which stop_tree's killpg also uses to reach
+    # the MCP servers claude starts; on Windows a process group of its own, which Ctrl-C skips.
+    return subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=cwd, env=judge.env(),
+                            text=True, encoding="utf-8", start_new_session=True,
+                            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0)
+
+
+def claude(arm, run, servers):
+    """One run's headless Claude Code (start_claude), given the run's prompt. Returns whether it timed out."""
     with (run / "transcript.jsonl").open("w") as stdout, (run / "stderr.txt").open("w") as stderr:
-        # Out of the terminal's Ctrl-C, as on macOS: there a session of its own, which stop_tree's killpg also uses
-        # to reach the MCP servers claude starts; on Windows a process group of its own, which Ctrl-C skips.
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=stdout, stderr=stderr, cwd=run, env=judge.env(),
-                                text=True, encoding="utf-8", start_new_session=True,
-                                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0)
+        proc = start_claude(arm, servers, run, stdout, stderr)
         try:
             proc.communicate((run / "prompt.md").read_text(encoding="utf-8"), timeout=TIMEOUT)
             return False
