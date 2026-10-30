@@ -1,6 +1,6 @@
-"""Whether full1's minimized windows slowed the arms other than browserd (../findings/long-tasks-full1.md, "Windows
-were minimized"): each arm's most-used kinds of tool call in full1, timed on one of full1's profiles (compare.PROFILE),
-in a window clean_start opens, under one condition a rep.
+"""Whether full1's minimized windows slowed the arms other than browserd (../findings/long-tasks-full1.md, "Minimized
+windows"): each arm's most-used kinds of tool call in full1, timed on one of full1's profiles (compare.PROFILE), in a
+window clean_start opens, under one condition a rep.
 
     python3 experiments/long-tasks/drawn.py run <exp> [--conditions undrawn,screencast]
         [--arms playwright,devtools,claudechrome] [--k 5]
@@ -15,8 +15,9 @@ through a headless Claude Code told the steps (compare.start_claude), each call 
 its result's. Rep n goes arm by arm, each arm's conditions in a random order. A rep's file is
 <data>/<exp>/<arm>-<condition>-r<n>.jsonl, a line a call, beside .windows.jsonl, each second's window state and
 visibility of the rep's tabs, and claudechrome's .transcript.jsonl, each stream-json line with when it came. A rep with
-its file is done, so a run again runs only what is missing. Each run makes the scratch Sheet (SHEET_TITLE) first and trashes it last. report prints each call's
-median seconds by condition, and what the differences come to over full1's calls of each kind.
+its file is done, so a run again runs only what is missing. Each run makes the scratch Sheet (SHEET_TITLE) first and
+trashes it last. report prints each call's median seconds by condition, and what the differences come to over full1's
+calls of each kind.
 """
 import argparse
 import json

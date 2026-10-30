@@ -3,7 +3,8 @@
 Run the night of 2026-10-04/05 on Windows with `../long-tasks/compare.py`. A loop ran both long tasks on browserd,
 changed one thing in browserd, had it reviewed and committed, and ran both again, against a Playwright MCP baseline on
 the same Chrome. It follows prelim3 (`trip-compare.md`), where Playwright won the trip deck. prelim4 is one browserd
-trip run made just before the loop's first change, its baseline ($3.76, 123 turns).
+trip run made just before the loop's first change, its baseline ($3.76, 123 turns). The longer tasks that followed, on
+four arms, are in [long-tasks-full1.md](long-tasks-full1.md).
 
 ## Result
 

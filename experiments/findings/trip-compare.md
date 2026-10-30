@@ -4,7 +4,8 @@ Run 2026-10-04 on the `personal` profile with `../long-tasks/compare.py`. This i
 per arm (round 1). Round 2 never ran, because the plan's session limit cut it off. Playwright MCP beat browserd on this
 task. The transcripts were then diagnosed call by call, and the gap traced to browserd's click guard in Slides, not to
 the method or to Playwright. **The guard has since been removed** (7dc5101), so Next steps 1 and 2, on `guard.py`,
-no longer apply; step 3 landed in d8de3f4 ([page-now.md](page-now.md)). Code named below is as it was at 48bee1f.
+no longer apply; step 3 landed in d8de3f4 ([page-now.md](page-now.md)). Code named below is as it was at 48bee1f. The
+full comparison, on longer tasks with three runs an arm, is [long-tasks-full1.md](long-tasks-full1.md).
 
 Raw data lives outside the repo, on the Mac that ran it only: `../browserd-long-tasks/prelim3/`.
 - Per run (`<arm>-r1/`): `transcript.jsonl`, `result.json`, `video.mp4`, `frames/`, `slides/`, `deck.pdf`.

@@ -2,7 +2,7 @@
 
 Run 2026-10-06 with `../bench/` (`pub3`). It follows `final2` in [benchmark.md](benchmark.md), with Claude in Chrome
 in agent-browser's place, MiniWoB++ run in full for the first time, and every arm on a headed Chrome of the user's
-own.
+own. The same four arms on the long tasks are in [long-tasks-full1.md](long-tasks-full1.md).
 
 ## Setup
 

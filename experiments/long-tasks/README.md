@@ -10,7 +10,8 @@ characters; the work, 15-45 minutes on browserd in calibration runs, comes from 
 features, not from the prompt's length. capex is written as a spec with an answer key and graded in code; parks, a My
 Maps map, is asked as a person would and graded in code; trip is asked as a person would, and an agent grades its
 Google Doc against a rubric. `compare.py` runs any task on browserd and on other browser MCP servers, each given the
-same logged-in Chrome, to compare them.
+same logged-in Chrome, to compare them; the comparison and the calibration runs are in
+`../findings/long-tasks-full1.md`.
 
 ## Directory Layout
 
