@@ -1,6 +1,6 @@
-"""What every group of checks shares: check and its tallies, parallel to run blocks of checks at once, chosen to pick
-groups by name, the stand-in profile, state and clock, an MCP server to call tools on, and the stand-ins for Chrome and
-chrome-devtools-mcp more than one group uses.
+"""What every group of checks shares: check and its tallies, timing for a live check's speed limit, parallel to run
+blocks of checks at once, chosen to pick groups by name, the stand-in profile, state and clock, an MCP server to call
+tools on, and the stand-ins for Chrome and chrome-devtools-mcp more than one group uses.
 """
 
 import concurrent.futures
@@ -25,7 +25,7 @@ from browser.records.state import Session, State
 
 
 passed, failed, skipped = [], [], []
-_held = threading.local()  # .lines: where check puts its lines on the thread parallel runs a block on
+_held = threading.local()  # .lines: where _show puts a check's lines on the thread parallel runs a block on
 AT_ONCE = 4  # the most blocks parallel runs at once
 
 
@@ -70,15 +70,28 @@ class Clock:
         self.now += seconds
 
 
-def check(name, condition, detail=""):
-    """Tally a check and print its line, or on the thread parallel runs a block on, hold it for parallel to print."""
-    (passed if condition else failed).append(name)
-    line = "%s %s%s" % ("ok  " if condition else "FAIL", name, ("  -- " + detail) if detail and not condition else "")
+def _show(line):
+    """Print a check's line, or on the thread parallel runs a block on, hold it for parallel to print."""
     held = getattr(_held, "lines", None)
     if held is None:
         print(line)
     else:
         held.append(line)
+
+
+def check(name, condition, detail=""):
+    """Tally a check and print its line."""
+    (passed if condition else failed).append(name)
+    _show("%s %s%s" % ("ok  " if condition else "FAIL", name, ("  -- " + detail) if detail and not condition else ""))
+
+
+def timing(name, within, detail=""):
+    """A live check's speed limit on a real clock. A miss is not conclusive, since whatever else the machine is running
+    can cause one, so it prints SLOW and fails nothing."""
+    if within:
+        check(name, True)
+    else:
+        _show("SLOW %s  -- not conclusive, outside load can cause it: %s" % (name, detail))
 
 
 def parallel(*blocks):

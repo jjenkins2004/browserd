@@ -15,7 +15,7 @@ live groups.
       check_browser.py  its own groups, and its own check and tallies
       check_server.py   checks/'s groups, by name: OFFLINE, then LIVE on the throwaway Chrome
       checks/           a module per area of ../browser/; live.py, every live group
-      harness.py        what the scripts and checks/ share: check and its tallies, chosen, parallel, Clock, the
+      harness.py        what the scripts and checks/ share: check and its tallies, timing, chosen, parallel, Clock, the
                         stand-ins
       throwaway.py      the throwaway Chrome: the live checks' own, on a new folder and a free port
       popups.py         on Windows, fails the checks when a window comes on screen or takes the focus; also a
@@ -41,6 +41,8 @@ live groups.
   (`../browser/chrome/README.md`).
 - **No offline check waits more than a moment on a real clock**: a wait or a retry runs on `harness.Clock`, or a
   module's waits are cut for the check.
+- **The speed limits a busy machine has made a live check miss go through `harness.timing`** (its docstring); the
+  other limits are still `check`s.
 - **What a live group needs**: an installed Chrome, else every live group skips; for `queue_live` and `runtime_live`,
   `npm ci` done and Node at `devtools.NODE_LEAST` or later, else each skips.
 - **Never against the real browserd**: `browserd start`, `stop`, `restart`, `status` and `version` are checked against

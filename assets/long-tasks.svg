@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 380" width="520">
+<style>
+  :root { --bg: #0A0F1A; --panel: #10172A; --line: #253050; --text: #DCE3F0; --muted: #7D89A6; --accent: #46C8E8; --hover: rgba(70, 200, 232, .10); --good: #5BDC8F; }
+  text { font: 21px -apple-system, system-ui, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; fill: var(--text); }
+  .card { fill: var(--panel); stroke: var(--line); }
+  .ours { fill: var(--hover); }
+  .bar { fill: var(--accent); }
+  .gap { fill: var(--bg); }
+  .rule { stroke: var(--line); }
+  .head { fill: var(--muted); font-size: 16px; font-weight: 600; }
+  .name { fill: var(--accent); font-size: 21px; font-weight: 700; }
+  .label { fill: var(--muted); font-size: 17px; }
+  .best { fill: var(--good); font-weight: 700; }
+</style>
+<clipPath id="c"><rect x="0.5" y="0.5" width="479" height="379" rx="12"/></clipPath>
+<rect class="card" x="0.5" y="0.5" width="479" height="379" rx="12"/>
+<g clip-path="url(#c)">
+<rect class="ours" x="0" y="0" width="120" height="76"/>
+<rect class="bar" x="0" y="0" width="120" height="3"/>
+<text class="name" x="60" y="46" text-anchor="middle">browserd</text>
+<text class="head" x="180" y="35" text-anchor="middle">Playwright</text>
+<text class="head" x="180" y="58" text-anchor="middle">MCP</text>
+<text class="head" x="300" y="35" text-anchor="middle">chrome-</text>
+<text class="head" x="300" y="58" text-anchor="middle">devtools-mcp</text>
+<text class="head" x="420" y="35" text-anchor="middle">Claude</text>
+<text class="head" x="420" y="58" text-anchor="middle">in Chrome</text>
+<rect class="ours" x="0" y="108" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="76.5" y2="76.5"/>
+<text class="label" x="16" y="101">Runs passed out of 9</text>
+<text x="60" y="135" text-anchor="middle">8</text>
+<text x="180" y="135" text-anchor="middle">7</text>
+<text class="best" x="300" y="135" text-anchor="middle">9</text>
+<text x="420" y="135" text-anchor="middle">8</text>
+<rect class="gap" x="0" y="148" width="480" height="16"/>
+<rect class="ours" x="0" y="196" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="164.5" y2="164.5"/>
+<text class="label" x="16" y="189">Total time</text>
+<text class="best" x="60" y="223" text-anchor="middle">193 min</text>
+<text x="180" y="223" text-anchor="middle">315 min</text>
+<text x="300" y="223" text-anchor="middle">285 min</text>
+<text x="420" y="223" text-anchor="middle">278 min</text>
+<rect class="ours" x="0" y="268" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="236.5" y2="236.5"/>
+<text class="label" x="16" y="261">Total cost</text>
+<text class="best" x="60" y="295" text-anchor="middle">$43.81</text>
+<text x="180" y="295" text-anchor="middle">$66.03</text>
+<text x="300" y="295" text-anchor="middle">$138.48</text>
+<text x="420" y="295" text-anchor="middle">$76.09</text>
+<rect class="ours" x="0" y="340" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="308.5" y2="308.5"/>
+<text class="label" x="16" y="333">Tool calls</text>
+<text class="best" x="60" y="367" text-anchor="middle">1,107</text>
+<text x="180" y="367" text-anchor="middle">2,089</text>
+<text x="300" y="367" text-anchor="middle">8,320</text>
+<text x="420" y="367" text-anchor="middle">3,256</text>
+</g>
+</svg>

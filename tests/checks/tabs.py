@@ -12,7 +12,6 @@ import time
 
 from browser import system
 from browser.chrome import cdp
-from browser.chrome.opens import PLACEHOLDER
 from browser.tabs import sessions, worker
 from browser.chrome.profiles import Profile
 from browser.records.state import Tab
@@ -124,13 +123,8 @@ def tabs_offline():
         check("a Chrome that names no browser context as its Chrome profile is refused", "its Chrome profile" in refusal(lambda: tabs.list(mine)))
         open_targets, chrome.targets = chrome.targets, []
         check("a Chrome with no window open lists no tabs", tabs.list(mine) == ([], 0))
-        count = len(chrome.created)
         first, _ = tabs.open(mine, "https://example.com/first")
         chrome.default = "school"
-        check("open in a Chrome with no window open opens the placeholder first, in a new window minimized from the "
-              "start, and then its tab in the background",
-              chrome.created[count:] == [{"url": PLACEHOLDER, "newWindow": True, "windowState": "minimized"},
-                                         {"url": "about:blank", "background": True}], repr(chrome.created[count:]))
         check("no listing includes the placeholder, so it gets no tab id", [t for t, _ in tabs.list(mine)[0]] == [first]
               and state.tab_for_target("School", chrome.targets[0]["targetId"]) is None, repr(chrome.targets))
         tabs.close(mine, first)

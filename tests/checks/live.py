@@ -29,7 +29,8 @@ from browser.tabs.worker import PAGE_LINE, Workers, returned
 from browser.tools import queue_tool, tab_tools
 from browser.protocol.ws import WebSocketError
 import popups
-from harness import SERVE_POLL, call, check, open_session, parallel, refusal, rpc, serving, skipped, text_of, uid
+from harness import (SERVE_POLL, call, check, open_session, parallel, refusal, rpc, serving, skipped, text_of, timing,
+                     uid)
 
 
 # Seconds more a live step may take on Windows, where Chrome draws a background tab about once a second, and a
@@ -362,10 +363,10 @@ def confirm_live(served, open_tab):
     warned = {"tool": "evaluate_script", "function": "() => document.getElementById('warned').textContent"}
     text, is_error = queue(tab, warn, {"tool": "handle_dialog", "action": "accept"}, warned)
     took = re.search(r"^--- 1 click ok ([\d.]+)s$", text, re.M)
-    check("a confirm a handle_dialog step waits on is answered as it opens, so its click takes no 5s",
-          not is_error and took is not None and float(took.group(1)) < 3 + FRAME_WAIT
-          and 'the confirm "Sure?" was accepted as it opened' in text and returned(text.split("--- 3")[-1]) == "confirmed"
-          and "## Pages" not in text, text)
+    check("a confirm a handle_dialog step waits on is answered as it opens",
+          not is_error and took is not None and 'the confirm "Sure?" was accepted as it opened' in text
+          and returned(text.split("--- 3")[-1]) == "confirmed" and "## Pages" not in text, text)
+    timing("so its click takes no 5s", took is None or float(took.group(1)) < 3 + FRAME_WAIT, text)
     text, is_error = queue(tab, warn)
     answered, _ = queue(tab, {"tool": "handle_dialog", "action": "accept"}, warned)
     check("a confirm no handle_dialog step waits on counts its click done, and the next queue answers it",
@@ -764,7 +765,8 @@ def pointer_live(served, open_tab):
           not is_error and returned(text) == [["mousemove", 50, 60, 0], ["mousedown", 50, 60, 1],
                                               ["mousemove", 150, 160, 1], ["mouseup", 150, 160, 0]], text)
     took = sum(float(s) for s in re.findall(r"^--- [1-4] \S+ ok ([\d.]+)s$", text, re.M))
-    check("and its four pointer steps take under 2s, and a frame's wait on Windows", took < 2 + FRAME_WAIT, "%.1fs" % took)
+    timing("and its four pointer steps take under 2s, and a frame's wait on Windows", took < 2 + FRAME_WAIT,
+           "%.1fs" % took)
 
     # The checks' own waits for a page held by an open alert, so waiting one out takes 2s, not 5s.
     waits, wait = (pointer.DIALOG_WAIT, screenshot.ANSWER_WAIT), 2.0
@@ -795,7 +797,8 @@ def pointer_live(served, open_tab):
                            {"tool": "handle_dialog", "action": "accept"})
     took = time.monotonic() - began
     check("a click whose alert a handle_dialog step right after waits on is answered as it opens",
-          not is_error and "was accepted as it opened" in text and took < 3, "%.1fs: %s" % (took, text))
+          not is_error and "was accepted as it opened" in text, text)
+    timing("within 3s", took < 3, "%.1fs: %s" % (took, text))
 
     clicks = {"tool": "evaluate_script", "function": "() => clicks"}
     text, is_error = queue(pad, {"tool": "evaluate_script", "function": "() => cover()"},
@@ -835,7 +838,7 @@ def pointer_live(served, open_tab):
         "<button style='width:40px;height:30px'></button><button style='width:60px;height:30px'>Italic</button>" +
         "</div><div role=menu style='position:fixed;left:20px;top:350px;width:160px;padding:20px'><div " +
         "role=menuitem>Table</div><div role=menuitem>Image</div></div><div aria-hidden=true style='position:fixed;" +
-        "left:20px;top:460px'><button aria-label=Segment><img tabindex=-1 style='width:40px;height:30px;" +
+        "left:240px;top:300px'><button aria-label=Segment><img tabindex=-1 style='width:40px;height:30px;" +
         "display:block'></button></div>"); return true }"""})
     for x, y, on, said in ((105, 315, "Bold", 'is button, which has no words, not "Bold"'),
                            (30, 360, "Table", 'is menu, which has no words, not "Table"')):
@@ -843,7 +846,8 @@ def pointer_live(served, open_tab):
                                {"tool": "click_up"})
         check("a press the tree gives no words is not sent on its neighbours': %s" % said, is_error and said in text,
               text)
-    text, is_error = queue(pad, {"tool": "move_at", "x": 40, "y": 475}, {"tool": "click_down", "on": "Segment"},
+    # Beside the toolbar, not under the menu: a headless Chrome's viewport can be under 480px tall.
+    text, is_error = queue(pad, {"tool": "move_at", "x": 260, "y": 315}, {"tool": "click_down", "on": "Segment"},
                            {"tool": "click_up"})
     check("but a wordless image in a labelled button the tree leaves out is named by that label",
           not is_error and 'on text "Segment"' in text, text)

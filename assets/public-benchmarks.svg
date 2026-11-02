@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 596" width="520">
+<style>
+  :root { --bg: #0A0F1A; --panel: #10172A; --line: #253050; --text: #DCE3F0; --muted: #7D89A6; --accent: #46C8E8; --hover: rgba(70, 200, 232, .10); --good: #5BDC8F; }
+  text { font: 21px -apple-system, system-ui, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; fill: var(--text); }
+  .card { fill: var(--panel); stroke: var(--line); }
+  .ours { fill: var(--hover); }
+  .bar { fill: var(--accent); }
+  .gap { fill: var(--bg); }
+  .rule { stroke: var(--line); }
+  .head { fill: var(--muted); font-size: 16px; font-weight: 600; }
+  .name { fill: var(--accent); font-size: 21px; font-weight: 700; }
+  .label { fill: var(--muted); font-size: 17px; }
+  .best { fill: var(--good); font-weight: 700; }
+</style>
+<clipPath id="c"><rect x="0.5" y="0.5" width="479" height="595" rx="12"/></clipPath>
+<rect class="card" x="0.5" y="0.5" width="479" height="595" rx="12"/>
+<g clip-path="url(#c)">
+<rect class="ours" x="0" y="0" width="120" height="76"/>
+<rect class="bar" x="0" y="0" width="120" height="3"/>
+<text class="name" x="60" y="46" text-anchor="middle">browserd</text>
+<text class="head" x="180" y="35" text-anchor="middle">Playwright</text>
+<text class="head" x="180" y="58" text-anchor="middle">MCP</text>
+<text class="head" x="300" y="35" text-anchor="middle">chrome-</text>
+<text class="head" x="300" y="58" text-anchor="middle">devtools-mcp</text>
+<text class="head" x="420" y="35" text-anchor="middle">Claude</text>
+<text class="head" x="420" y="58" text-anchor="middle">in Chrome</text>
+<rect class="ours" x="0" y="108" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="76.5" y2="76.5"/>
+<text class="label" x="16" y="101">MCP-Universe strict, passed out of 48</text>
+<text class="best" x="60" y="135" text-anchor="middle">38</text>
+<text x="180" y="135" text-anchor="middle">31</text>
+<text x="300" y="135" text-anchor="middle">32</text>
+<text class="best" x="420" y="135" text-anchor="middle">38</text>
+<rect class="ours" x="0" y="180" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="148.5" y2="148.5"/>
+<text class="label" x="16" y="173">MCP-Universe lenient, passed out of 46</text>
+<text x="60" y="207" text-anchor="middle">41</text>
+<text x="180" y="207" text-anchor="middle">37</text>
+<text x="300" y="207" text-anchor="middle">40</text>
+<text class="best" x="420" y="207" text-anchor="middle">42</text>
+<rect class="ours" x="0" y="252" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="220.5" y2="220.5"/>
+<text class="label" x="16" y="245">FormFactory, passed out of 50</text>
+<text x="60" y="279" text-anchor="middle">29</text>
+<text x="180" y="279" text-anchor="middle">29</text>
+<text class="best" x="300" y="279" text-anchor="middle">30</text>
+<text x="420" y="279" text-anchor="middle">22</text>
+<rect class="ours" x="0" y="324" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="292.5" y2="292.5"/>
+<text class="label" x="16" y="317">WebGames, passed out of 51</text>
+<text class="best" x="60" y="351" text-anchor="middle">47</text>
+<text class="best" x="180" y="351" text-anchor="middle">47</text>
+<text x="300" y="351" text-anchor="middle">45</text>
+<text x="420" y="351" text-anchor="middle">41</text>
+<rect class="ours" x="0" y="396" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="364.5" y2="364.5"/>
+<text class="label" x="16" y="389">MiniWoB++, passed out of 76</text>
+<text class="best" x="60" y="423" text-anchor="middle">76</text>
+<text x="180" y="423" text-anchor="middle">73</text>
+<text x="300" y="423" text-anchor="middle">74</text>
+<text x="420" y="423" text-anchor="middle">71</text>
+<rect class="gap" x="0" y="436" width="480" height="16"/>
+<rect class="ours" x="0" y="484" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="452.5" y2="452.5"/>
+<text class="label" x="16" y="477">Total time</text>
+<text class="best" x="60" y="511" text-anchor="middle">91 min</text>
+<text x="180" y="511" text-anchor="middle">123 min</text>
+<text x="300" y="511" text-anchor="middle">96 min</text>
+<text x="420" y="511" text-anchor="middle">145 min</text>
+<rect class="ours" x="0" y="556" width="120" height="40"/>
+<line class="rule" x1="0" x2="480" y1="524.5" y2="524.5"/>
+<text class="label" x="16" y="549">Total cost</text>
+<text x="60" y="583" text-anchor="middle">$15.57</text>
+<text class="best" x="180" y="583" text-anchor="middle">$13.85</text>
+<text x="300" y="583" text-anchor="middle">$17.43</text>
+<text x="420" y="583" text-anchor="middle">$20.00</text>
+</g>
+</svg>

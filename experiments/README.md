@@ -26,6 +26,9 @@ the user's own browsing.
 - A path to the repo root from a file here is one level deeper than it looks: `experiments/<folder>/` sits two below
   the root.
 - Never commit run data (transcripts, records, screenshots, videos): it holds the user's accounts and browsing.
+- The root README repeats two findings (`findings/long-tasks-full1.md`, `findings/own-profiles.md`). A rerun that
+  replaces one also changes its table in `../assets/` (the numbers and which cells are `best`), that image's alt text,
+  and the README text around it; the long tasks also set the headline's percentages.
 - Every window and tab the code here opens in a profile's Chrome comes from `opens.window` or `opens.tab`
   (`../browser/chrome/README.md`); in `long-tasks/compare.py` and `long-tasks/drawn.py` the other arms' own servers
   open theirs, and `bench/run.py`'s `clear_chrome` opens each `chrome` arm's window itself, normal and on screen
