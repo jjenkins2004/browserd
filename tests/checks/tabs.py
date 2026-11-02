@@ -333,7 +333,7 @@ class Process:
 
 
 def queue_tools_offline():
-    """tab_open's steps, a School tab's process started with no_runtime_enable and another profile's without, queues on
+    """tab_open's steps, a School tab's process and another profile's both started with no_runtime_enable, queues on
     two tabs at once, a tab's process started again once it died, and the tab tools stopping a closed tab's process:
     over HTTP against a stand-in Chrome, each tab's process a Process that pairs at once."""
     workdir = tempfile.mkdtemp(prefix="browser-queue-tools-")
@@ -369,8 +369,8 @@ def queue_tools_offline():
               isinstance(process, Process) and process.no_runtime_enable)
         jobs = Worker("j0bs", "T9", Profile("Jobs", "/nowhere/Chrome-Jobs", 9224), workdir, unreachable)
         process = jobs.ensure()[0]
-        check("and another profile's tab's process is not",
-              isinstance(process, Process) and not process.no_runtime_enable)
+        check("and so is another profile's tab's process",
+              isinstance(process, Process) and process.no_runtime_enable)
         jobs.stop()
         text, is_error = call(httpd, "tab_open", session=session, url="https://example.com/b",
                               steps=[{"tool": "new_page", "url": "about:blank"}])
