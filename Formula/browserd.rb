@@ -7,8 +7,8 @@
 class Browserd < Formula
   desc "Browser MCP server that gives Claude Code agents Chrome tabs of their own"
   homepage "https://github.com/jjenkins2004/browserd"
-  url "https://github.com/jjenkins2004/browserd/archive/refs/tags/v1.1.0.tar.gz"
-  sha256 "d8ecf6223d63a1ee81c2b20cb2fc9600540f0ea875c0587f7db307fdd7a04f92"
+  url "https://github.com/jjenkins2004/browserd/archive/refs/tags/v1.1.1.tar.gz"
+  sha256 "58e6c16d14d976e8dc96a553e31c94cf138d5da2907ebad6fae2e7915df28bb3"
   head "https://github.com/jjenkins2004/browserd.git", branch: "main"
 
   depends_on :macos
